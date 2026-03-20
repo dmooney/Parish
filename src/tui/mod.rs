@@ -251,18 +251,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Main panel: text log with word wrap and scroll support
     let panel_height = chunks[1].height;
-    let total_lines = app.world.text_log.len() as u16;
-
-    // Compute scroll position — offset is distance from bottom
-    let scroll_row = if app.scroll.auto_scroll {
-        // Auto-scroll: show the bottom of the log
-        total_lines.saturating_sub(panel_height)
-    } else {
-        // Manual scroll: offset from bottom
-        total_lines
-            .saturating_sub(panel_height)
-            .saturating_sub(app.scroll.offset)
-    };
+    let panel_width = chunks[1].width;
 
     let log_lines: Vec<Line> = app
         .world
@@ -271,11 +260,37 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .map(|s| Line::from(s.as_str()))
         .collect();
 
+    // Count wrapped lines to get accurate scroll math
+    let total_lines = if panel_width > 0 {
+        app.world
+            .text_log
+            .iter()
+            .map(|s| {
+                if s.is_empty() {
+                    1u16
+                } else {
+                    // Ceiling division: how many visual lines does this text occupy?
+                    ((s.len() as u16).saturating_sub(1) / panel_width) + 1
+                }
+            })
+            .sum::<u16>()
+    } else {
+        app.world.text_log.len() as u16
+    };
+
+    let max_scroll = total_lines.saturating_sub(panel_height);
+
+    // Compute scroll position — offset is distance from bottom
+    let scroll_row = if app.scroll.auto_scroll {
+        max_scroll
+    } else {
+        max_scroll.saturating_sub(app.scroll.offset)
+    };
+
     let scroll_indicator = if total_lines > panel_height && !app.scroll.auto_scroll {
         if scroll_row == 0 {
             "[TOP]".to_string()
         } else {
-            let max_scroll = total_lines.saturating_sub(panel_height);
             let pct = if max_scroll > 0 {
                 (scroll_row as f32 / max_scroll as f32 * 100.0) as u16
             } else {
