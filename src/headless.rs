@@ -175,7 +175,7 @@ async fn handle_headless_game_input(
             let npc = app
                 .npcs
                 .iter()
-                .find(|n| n.location == app.world.player_location)
+                .find(|n| n.location() == Some(app.world.player_location))
                 .cloned();
 
             if let Some(npc) = npc {
@@ -298,7 +298,7 @@ fn print_location_arrival(app: &App) {
         let npc_names: Vec<&str> = app
             .npcs
             .iter()
-            .filter(|n| n.location == app.world.player_location)
+            .filter(|n| n.location() == Some(app.world.player_location))
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &app.world.weather, &npc_names);
@@ -308,7 +308,7 @@ fn print_location_arrival(app: &App) {
     }
 
     for npc in &app.npcs {
-        if npc.location == app.world.player_location {
+        if npc.location() == Some(app.world.player_location) {
             println!("{} is here.", npc.name);
         }
     }
@@ -325,7 +325,7 @@ fn print_location_description(app: &App) {
         let npc_names: Vec<&str> = app
             .npcs
             .iter()
-            .filter(|n| n.location == app.world.player_location)
+            .filter(|n| n.location() == Some(app.world.player_location))
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &app.world.weather, &npc_names);

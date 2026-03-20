@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
                                                         }
                                                     }
 
-                                                    terminal.draw(|frame| tui::draw(frame, &app))?;
+                                                    terminal.draw(|frame| tui::draw(frame, &mut app))?;
 
                                                     match rx.try_recv() {
                                                         Ok(resp) => break Some(resp),
@@ -340,7 +340,7 @@ async fn main() -> Result<()> {
                                 let npc = app
                                     .npcs
                                     .iter()
-                                    .find(|n| n.location == app.world.player_location)
+                                    .find(|n| n.location() == Some(app.world.player_location))
                                     .cloned();
 
                                 if let Some(npc) = npc {
@@ -425,7 +425,7 @@ async fn main() -> Result<()> {
                                                         }
                                                     }
 
-                                                    terminal.draw(|frame| tui::draw(frame, &app))?;
+                                                    terminal.draw(|frame| tui::draw(frame, &mut app))?;
 
                                                     match rx.try_recv() {
                                                         Ok(resp) => break Some(resp),
@@ -585,7 +585,7 @@ fn show_location_arrival(app: &mut App) {
         let npc_names: Vec<&str> = app
             .npcs
             .iter()
-            .filter(|n| n.location == app.world.player_location)
+            .filter(|n| n.location() == Some(app.world.player_location))
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &weather, &npc_names);
@@ -597,7 +597,7 @@ fn show_location_arrival(app: &mut App) {
 
     // Show NPCs present
     for npc in &app.npcs {
-        if npc.location == app.world.player_location {
+        if npc.location() == Some(app.world.player_location) {
             app.world.log(format!("{} is here.", npc.name));
         }
     }
@@ -616,7 +616,7 @@ fn show_location_description(app: &mut App) {
         let npc_names: Vec<&str> = app
             .npcs
             .iter()
-            .filter(|n| n.location == app.world.player_location)
+            .filter(|n| n.location() == Some(app.world.player_location))
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &weather, &npc_names);
