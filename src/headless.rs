@@ -9,9 +9,10 @@ use crate::inference::openai_client::OpenAiClient;
 use crate::inference::setup::OllamaSetup;
 use crate::inference::{self, InferenceQueue};
 use crate::input::{Command, InputResult, classify_input, parse_intent};
+use crate::npc::manager::NpcManager;
+use crate::npc::ticks;
 use crate::npc::{
-    self, Npc, SEPARATOR_HOLDBACK, find_response_separator, floor_char_boundary,
-    parse_npc_stream_response,
+    SEPARATOR_HOLDBACK, find_response_separator, floor_char_boundary, parse_npc_stream_response,
 };
 use crate::tui::App;
 use crate::world::description::{format_exits, render_description};
@@ -59,7 +60,15 @@ pub async fn run_headless(setup: OllamaSetup) -> Result<()> {
     app.client = Some(client.clone());
     app.model_name = model_name.clone();
     app.base_url = client.base_url().to_string();
-    app.npcs.push(Npc::new_test_npc());
+
+    // Load NPCs from data file
+    let npcs_path = Path::new("data/npcs.json");
+    if npcs_path.exists() {
+        match NpcManager::load_from_file(npcs_path) {
+            Ok(mgr) => app.npc_manager = mgr,
+            Err(e) => eprintln!("Warning: Failed to load NPC data: {}", e),
+        }
+    }
 
     // Show initial location
     print_location_arrival(&app);
@@ -259,15 +268,18 @@ async fn handle_headless_game_input(
         }
         _ => {
             // Route to NPC conversation if one is present
-            let npc = app
-                .npcs
-                .iter()
-                .find(|n| n.location == app.world.player_location)
-                .cloned();
+            let npcs_here = app.npc_manager.npcs_at(app.world.player_location);
+            let npc = npcs_here.first().cloned().cloned();
 
             if let Some(npc) = npc {
-                let system_prompt = npc::build_tier1_system_prompt(&npc, app.improv_enabled);
-                let context = npc::build_tier1_context(&npc, &app.world, text);
+                let other_npcs: Vec<_> = app
+                    .npc_manager
+                    .npcs_at(app.world.player_location)
+                    .into_iter()
+                    .filter(|n| n.id != npc.id)
+                    .collect();
+                let system_prompt = ticks::build_enhanced_system_prompt(&npc, app.improv_enabled);
+                let context = ticks::build_enhanced_context(&npc, &app.world, text, &other_npcs);
 
                 if let Some(queue) = &app.inference_queue {
                     *request_id += 1;
@@ -390,9 +402,9 @@ fn print_location_arrival(app: &App) {
     if let Some(loc_data) = app.world.current_location_data() {
         let tod = app.world.clock.time_of_day();
         let npc_names: Vec<&str> = app
-            .npcs
+            .npc_manager
+            .npcs_at(app.world.player_location)
             .iter()
-            .filter(|n| n.location == app.world.player_location)
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &app.world.weather, &npc_names);
@@ -401,10 +413,8 @@ fn print_location_arrival(app: &App) {
         println!("{}", app.world.current_location().description);
     }
 
-    for npc in &app.npcs {
-        if npc.location == app.world.player_location {
-            println!("{} is here.", npc.name);
-        }
+    for npc in app.npc_manager.npcs_at(app.world.player_location) {
+        println!("{} is here.", npc.name);
     }
 
     let exits = format_exits(app.world.player_location, &app.world.graph);
@@ -417,9 +427,9 @@ fn print_location_description(app: &App) {
     if let Some(loc_data) = app.world.current_location_data() {
         let tod = app.world.clock.time_of_day();
         let npc_names: Vec<&str> = app
-            .npcs
+            .npc_manager
+            .npcs_at(app.world.player_location)
             .iter()
-            .filter(|n| n.location == app.world.player_location)
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &app.world.weather, &npc_names);

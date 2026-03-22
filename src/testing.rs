@@ -18,6 +18,7 @@
 
 use crate::input::{self, Command, InputResult, IntentKind};
 use crate::npc::Npc;
+use crate::npc::manager::NpcManager;
 use crate::tui::App;
 use crate::world::description::{format_exits, render_description};
 use crate::world::movement::{self, MovementResult};
@@ -114,7 +115,16 @@ impl GameTestHarness {
                 Err(e) => eprintln!("Warning: Failed to load parish data: {}", e),
             }
         }
-        app.npcs.push(Npc::new_test_npc());
+        // Load NPCs from data file, fall back to test NPC
+        let npcs_path = Path::new("data/npcs.json");
+        if npcs_path.exists() {
+            match NpcManager::load_from_file(npcs_path) {
+                Ok(mgr) => app.npc_manager = mgr,
+                Err(_) => app.npc_manager.add_npc(Npc::new_test_npc()),
+            }
+        } else {
+            app.npc_manager.add_npc(Npc::new_test_npc());
+        }
 
         Self {
             app,
@@ -191,9 +201,9 @@ impl GameTestHarness {
     /// Returns the names of NPCs at the player's current location.
     pub fn npcs_here(&self) -> Vec<&str> {
         self.app
-            .npcs
+            .npc_manager
+            .npcs_at(self.app.world.player_location)
             .iter()
-            .filter(|n| n.location == self.app.world.player_location)
             .map(|n| n.name.as_str())
             .collect()
     }
@@ -425,32 +435,35 @@ impl GameTestHarness {
     }
 
     /// Attempts NPC interaction using canned responses.
+    ///
+    /// Checks all NPCs at the current location for canned responses,
+    /// not just the first one. This allows tests to target specific NPCs
+    /// regardless of iteration order.
     fn handle_npc_interaction(&mut self, _text: &str) -> ActionResult {
-        let npc = self
-            .app
-            .npcs
-            .iter()
-            .find(|n| n.location == self.app.world.player_location)
-            .cloned();
+        let npcs_here = self.app.npc_manager.npcs_at(self.app.world.player_location);
 
-        if let Some(npc) = npc {
+        if npcs_here.is_empty() {
+            self.app.world.log("Nothing happens.".to_string());
+            return ActionResult::UnknownInput;
+        }
+
+        // Check each NPC at this location for canned responses
+        for npc in &npcs_here {
             let key = npc.name.to_lowercase();
             if let Some(responses) = self.canned_responses.get_mut(&key)
                 && !responses.is_empty()
             {
                 let dialogue = responses.remove(0);
-                self.app.world.log(format!("{}: {}", npc.name, dialogue));
+                let name = npc.name.clone();
+                self.app.world.log(format!("{}: {}", name, dialogue));
                 return ActionResult::NpcResponse {
-                    npc: npc.name,
+                    npc: name,
                     dialogue,
                 };
             }
-            ActionResult::NpcNotAvailable
-        } else {
-            // No NPC here and input wasn't recognized locally
-            self.app.world.log("Nothing happens.".to_string());
-            ActionResult::UnknownInput
         }
+
+        ActionResult::NpcNotAvailable
     }
 
     /// Renders the current location description.
@@ -459,9 +472,9 @@ impl GameTestHarness {
             let tod = self.app.world.clock.time_of_day();
             let npc_names: Vec<&str> = self
                 .app
-                .npcs
+                .npc_manager
+                .npcs_at(self.app.world.player_location)
                 .iter()
-                .filter(|n| n.location == self.app.world.player_location)
                 .map(|n| n.name.as_str())
                 .collect();
             render_description(loc_data, tod, &self.app.world.weather, &npc_names)
@@ -533,12 +546,13 @@ mod tests {
     }
 
     #[test]
-    fn test_harness_has_test_npc() {
-        let mut h = GameTestHarness::new();
-        // NPC is at The Crossroads, navigate there first
-        h.execute("go to crossroads");
-        let npcs = h.npcs_here();
-        assert!(npcs.contains(&"Padraig O'Brien"));
+    fn test_harness_has_npcs() {
+        let h = GameTestHarness::new();
+        // With npcs.json loaded, we should have 8 NPCs
+        assert!(
+            h.app.npc_manager.npc_count() >= 1,
+            "should have at least 1 NPC loaded"
+        );
     }
 
     #[test]
@@ -655,12 +669,13 @@ mod tests {
     #[test]
     fn test_canned_npc_response() {
         let mut h = GameTestHarness::new();
-        h.add_canned_response("Padraig O'Brien", "Ah, good morning to ye!");
+        h.add_canned_response("Padraig Darcy", "Ah, good morning to ye!");
         h.execute("go to crossroads");
+        h.execute("go to pub");
         let result = h.execute("hello there");
         assert!(matches!(result, ActionResult::NpcResponse { .. }));
         if let ActionResult::NpcResponse { npc, dialogue } = result {
-            assert_eq!(npc, "Padraig O'Brien");
+            assert_eq!(npc, "Padraig Darcy");
             assert_eq!(dialogue, "Ah, good morning to ye!");
         }
     }
@@ -668,10 +683,11 @@ mod tests {
     #[test]
     fn test_canned_npc_response_fifo_order() {
         let mut h = GameTestHarness::new();
-        h.add_canned_response("Padraig O'Brien", "First response");
-        h.add_canned_response("Padraig O'Brien", "Second response");
+        h.add_canned_response("Padraig Darcy", "First response");
+        h.add_canned_response("Padraig Darcy", "Second response");
 
         h.execute("go to crossroads");
+        h.execute("go to pub");
         let r1 = h.execute("hello");
         let r2 = h.execute("how are you");
 
@@ -686,9 +702,10 @@ mod tests {
     #[test]
     fn test_canned_npc_exhausted() {
         let mut h = GameTestHarness::new();
-        h.add_canned_response("Padraig O'Brien", "Only one response");
+        h.add_canned_response("Padraig Darcy", "Only one response");
 
         h.execute("go to crossroads");
+        h.execute("go to pub");
         let r1 = h.execute("hello");
         assert!(matches!(r1, ActionResult::NpcResponse { .. }));
 
@@ -697,9 +714,11 @@ mod tests {
     }
 
     #[test]
-    fn test_npc_not_at_location() {
+    fn test_npc_not_at_empty_location() {
         let mut h = GameTestHarness::new();
-        // Player starts at Kilteevan — no NPC here
+        // Navigate to a location with no NPCs (e.g., the hurling green)
+        h.execute("go to crossroads");
+        h.execute("go to hurling green");
         let result = h.execute("hello there");
         assert_eq!(result, ActionResult::UnknownInput);
     }

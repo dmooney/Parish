@@ -5,7 +5,8 @@
 
 use crate::inference::InferenceQueue;
 use crate::inference::openai_client::OpenAiClient;
-use crate::npc::{IrishWordHint, Npc};
+use crate::npc::IrishWordHint;
+use crate::npc::manager::NpcManager;
 use crate::world::WorldState;
 use crate::world::time::TimeOfDay;
 
@@ -158,8 +159,8 @@ pub struct App {
     pub should_quit: bool,
     /// The inference queue for sending LLM requests (None if unavailable).
     pub inference_queue: Option<InferenceQueue>,
-    /// NPCs present in the world.
-    pub npcs: Vec<Npc>,
+    /// Central NPC manager — owns all NPCs and handles tier assignment.
+    pub npc_manager: NpcManager,
     /// Scroll state for the main text panel.
     pub scroll: ScrollState,
     /// Whether the Irish pronunciation sidebar is visible.
@@ -190,7 +191,7 @@ impl App {
             input_buffer: String::new(),
             should_quit: false,
             inference_queue: None,
-            npcs: Vec::new(),
+            npc_manager: NpcManager::new(),
             scroll: ScrollState::new(),
             sidebar_visible: false,
             pronunciation_hints: Vec::new(),
@@ -523,7 +524,7 @@ mod tests {
         assert!(!app.should_quit);
         assert!(app.input_buffer.is_empty());
         assert!(app.inference_queue.is_none());
-        assert!(app.npcs.is_empty());
+        assert_eq!(app.npc_manager.npc_count(), 0);
         assert!(app.scroll.auto_scroll);
         assert_eq!(app.scroll.offset, 0);
         assert!(!app.sidebar_visible);

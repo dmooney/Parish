@@ -6,9 +6,10 @@ use parish::inference::openai_client::OpenAiClient;
 use parish::inference::setup::{self, StdoutProgress};
 use parish::inference::{self, InferenceQueue};
 use parish::input::{Command, InputResult, classify_input, parse_intent};
+use parish::npc::manager::NpcManager;
+use parish::npc::ticks;
 use parish::npc::{
-    self, Npc, SEPARATOR_HOLDBACK, find_response_separator, floor_char_boundary,
-    parse_npc_stream_response,
+    SEPARATOR_HOLDBACK, find_response_separator, floor_char_boundary, parse_npc_stream_response,
 };
 use parish::tui::{self, App};
 use parish::world::description::{format_exits, render_description};
@@ -128,7 +129,15 @@ async fn main() -> Result<()> {
     app.base_url = provider_config.base_url.clone();
     app.api_key = provider_config.api_key.clone();
     app.improv_enabled = cli.improv;
-    app.npcs.push(Npc::new_test_npc());
+
+    // Load NPCs from data file
+    let npcs_path = Path::new("data/npcs.json");
+    if npcs_path.exists() {
+        match NpcManager::load_from_file(npcs_path) {
+            Ok(mgr) => app.npc_manager = mgr,
+            Err(e) => tracing::warn!("Failed to load NPC data: {}", e),
+        }
+    }
 
     // Show initial location description
     show_location_arrival(&mut app);
@@ -200,16 +209,24 @@ async fn main() -> Result<()> {
                         }
                         _ => {
                             // Route to NPC conversation if one is present
-                            let npc = app
-                                .npcs
-                                .iter()
-                                .find(|n| n.location == app.world.player_location)
-                                .cloned();
+                            let npcs_here = app.npc_manager.npcs_at(app.world.player_location);
+                            let npc = npcs_here.first().cloned().cloned();
 
                             if let Some(npc) = npc {
+                                let other_npcs: Vec<_> = app
+                                    .npc_manager
+                                    .npcs_at(app.world.player_location)
+                                    .into_iter()
+                                    .filter(|n| n.id != npc.id)
+                                    .collect();
                                 let system_prompt =
-                                    npc::build_tier1_system_prompt(&npc, app.improv_enabled);
-                                let context = npc::build_tier1_context(&npc, &app.world, &text);
+                                    ticks::build_enhanced_system_prompt(&npc, app.improv_enabled);
+                                let context = ticks::build_enhanced_context(
+                                    &npc,
+                                    &app.world,
+                                    &text,
+                                    &other_npcs,
+                                );
 
                                 if let Some(queue) = &app.inference_queue {
                                     request_id += 1;
@@ -602,9 +619,9 @@ fn show_location_arrival(app: &mut App) {
         let tod = app.world.clock.time_of_day();
         let weather = app.world.weather.clone();
         let npc_names: Vec<&str> = app
-            .npcs
+            .npc_manager
+            .npcs_at(app.world.player_location)
             .iter()
-            .filter(|n| n.location == app.world.player_location)
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &weather, &npc_names);
@@ -615,10 +632,8 @@ fn show_location_arrival(app: &mut App) {
     }
 
     // Show NPCs present
-    for npc in &app.npcs {
-        if npc.location == app.world.player_location {
-            app.world.log(format!("{} is here.", npc.name));
-        }
+    for npc in app.npc_manager.npcs_at(app.world.player_location) {
+        app.world.log(format!("{} is here.", npc.name));
     }
 
     // Show exits
@@ -633,9 +648,9 @@ fn show_location_description(app: &mut App) {
         let tod = app.world.clock.time_of_day();
         let weather = app.world.weather.clone();
         let npc_names: Vec<&str> = app
-            .npcs
+            .npc_manager
+            .npcs_at(app.world.player_location)
             .iter()
-            .filter(|n| n.location == app.world.player_location)
             .map(|n| n.name.as_str())
             .collect();
         let desc = render_description(loc_data, tod, &weather, &npc_names);
