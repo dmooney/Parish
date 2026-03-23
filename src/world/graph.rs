@@ -31,7 +31,7 @@ pub struct Connection {
 /// Extended location data for the world graph.
 ///
 /// Augments the base location with connections, description templates,
-/// associated NPCs, and optional mythological significance.
+/// associated NPCs, geolocation, and optional mythological significance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocationData {
     /// Unique identifier.
@@ -44,6 +44,12 @@ pub struct LocationData {
     pub indoor: bool,
     /// Whether this location is publicly accessible.
     pub public: bool,
+    /// Latitude in decimal degrees (WGS 84).
+    #[serde(default)]
+    pub lat: f64,
+    /// Longitude in decimal degrees (WGS 84).
+    #[serde(default)]
+    pub lon: f64,
     /// Connections to neighboring locations.
     pub connections: Vec<Connection>,
     /// WGS-84 latitude (from OSM data; 0.0 if not geocoded).

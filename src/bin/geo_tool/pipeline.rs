@@ -230,6 +230,8 @@ fn build_locations(
                     description_template,
                     indoor: feature.location_type.is_indoor(),
                     public: feature.location_type.is_public(),
+                    lat: feature.lat,
+                    lon: feature.lon,
                     connections,
                     associated_npcs: vec![],
                     mythological_significance,
@@ -299,6 +301,11 @@ mod tests {
         assert_eq!(result[1].data.name, "Pub");
         assert_eq!(result[1].data.connections.len(), 1);
         assert_eq!(result[1].data.connections[0].target, LocationId(1));
+
+        // Verify geo-coordinates are propagated to LocationData
+        assert!((result[0].data.lat - 53.5).abs() < f64::EPSILON);
+        assert!((result[0].data.lon - -8.0).abs() < f64::EPSILON);
+        assert!((result[1].data.lat - 53.501).abs() < f64::EPSILON);
     }
 
     #[test]
