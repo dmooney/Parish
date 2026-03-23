@@ -20,6 +20,9 @@ const SCREENSHOT_TIMES: &[(TimeOfDay, &str, u32)] = &[
     (TimeOfDay::Night, "night", 21),
 ];
 
+/// Total captures: 4 time-of-day + 1 debug panel.
+const TOTAL_CAPTURES: usize = 5;
+
 /// Configuration for screenshot capture mode.
 #[derive(Debug)]
 pub struct ScreenshotConfig {
@@ -33,9 +36,12 @@ pub struct ScreenshotConfig {
     pub pending_request: bool,
     /// Whether the current screenshot has been saved.
     pub saved: bool,
+    /// Whether we are currently capturing the debug panel screenshot.
+    pub capturing_debug: bool,
 }
 
 impl ScreenshotConfig {
+    /// Creates a new screenshot config targeting the given output directory.
     /// Creates a new screenshot config targeting the given output directory.
     pub fn new(output_dir: PathBuf) -> Self {
         Self {
@@ -44,12 +50,15 @@ impl ScreenshotConfig {
             current_index: 0,
             pending_request: false,
             saved: false,
+            capturing_debug: false,
         }
     }
 
     /// Returns the filename for the current screenshot.
     pub fn current_filename(&self) -> String {
-        if self.current_index < SCREENSHOT_TIMES.len() {
+        if self.capturing_debug {
+            "gui-debug-panel.png".to_string()
+        } else if self.current_index < SCREENSHOT_TIMES.len() {
             format!("gui-{}.png", SCREENSHOT_TIMES[self.current_index].1)
         } else {
             "gui-unknown.png".to_string()
@@ -61,9 +70,14 @@ impl ScreenshotConfig {
         SCREENSHOT_TIMES.get(self.current_index)
     }
 
-    /// Returns whether all screenshots have been captured.
+    /// Returns whether all screenshots have been captured (time-of-day + debug).
     pub fn is_done(&self) -> bool {
-        self.current_index >= SCREENSHOT_TIMES.len()
+        self.current_index >= TOTAL_CAPTURES
+    }
+
+    /// Returns whether the debug panel should be shown for the current capture.
+    pub fn should_show_debug(&self) -> bool {
+        self.capturing_debug
     }
 }
 
@@ -174,13 +188,18 @@ pub fn handle_screenshot_frame(
             config.saved = false;
             config.frame_count = 1;
 
+            // After the 4 time-of-day screenshots, switch to debug capture
+            if config.current_index == SCREENSHOT_TIMES.len() {
+                config.capturing_debug = true;
+            }
+
             if config.is_done() {
                 *should_quit = true;
                 return;
             }
         }
 
-        // Advance clock to target hour
+        // Advance clock to target hour (only for time-of-day captures)
         if let Some((_tod, _name, hour)) = config.current_time() {
             let target_hour = *hour as i64;
             let current_hour = world
@@ -333,6 +352,7 @@ mod tests {
         assert_eq!(config.current_index, 0);
         assert!(!config.pending_request);
         assert!(!config.saved);
+        assert!(!config.capturing_debug);
         assert!(!config.is_done());
     }
 
@@ -343,16 +363,36 @@ mod tests {
     }
 
     #[test]
+    fn test_screenshot_config_debug_filename() {
+        let mut config = ScreenshotConfig::new(PathBuf::from("/tmp"));
+        config.capturing_debug = true;
+        assert_eq!(config.current_filename(), "gui-debug-panel.png");
+    }
+
+    #[test]
     fn test_screenshot_config_done() {
         let mut config = ScreenshotConfig::new(PathBuf::from("/tmp"));
         assert!(!config.is_done());
+        // Not done at time-of-day boundary (debug capture still pending)
         config.current_index = SCREENSHOT_TIMES.len();
+        assert!(!config.is_done());
+        // Done after all captures including debug
+        config.current_index = TOTAL_CAPTURES;
         assert!(config.is_done());
+    }
+
+    #[test]
+    fn test_screenshot_config_should_show_debug() {
+        let mut config = ScreenshotConfig::new(PathBuf::from("/tmp"));
+        assert!(!config.should_show_debug());
+        config.capturing_debug = true;
+        assert!(config.should_show_debug());
     }
 
     #[test]
     fn test_screenshot_times_coverage() {
         assert_eq!(SCREENSHOT_TIMES.len(), 4);
+        assert_eq!(TOTAL_CAPTURES, SCREENSHOT_TIMES.len() + 1);
         // Verify all have valid hours
         for (_tod, name, hour) in SCREENSHOT_TIMES {
             assert!(*hour < 24, "invalid hour for {name}");

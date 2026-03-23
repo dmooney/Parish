@@ -936,6 +936,10 @@ impl eframe::App for GuiApp {
 
         // Screenshot mode: request capture or handle result
         if let Some(config) = &mut self.screenshot_config {
+            // Enable the debug panel when capturing the debug screenshot
+            if config.should_show_debug() {
+                self.show_debug = true;
+            }
             screenshot::handle_screenshot_frame(
                 ctx,
                 config,
