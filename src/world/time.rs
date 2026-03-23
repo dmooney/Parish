@@ -189,7 +189,7 @@ pub struct GameClock {
     start_game: DateTime<Utc>,
     /// Whether the clock is paused.
     paused: bool,
-    /// Game-time seconds per real-time second (default 72.0).
+    /// Game-time seconds per real-time second (default 36.0).
     speed_factor: f64,
     /// Game time when the clock was paused (only valid when `paused` is true).
     paused_game_time: DateTime<Utc>,
