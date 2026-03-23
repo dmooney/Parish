@@ -890,7 +890,7 @@ fn show_location_arrival(app: &mut App) {
     // Render dynamic description if graph is loaded, else use static description
     if let Some(loc_data) = app.world.current_location_data() {
         let tod = app.world.clock.time_of_day();
-        let weather = app.world.weather.clone();
+        let weather = app.world.weather.to_string();
         let npc_names: Vec<&str> = app
             .npc_manager
             .npcs_at(app.world.player_location)
@@ -919,7 +919,7 @@ fn show_location_arrival(app: &mut App) {
 fn show_location_description(app: &mut App) {
     if let Some(loc_data) = app.world.current_location_data() {
         let tod = app.world.clock.time_of_day();
-        let weather = app.world.weather.clone();
+        let weather = app.world.weather.to_string();
         let npc_names: Vec<&str> = app
             .npc_manager
             .npcs_at(app.world.player_location)

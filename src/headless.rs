@@ -578,7 +578,7 @@ fn print_location_arrival(app: &App) {
             .iter()
             .map(|n| n.name.as_str())
             .collect();
-        let desc = render_description(loc_data, tod, &app.world.weather, &npc_names);
+        let desc = render_description(loc_data, tod, &app.world.weather.to_string(), &npc_names);
         println!("{}", desc);
     } else {
         println!("{}", app.world.current_location().description);
@@ -603,7 +603,7 @@ fn print_location_description(app: &App) {
             .iter()
             .map(|n| n.name.as_str())
             .collect();
-        let desc = render_description(loc_data, tod, &app.world.weather, &npc_names);
+        let desc = render_description(loc_data, tod, &app.world.weather.to_string(), &npc_names);
         println!("{}", desc);
     } else {
         println!("{}", app.world.current_location().description);
