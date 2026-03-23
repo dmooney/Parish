@@ -231,6 +231,10 @@ pub struct App {
     pub dialogue_model: String,
     /// Loading animation state, active while waiting for LLM inference.
     pub loading_animation: Option<LoadingAnimation>,
+    /// The LLM client for intent parsing (may differ from base client).
+    pub intent_client: Option<OpenAiClient>,
+    /// The model name for intent parsing.
+    pub intent_model: String,
 }
 
 impl App {
@@ -261,6 +265,8 @@ impl App {
             cloud_base_url: None,
             dialogue_model: String::new(),
             loading_animation: None,
+            intent_client: None,
+            intent_model: String::new(),
         }
     }
 

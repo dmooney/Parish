@@ -23,6 +23,7 @@ This directory contains Architecture Decision Records (ADRs) for the Parish proj
 | [013](013-cloud-llm-dialogue.md) | Cloud LLM for Player Dialogue | Accepted | 2026-03-22 |
 | [014](014-web-mobile-architecture.md) | Web & Mobile Architecture | Accepted | 2026-03-23 |
 | [015](015-ambient-sound-system.md) | Ambient Sound System | Accepted | 2026-03-24 |
+| [016](016-per-category-inference-providers.md) | Per-Category Inference Providers | Accepted | 2026-03-24 |
 
 ## ADR Template
 
