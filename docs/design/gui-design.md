@@ -81,6 +81,9 @@ The map renders the `WorldGraph` as a visual node-link diagram:
 - **Adjacent locations**: Semi-highlighted, clickable to trigger movement
 - **NPC markers**: Small dots above nodes showing NPC presence
 - **Click-to-move**: Clicking an adjacent node calls `handle_movement()` directly
+- **Label collision avoidance**: When locations are geographically close (e.g. the village core), labels are nudged apart by an iterative force-directed repulsion pass so they never overlap. Thin leader lines connect displaced labels back to their nodes.
+
+See [Map Evolution](map-evolution.md) for future map improvements (minimap, OSM tiles, fog of war).
 
 ### Sidebar
 
