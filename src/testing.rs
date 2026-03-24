@@ -366,7 +366,7 @@ impl GameTestHarness {
             Command::Help => {
                 self.app
                     .world
-                    .log("Commands: /quit, /pause, /resume, /status, /help".to_string());
+                    .log("Commands: /quit, /pause, /resume, /status, /save, /fork, /load, /branches, /log, /help".to_string());
                 ActionResult::SystemCommand {
                     response: "Help displayed".to_string(),
                 }
@@ -521,7 +521,9 @@ impl GameTestHarness {
                                 };
                                 lines.push(format!(
                                     "  {}{} (created {})",
-                                    b.name, marker, b.created_at
+                                    b.name,
+                                    marker,
+                                    crate::persistence::format_timestamp(&b.created_at)
                                 ));
                             }
                             let msg = lines.join("\n");
@@ -553,7 +555,9 @@ impl GameTestHarness {
                                 for s in &snapshots {
                                     lines.push(format!(
                                         "  #{} — game: {} | saved: {}",
-                                        s.id, s.game_time, s.real_time
+                                        s.id,
+                                        s.game_time,
+                                        crate::persistence::format_timestamp(&s.real_time)
                                     ));
                                 }
                                 lines.join("\n")

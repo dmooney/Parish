@@ -126,15 +126,15 @@ fn test_save_preserves_weather() {
     let mut h = GameTestHarness::new();
 
     // Change weather (directly, since we don't have a weather command)
-    h.app.world.weather = "Stormy".to_string();
+    h.app.world.weather = parish::world::Weather::Storm;
     h.execute("/save");
 
     // Change it again
-    h.app.world.weather = "Clear".to_string();
+    h.app.world.weather = parish::world::Weather::Clear;
 
-    // Load — should restore "Stormy"
+    // Load — should restore Storm
     h.execute("/load main");
-    assert_eq!(h.weather(), "Stormy");
+    assert_eq!(*h.weather(), parish::world::Weather::Storm);
 }
 
 #[test]

@@ -477,7 +477,11 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
 
                                 let time = app.world.clock.time_of_day();
                                 let season = app.world.clock.season();
-                                println!("Loaded branch '{}'. {}, {}.", name, season, time);
+                                let loc = app.world.current_location().name.clone();
+                                println!(
+                                    "Loaded branch '{}'. {} — {}, {}.",
+                                    name, loc, season, time
+                                );
                             }
                             Ok(None) => println!("Branch '{}' has no saves yet.", name),
                             Err(e) => eprintln!("Failed to load branch '{}': {}", name, e),
@@ -501,7 +505,12 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
                             } else {
                                 ""
                             };
-                            println!("  {}{} (created {})", b.name, marker, b.created_at);
+                            println!(
+                                "  {}{} (created {})",
+                                b.name,
+                                marker,
+                                crate::persistence::format_timestamp(&b.created_at)
+                            );
                         }
                     }
                     Err(e) => eprintln!("Failed to list branches: {}", e),
@@ -521,7 +530,9 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
                             for s in &snapshots {
                                 println!(
                                     "  #{} — game: {} | saved: {}",
-                                    s.id, s.game_time, s.real_time
+                                    s.id,
+                                    s.game_time,
+                                    crate::persistence::format_timestamp(&s.real_time)
                                 );
                             }
                         }

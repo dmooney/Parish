@@ -144,7 +144,7 @@ impl GameSnapshot {
 
         Self {
             player_location: world.player_location,
-            weather: world.weather.clone(),
+            weather: world.weather.to_string(),
             text_log: world.text_log.clone(),
             clock,
             npcs,
@@ -193,7 +193,7 @@ impl GameSnapshot {
 
         world.clock = clock;
         world.player_location = self.player_location;
-        world.weather = self.weather;
+        world.weather = self.weather.parse().unwrap_or(crate::world::Weather::Clear);
         world.text_log = self.text_log;
 
         // Restore NPCs
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn test_game_snapshot_restore() {
         let mut world = WorldState::new();
-        world.weather = "Rainy".to_string();
+        world.weather = crate::world::Weather::Rain;
         world.log("Test entry".to_string());
         let mut npc_manager = NpcManager::new();
         npc_manager.add_npc(make_test_npc(1, 1));
@@ -291,7 +291,7 @@ mod tests {
         let mut new_npcs = NpcManager::new();
         snapshot.restore(&mut new_world, &mut new_npcs);
 
-        assert_eq!(new_world.weather, "Rainy");
+        assert_eq!(new_world.weather, crate::world::Weather::Rain);
         assert_eq!(new_world.text_log.len(), 1);
         assert_eq!(new_world.text_log[0], "Test entry");
         assert_eq!(new_npcs.npc_count(), 1);

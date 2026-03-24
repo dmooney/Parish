@@ -130,7 +130,7 @@ pub fn replay_journal(
                 }
             }
             WorldEvent::WeatherChanged { new_weather } => {
-                world.weather = new_weather.clone();
+                world.weather = new_weather.parse().unwrap_or(crate::world::Weather::Clear);
             }
             WorldEvent::MemoryAdded { npc_id, content } => {
                 if let Some(npc) = npc_manager.get_mut(*npc_id) {
@@ -221,10 +221,10 @@ mod tests {
         let mut world = crate::world::WorldState::new();
         let mut npcs = crate::npc::manager::NpcManager::new();
         let events = vec![WorldEvent::WeatherChanged {
-            new_weather: "Stormy".to_string(),
+            new_weather: "Storm".to_string(),
         }];
         replay_journal(&mut world, &mut npcs, &events);
-        assert_eq!(world.weather, "Stormy");
+        assert_eq!(world.weather, crate::world::Weather::Storm);
     }
 
     #[test]
@@ -294,13 +294,13 @@ mod tests {
                 to: LocationId(2),
             },
             WorldEvent::WeatherChanged {
-                new_weather: "Foggy".to_string(),
+                new_weather: "Fog".to_string(),
             },
             WorldEvent::ClockAdvanced { minutes: 30 },
         ];
         replay_journal(&mut world, &mut npcs, &events);
         assert_eq!(world.player_location, LocationId(2));
-        assert_eq!(world.weather, "Foggy");
+        assert_eq!(world.weather, crate::world::Weather::Fog);
     }
 
     #[test]
