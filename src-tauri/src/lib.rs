@@ -244,16 +244,29 @@ async fn dispatch_screenshot(_path: std::path::PathBuf) -> anyhow::Result<()> {
 pub fn run() {
     dotenvy::dotenv().ok();
 
-    // Parse optional --screenshot <dir> flag
+    let data_dir = find_data_dir();
+
+    // Parse optional --screenshot <dir> flag.
+    // Relative paths are resolved against the workspace root (parent of data/).
     let screenshot_dir: Option<PathBuf> = {
         let args: Vec<String> = std::env::args().collect();
         args.iter()
             .position(|a| a == "--screenshot")
             .and_then(|i| args.get(i + 1))
-            .map(PathBuf::from)
+            .map(|s| {
+                let p = PathBuf::from(s);
+                if p.is_absolute() {
+                    p
+                } else {
+                    // src-tauri/ is one level below the workspace root
+                    let workspace_root = data_dir
+                        .parent()
+                        .map(|d| d.to_path_buf())
+                        .unwrap_or_else(|| PathBuf::from(".."));
+                    workspace_root.join(p)
+                }
+            })
     };
-
-    let data_dir = find_data_dir();
 
     // Load world
     let world = WorldState::from_parish_file(&data_dir.join("parish.json"), LocationId(15))
@@ -304,8 +317,9 @@ pub fn run() {
                 let state_ss = Arc::clone(&state);
                 let handle_ss = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    // Give the WebView time to load the frontend
-                    tokio::time::sleep(Duration::from_secs(4)).await;
+                    // Give the WebView time to fully load the frontend.
+                    // Xvfb + WebKit2 software rendering can be slow to paint.
+                    tokio::time::sleep(Duration::from_secs(12)).await;
 
                     let times: &[(&str, u32)] = &[
                         ("morning", 7),
@@ -337,8 +351,8 @@ pub fn run() {
                             let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, palette);
                         }
 
-                        // Wait for Svelte to re-render the new palette
-                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                        // Wait for Svelte to re-render and WebKit to repaint
+                        tokio::time::sleep(Duration::from_secs(3)).await;
 
                         // GDK must be called from the GTK main thread; dispatch and await.
                         let path = dir.join(format!("gui-{}.png", name));
