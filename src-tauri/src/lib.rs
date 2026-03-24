@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 use parish_core::inference::openai_client::OpenAiClient;
@@ -155,12 +155,85 @@ fn find_data_dir() -> PathBuf {
     PathBuf::from("data")
 }
 
+// ── Screenshot helpers ────────────────────────────────────────────────────────
+
+/// Encodes raw RGBA bytes as a PNG file at `path`.
+fn save_png(
+    path: &std::path::Path,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> anyhow::Result<()> {
+    use std::io::BufWriter;
+    let file = std::fs::File::create(path)?;
+    let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(rgba)?;
+    Ok(())
+}
+
+/// Captures the entire root X11 window (the Xvfb display) via GDK and saves it
+/// as a PNG. This works in headless environments because wry/GTK already have
+/// a GDK display connection open.
+#[cfg(target_os = "linux")]
+fn capture_gdk_screenshot(path: &std::path::Path) -> anyhow::Result<()> {
+    use gdk::prelude::*;
+
+    let screen = gdk::Screen::default()
+        .ok_or_else(|| anyhow::anyhow!("no GDK default screen"))?;
+    let root = screen
+        .root_window()
+        .ok_or_else(|| anyhow::anyhow!("no root window"))?;
+    let width = root.width();
+    let height = root.height();
+
+    // WindowExtManual::pixbuf wraps gdk_pixbuf_get_from_window
+    let pixbuf = root
+        .pixbuf(0, 0, width, height)
+        .ok_or_else(|| anyhow::anyhow!("pixbuf_get_from_window returned None"))?;
+
+    // Convert RGB (or RGBA) pixbuf to a flat RGBA byte vec for the PNG encoder
+    let has_alpha = pixbuf.has_alpha();
+    let channels = pixbuf.n_channels() as usize;
+    let rowstride = pixbuf.rowstride() as usize;
+    let src = pixbuf.read_pixel_bytes();
+    let (w, h) = (width as usize, height as usize);
+    let mut rgba: Vec<u8> = Vec::with_capacity(w * h * 4);
+    for row in 0..h {
+        for col in 0..w {
+            let offset = row * rowstride + col * channels;
+            rgba.push(src[offset]);     // R
+            rgba.push(src[offset + 1]); // G
+            rgba.push(src[offset + 2]); // B
+            rgba.push(if has_alpha { src[offset + 3] } else { 255 }); // A
+        }
+    }
+
+    save_png(path, &rgba, width as u32, height as u32)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn capture_gdk_screenshot(_path: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("screenshot capture is only implemented on Linux")
+}
+
 // ── Tauri entry point ─────────────────────────────────────────────────────────
 
 /// Called from `main.rs`. Initialises game state and launches the Tauri app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenvy::dotenv().ok();
+
+    // Parse optional --screenshot <dir> flag
+    let screenshot_dir: Option<PathBuf> = {
+        let args: Vec<String> = std::env::args().collect();
+        args.iter()
+            .position(|a| a == "--screenshot")
+            .and_then(|i| args.get(i + 1))
+            .map(PathBuf::from)
+    };
 
     let data_dir = find_data_dir();
 
@@ -205,6 +278,63 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            // ── Screenshot mode ───────────────────────────────────────────────
+            // If --screenshot <dir> was passed, capture the UI at 4 times of day
+            // and exit. No background ticks are started in this mode.
+            if let Some(dir) = screenshot_dir.clone() {
+                let state_ss = Arc::clone(&state);
+                let handle_ss = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Give the WebView time to load the frontend
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+
+                    let times: &[(&str, u32)] = &[
+                        ("morning", 7),
+                        ("midday", 12),
+                        ("dusk", 18),
+                        ("night", 22),
+                    ];
+
+                    std::fs::create_dir_all(&dir).ok();
+
+                    for (name, target_hour) in times {
+                        // Advance clock to target hour
+                        {
+                            use chrono::Timelike;
+                            let mut world = state_ss.world.lock().await;
+                            let current_hour = world.clock.now().hour() as i64;
+                            let delta =
+                                ((*target_hour as i64) - current_hour).rem_euclid(24) * 60;
+                            world.clock.advance(delta);
+                            // Push updated theme to frontend
+                            let now = world.clock.now();
+                            let raw = compute_palette(
+                                now.hour(),
+                                now.minute(),
+                                world.clock.season(),
+                                world.weather,
+                            );
+                            let palette = ThemePalette::from(raw);
+                            let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, palette);
+                        }
+
+                        // Wait for Svelte to re-render the new palette
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                        // Capture the root window via GDK (works in Xvfb)
+                        let path = dir.join(format!("gui-{}.png", name));
+                        if let Err(e) = capture_gdk_screenshot(&path) {
+                            eprintln!("screenshot: capture failed for {name}: {e}");
+                        }
+                    }
+
+                    println!("screenshot: all done, exiting");
+                    std::process::exit(0);
+                });
+
+                return Ok(());
+            }
 
             // Spawn all background tasks via Tauri's async runtime.
             // The setup callback is synchronous (runs on the GTK event loop thread)
