@@ -206,63 +206,67 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            // Initialise inference queue now that the tokio runtime is running
-            if let Some(ref client) = state.client {
-                let (tx, rx) = tokio::sync::mpsc::channel(32);
-                let _worker = spawn_inference_worker(client.clone(), rx);
-                let queue = InferenceQueue::new(tx);
-                let state_ref = Arc::clone(&state);
-                tokio::spawn(async move {
-                    let mut iq = state_ref.inference_queue.lock().await;
+            // Spawn all background tasks via Tauri's async runtime.
+            // The setup callback is synchronous (runs on the GTK event loop thread)
+            // so tokio::spawn cannot be called directly here — we must go through
+            // tauri::async_runtime::spawn, which uses the Tauri-managed tokio handle.
+            let state_setup = Arc::clone(&state);
+            tauri::async_runtime::spawn(async move {
+                // Initialise inference queue now that the tokio runtime is running
+                if let Some(ref client) = state_setup.client {
+                    let (tx, rx) = tokio::sync::mpsc::channel(32);
+                    let _worker = spawn_inference_worker(client.clone(), rx);
+                    let queue = InferenceQueue::new(tx);
+                    let mut iq = state_setup.inference_queue.lock().await;
                     *iq = Some(queue);
+                }
+
+                // ── Background ticks ─────────────────────────────────────────
+
+                // Idle tick: advance world clock every 20 seconds of real time
+                let state_tick = Arc::clone(&state_setup);
+                let handle_tick = handle.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        {
+                            let mut world = state_tick.world.lock().await;
+                            if !world.clock.is_paused() {
+                                world.clock.advance(20); // advance 20 game minutes
+                            }
+                            let snapshot = crate::commands::get_world_snapshot_inner(&world);
+                            let _ = handle_tick.emit(events::EVENT_WORLD_UPDATE, snapshot);
+                        }
+                        {
+                            let world = state_tick.world.lock().await;
+                            let mut npc_mgr = state_tick.npc_manager.lock().await;
+                            let events = npc_mgr.tick_schedules(&world.clock, &world.graph);
+                            if !events.is_empty() {
+                                tracing::debug!("NPC schedule tick: {} events", events.len());
+                            }
+                        }
+                    }
                 });
-            }
 
-            // ── Background ticks ─────────────────────────────────────────
-
-            // Idle tick: advance world clock every 20 seconds of real time
-            let state_tick = Arc::clone(&state);
-            let handle_tick = handle.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(20)).await;
-                    {
-                        let mut world = state_tick.world.lock().await;
-                        if !world.clock.is_paused() {
-                            world.clock.advance(20); // advance 20 game minutes
-                        }
-                        let snapshot = crate::commands::get_world_snapshot_inner(&world);
-                        let _ = handle_tick.emit(events::EVENT_WORLD_UPDATE, snapshot);
+                // Theme tick: emit updated palette every 500 ms
+                let state_theme = Arc::clone(&state_setup);
+                let handle_theme = handle.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        let world = state_theme.world.lock().await;
+                        use chrono::Timelike;
+                        let now = world.clock.now();
+                        let raw = compute_palette(
+                            now.hour(),
+                            now.minute(),
+                            world.clock.season(),
+                            world.weather,
+                        );
+                        let palette = ThemePalette::from(raw);
+                        let _ = handle_theme.emit(events::EVENT_THEME_UPDATE, palette);
                     }
-                    {
-                        let world = state_tick.world.lock().await;
-                        let mut npc_mgr = state_tick.npc_manager.lock().await;
-                        let events = npc_mgr.tick_schedules(&world.clock, &world.graph);
-                        if !events.is_empty() {
-                            tracing::debug!("NPC schedule tick: {} events", events.len());
-                        }
-                    }
-                }
-            });
-
-            // Theme tick: emit updated palette every 500 ms
-            let state_theme = Arc::clone(&state);
-            let handle_theme = handle.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    let world = state_theme.world.lock().await;
-                    use chrono::Timelike;
-                    let now = world.clock.now();
-                    let raw = compute_palette(
-                        now.hour(),
-                        now.minute(),
-                        world.clock.season(),
-                        world.weather,
-                    );
-                    let palette = ThemePalette::from(raw);
-                    let _ = handle_theme.emit(events::EVENT_THEME_UPDATE, palette);
-                }
+                });
             });
 
             Ok(())

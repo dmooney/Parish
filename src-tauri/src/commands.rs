@@ -270,7 +270,7 @@ async fn handle_game_input(
         .unwrap_or(false);
     let move_target = intent
         .as_ref()
-        .filter(|i| is_move)
+        .filter(|_i| is_move)
         .and_then(|i| i.target.clone());
 
     if is_move {
