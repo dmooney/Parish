@@ -325,8 +325,10 @@ pub fn run() {
                 let handle_ss = handle.clone();
                 tauri::async_runtime::spawn(async move {
                     // Give the WebView time to fully load the frontend.
-                    // Xvfb + WebKit2 software rendering can be slow to paint.
-                    tokio::time::sleep(Duration::from_secs(12)).await;
+                    // In Xvfb + WebKit2 software rendering the JS bundle takes
+                    // ~15–20 s to parse, JIT, and complete the initial IPC round-trip
+                    // before onMount data is rendered into the DOM.
+                    tokio::time::sleep(Duration::from_secs(20)).await;
 
                     // Emit an initial theme so the frontend has a palette painted
                     // before the first capture (screenshot mode skips the normal
@@ -375,8 +377,8 @@ pub fn run() {
                             let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, palette);
                         }
 
-                        // Wait for Svelte to re-render and WebKit to repaint
-                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        // Wait for Svelte to re-render and WebKit to commit the frame
+                        tokio::time::sleep(Duration::from_secs(5)).await;
 
                         // GDK must be called from the GTK main thread; dispatch and await.
                         let path = dir.join(format!("gui-{}.png", name));
