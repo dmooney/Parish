@@ -231,7 +231,10 @@ async fn handle_system_command(
             Command::Help => {
                 "Commands: /pause /resume /status /help — or just speak naturally.".to_string()
             }
-            Command::Quit => "Use the window close button to leave the parish.".to_string(),
+            Command::Quit => {
+                app.exit(0);
+                return;
+            }
             Command::ShowSpeed => {
                 let s = world
                     .clock
