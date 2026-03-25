@@ -6,9 +6,15 @@ The player arrives as a newcomer to **Kilteevan Village** in the parish of Kilto
 
 > Any resemblance to real persons, living or dead, or actual businesses is purely coincidental. All characters and commercial establishments in this game are fictional.
 
-![Parish GUI — Morning](docs/screenshots/gui-morning.png)
+| Morning | Midday |
+|---------|--------|
+| ![Morning](docs/screenshots/gui-morning.png) | ![Midday](docs/screenshots/gui-midday.png) |
 
-*Tauri GUI showing the chat panel, interactive map, NPC sidebar, and time-of-day color theming (morning palette).*
+| Dusk | Night |
+|------|-------|
+| ![Dusk](docs/screenshots/gui-dusk.png) | ![Night](docs/screenshots/gui-night.png) |
+
+*Tauri GUI showing the chat panel, interactive map, NPC sidebar, and time-of-day color theming across four palettes.*
 
 ## Current Status
 
