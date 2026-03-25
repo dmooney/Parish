@@ -155,6 +155,7 @@ pub async fn get_npcs_here(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec
             NpcInfo {
                 name: npc_manager.display_name(npc).to_string(),
                 occupation: npc.occupation.clone(),
+                mood_emoji: parish_core::npc::mood::mood_emoji(&npc.mood).to_string(),
                 mood: npc.mood.clone(),
                 introduced,
             }

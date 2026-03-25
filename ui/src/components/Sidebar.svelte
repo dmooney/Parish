@@ -12,7 +12,7 @@
 						<span class="npc-name">{npc.name}</span>
 						{#if npc.introduced}
 							<span class="npc-detail">{npc.occupation}</span>
-							<span class="npc-mood">{npc.mood}</span>
+							<span class="npc-mood" title={npc.mood}>{npc.mood_emoji}</span>
 						{/if}
 					</li>
 				{/each}
@@ -107,10 +107,14 @@
 		font-size: 0.85rem;
 	}
 
-	.npc-detail,
-	.npc-mood {
+	.npc-detail {
 		color: var(--color-muted);
 		font-size: 0.75rem;
+	}
+
+	.npc-mood {
+		font-size: 1rem;
+		cursor: default;
 	}
 
 	.hint-item {
