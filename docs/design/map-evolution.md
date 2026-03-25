@@ -118,7 +118,7 @@ The map could be more than navigation:
 
 | Phase | Scope | Effort |
 |-------|-------|--------|
-| **Quick win** | Label collision avoidance (#3) — fix overlap with force-directed nudge | Small |
+| ~~**Quick win**~~ | ~~Label collision avoidance (#3) — fix overlap with force-directed nudge~~ | **Done** |
 | **Phase A** | GTA minimap (#1) + `/map` hotkey for full view (#2c — zoomable graph) | Medium |
 | **Phase B** | Fog of war / progressive disclosure (#4) + hover tooltips (#5) | Medium |
 | **Phase C** | Animated travel (#7) + time-of-day atmosphere (#6) | Medium |

@@ -235,8 +235,6 @@ fn build_locations(
                     connections,
                     associated_npcs: vec![],
                     mythological_significance,
-                    lat: feature.lat,
-                    lon: feature.lon,
                 },
                 description_source,
                 osm_id: Some(feature.osm_id),
