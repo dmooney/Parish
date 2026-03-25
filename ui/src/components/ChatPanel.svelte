@@ -51,7 +51,7 @@
 
 	.entry {
 		line-height: 1.6;
-		font-size: 0.95rem;
+		font-size: 1.15rem;
 	}
 
 	.source {
@@ -68,8 +68,7 @@
 	}
 
 	.system .content {
-		color: var(--color-muted);
-		font-style: italic;
+		color: var(--color-fg);
 	}
 
 	.cursor {

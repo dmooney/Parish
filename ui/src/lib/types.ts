@@ -5,10 +5,13 @@ export interface WorldSnapshot {
 	location_description: string;
 	time_label: string;
 	hour: number;
+	minute: number;
 	weather: string;
 	season: string;
 	festival: string | null;
 	paused: boolean;
+	game_epoch_ms: number;
+	speed_factor: number;
 }
 
 export interface MapLocation {

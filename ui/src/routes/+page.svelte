@@ -31,6 +31,13 @@
 			worldState.set(snap);
 			mapData.set(map);
 			npcsHere.set(npcs);
+			// Show initial location description in the chat panel
+			if (snap.location_description) {
+				textLog.update((log) => [
+					...log,
+					{ source: 'system', content: snap.location_description }
+				]);
+			}
 		} catch (e) {
 			console.warn('Initial fetch failed (expected in browser dev):', e);
 		}

@@ -32,6 +32,8 @@ pub struct WorldSnapshot {
     pub time_label: String,
     /// Current game hour (0–23).
     pub hour: u8,
+    /// Current game minute (0–59).
+    pub minute: u8,
     /// Current weather description.
     pub weather: String,
     /// Current season name.
@@ -40,6 +42,10 @@ pub struct WorldSnapshot {
     pub festival: Option<String>,
     /// Whether the game clock is currently paused.
     pub paused: bool,
+    /// Game time as milliseconds since Unix epoch (for client-side interpolation).
+    pub game_epoch_ms: f64,
+    /// Clock speed multiplier (1 real second = speed_factor game seconds).
+    pub speed_factor: f64,
 }
 
 /// A location node in the map data.
@@ -158,12 +164,8 @@ fn find_data_dir() -> PathBuf {
 // ── Screenshot helpers ────────────────────────────────────────────────────────
 
 /// Encodes raw RGBA bytes as a PNG file at `path`.
-fn save_png(
-    path: &std::path::Path,
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-) -> anyhow::Result<()> {
+#[cfg(target_os = "linux")]
+fn save_png(path: &std::path::Path, rgba: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
     use std::io::BufWriter;
     let file = std::fs::File::create(path)?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
@@ -188,8 +190,7 @@ fn capture_gdk_screenshot(path: &std::path::Path) -> anyhow::Result<()> {
         display.sync();
     }
 
-    let screen = gdk::Screen::default()
-        .ok_or_else(|| anyhow::anyhow!("no GDK default screen"))?;
+    let screen = gdk::Screen::default().ok_or_else(|| anyhow::anyhow!("no GDK default screen"))?;
     let root = screen
         .root_window()
         .ok_or_else(|| anyhow::anyhow!("no root window"))?;
@@ -211,7 +212,7 @@ fn capture_gdk_screenshot(path: &std::path::Path) -> anyhow::Result<()> {
     for row in 0..h {
         for col in 0..w {
             let offset = row * rowstride + col * channels;
-            rgba.push(src[offset]);     // R
+            rgba.push(src[offset]); // R
             rgba.push(src[offset + 1]); // G
             rgba.push(src[offset + 2]); // B
             rgba.push(if has_alpha { src[offset + 3] } else { 255 }); // A
@@ -236,7 +237,11 @@ async fn dispatch_screenshot(path: std::path::PathBuf) -> anyhow::Result<()> {
     glib::idle_add_once(move || {
         let _ = tx.send(capture_gdk_screenshot(&path));
     });
-    tokio::task::spawn_blocking(move || rx.recv().unwrap_or_else(|_| anyhow::bail!("channel closed"))).await?
+    tokio::task::spawn_blocking(move || {
+        rx.recv()
+            .unwrap_or_else(|_| anyhow::bail!("channel closed"))
+    })
+    .await?
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -347,12 +352,8 @@ pub fn run() {
                     }
                     tokio::time::sleep(Duration::from_secs(3)).await;
 
-                    let times: &[(&str, u32)] = &[
-                        ("morning", 7),
-                        ("midday", 12),
-                        ("dusk", 18),
-                        ("night", 22),
-                    ];
+                    let times: &[(&str, u32)] =
+                        &[("morning", 7), ("midday", 12), ("dusk", 18), ("night", 22)];
 
                     std::fs::create_dir_all(&dir).ok();
 
@@ -362,8 +363,7 @@ pub fn run() {
                             use chrono::Timelike;
                             let mut world = state_ss.world.lock().await;
                             let current_hour = world.clock.now().hour() as i64;
-                            let delta =
-                                ((*target_hour as i64) - current_hour).rem_euclid(24) * 60;
+                            let delta = ((*target_hour as i64) - current_hour).rem_euclid(24) * 60;
                             world.clock.advance(delta);
                             // Push updated theme to frontend
                             let now = world.clock.now();
@@ -411,17 +411,15 @@ pub fn run() {
 
                 // ── Background ticks ─────────────────────────────────────────
 
-                // Idle tick: advance world clock every 20 seconds of real time
+                // Idle tick: emit world snapshot every 5 seconds.
+                // The GameClock already flows via speed_factor — no manual advance needed.
                 let state_tick = Arc::clone(&state_setup);
                 let handle_tick = handle.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        tokio::time::sleep(Duration::from_secs(5)).await;
                         {
-                            let mut world = state_tick.world.lock().await;
-                            if !world.clock.is_paused() {
-                                world.clock.advance(20); // advance 20 game minutes
-                            }
+                            let world = state_tick.world.lock().await;
                             let snapshot = crate::commands::get_world_snapshot_inner(&world);
                             let _ = handle_tick.emit(events::EVENT_WORLD_UPDATE, snapshot);
                         }

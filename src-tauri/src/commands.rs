@@ -37,22 +37,38 @@ pub fn get_world_snapshot_inner(world: &parish_core::world::WorldState) -> World
 
 fn snapshot_from_world(world: &parish_core::world::WorldState) -> WorldSnapshot {
     use chrono::Timelike;
+    use parish_core::world::description::{format_exits, render_description};
+
     let now = world.clock.now();
     let hour = now.hour() as u8;
+    let minute = now.minute() as u8;
     let tod = world.clock.time_of_day();
     let season = world.clock.season();
     let festival = world.clock.check_festival().map(|f| f.to_string());
+    let weather_str = world.weather.to_string();
 
     let loc = world.current_location();
+    // Render the description template with current game state + exits
+    let description = if let Some(data) = world.current_location_data() {
+        let desc = render_description(data, tod, &weather_str, &[]);
+        let exits = format_exits(world.player_location, &world.graph);
+        format!("{}\n\n{}", desc, exits)
+    } else {
+        loc.description.clone()
+    };
+
     WorldSnapshot {
         location_name: loc.name.clone(),
-        location_description: loc.description.clone(),
+        location_description: description,
         time_label: tod.to_string(),
         hour,
-        weather: world.weather.to_string(),
+        minute,
+        weather: weather_str,
         season: season.to_string(),
         festival,
         paused: world.clock.is_paused(),
+        game_epoch_ms: now.timestamp_millis() as f64,
+        speed_factor: world.clock.speed_factor(),
     }
 }
 
