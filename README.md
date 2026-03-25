@@ -12,7 +12,7 @@ The player arrives as a newcomer to **Kilteevan Village** in the parish of Kilto
 
 ## Current Status
 
-**Phases 1–3 complete** (Core Loop, World Graph, NPCs & Simulation). **Phase 4 — Persistence** is next.
+**Phases 1–4 complete** (Core Loop, World Graph, NPCs & Simulation, Persistence). **Phase 8 — Tauri GUI** is mostly complete (workspace restructure, Svelte frontend, IPC, streaming). **Phase 5 — Full LOD & Scale** is next.
 
 See the [Roadmap](docs/requirements/roadmap.md) for per-item status tracking.
 
@@ -38,7 +38,7 @@ cargo tauri dev
 ### TUI Mode (Terminal)
 
 ```sh
-cargo run
+cargo run -- --tui
 ```
 
 ### Headless Mode
@@ -47,6 +47,14 @@ For piping input/output or running without a UI:
 
 ```sh
 cargo run -- --headless
+```
+
+### Script Mode (Automated Testing)
+
+Run commands from a file (JSON output, no LLM needed):
+
+```sh
+cargo run -- --script tests/fixtures/test_walkthrough.txt
 ```
 
 **Platform guides:** [macOS](docs/macos-setup.md) | [Linux](docs/linux-setup.md) | [Windows](docs/windows-setup.md)
