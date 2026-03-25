@@ -387,7 +387,7 @@ fn bfs_distances(source: LocationId, graph: &WorldGraph) -> HashMap<LocationId, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::npc::memory::ShortTermMemory;
+    use crate::npc::memory::{LongTermMemory, ShortTermMemory};
     use crate::npc::types::{DailySchedule, ScheduleEntry};
     use chrono::TimeZone;
 
@@ -406,6 +406,7 @@ mod tests {
             schedule: None,
             relationships: HashMap::new(),
             memory: ShortTermMemory::new(),
+            long_term_memory: LongTermMemory::new(),
             knowledge: Vec::new(),
             state: NpcState::Present,
         }

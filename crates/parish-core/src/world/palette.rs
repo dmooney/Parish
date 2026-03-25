@@ -239,7 +239,9 @@ fn season_tint(season: Season) -> (f32, f32, f32, f32) {
 fn weather_tint(weather: Weather) -> (f32, f32, f32, f32, f32, f32) {
     match weather {
         Weather::Clear => (1.0, 1.0, 1.0, 0.0, 1.0, 0.0),
+        Weather::PartlyCloudy => (0.98, 0.98, 0.99, 0.05, 0.97, 0.0),
         Weather::Overcast => (0.95, 0.95, 0.97, 0.15, 0.92, 0.0),
+        Weather::LightRain => (0.92, 0.93, 0.96, 0.12, 0.90, 0.0),
         Weather::Rain => (0.88, 0.90, 0.95, 0.20, 0.85, 0.0),
         Weather::Fog => (0.97, 0.97, 0.98, 0.35, 0.95, 0.15),
         Weather::Storm => (0.80, 0.82, 0.85, 0.30, 0.75, 0.0),
@@ -535,7 +537,9 @@ mod tests {
         ];
         let weathers = [
             Weather::Clear,
+            Weather::PartlyCloudy,
             Weather::Overcast,
+            Weather::LightRain,
             Weather::Rain,
             Weather::Fog,
             Weather::Storm,

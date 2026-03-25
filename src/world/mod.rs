@@ -29,8 +29,12 @@ use graph::{LocationData, WorldGraph};
 pub enum Weather {
     /// Clear skies — no palette modification.
     Clear,
+    /// Partly cloudy — minimal palette change.
+    PartlyCloudy,
     /// Overcast — slightly darker and desaturated.
     Overcast,
+    /// Light rain / drizzle — mild blue-gray tint.
+    LightRain,
     /// Rain — darker with a blue-gray tint.
     Rain,
     /// Fog — washed out, low contrast.
@@ -43,7 +47,9 @@ impl fmt::Display for Weather {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Weather::Clear => write!(f, "Clear"),
+            Weather::PartlyCloudy => write!(f, "Partly Cloudy"),
             Weather::Overcast => write!(f, "Overcast"),
+            Weather::LightRain => write!(f, "Light Rain"),
             Weather::Rain => write!(f, "Rain"),
             Weather::Fog => write!(f, "Fog"),
             Weather::Storm => write!(f, "Storm"),
@@ -57,7 +63,9 @@ impl std::str::FromStr for Weather {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Clear" => Ok(Weather::Clear),
+            "Partly Cloudy" | "PartlyCloudy" => Ok(Weather::PartlyCloudy),
             "Overcast" => Ok(Weather::Overcast),
+            "Light Rain" | "LightRain" => Ok(Weather::LightRain),
             "Rain" => Ok(Weather::Rain),
             "Fog" => Ok(Weather::Fog),
             "Storm" => Ok(Weather::Storm),

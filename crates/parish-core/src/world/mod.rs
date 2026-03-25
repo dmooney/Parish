@@ -6,10 +6,12 @@
 
 pub mod description;
 pub mod encounter;
+pub mod events;
 pub mod graph;
 pub mod movement;
 pub mod palette;
 pub mod time;
+pub mod weather;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -25,12 +27,16 @@ use graph::{LocationData, WorldGraph};
 ///
 /// Affects color palette tinting (desaturation, brightness, color temperature)
 /// and location description templates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Weather {
     /// Clear skies — no palette modification.
     Clear,
+    /// Partly cloudy — minimal palette change.
+    PartlyCloudy,
     /// Overcast — slightly darker and desaturated.
     Overcast,
+    /// Light rain / drizzle — mild blue-gray tint.
+    LightRain,
     /// Rain — darker with a blue-gray tint.
     Rain,
     /// Fog — washed out, low contrast.
@@ -43,7 +49,9 @@ impl fmt::Display for Weather {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Weather::Clear => write!(f, "Clear"),
+            Weather::PartlyCloudy => write!(f, "Partly Cloudy"),
             Weather::Overcast => write!(f, "Overcast"),
+            Weather::LightRain => write!(f, "Light Rain"),
             Weather::Rain => write!(f, "Rain"),
             Weather::Fog => write!(f, "Fog"),
             Weather::Storm => write!(f, "Storm"),
@@ -212,7 +220,9 @@ mod tests {
     #[test]
     fn test_weather_display() {
         assert_eq!(Weather::Clear.to_string(), "Clear");
+        assert_eq!(Weather::PartlyCloudy.to_string(), "Partly Cloudy");
         assert_eq!(Weather::Overcast.to_string(), "Overcast");
+        assert_eq!(Weather::LightRain.to_string(), "Light Rain");
         assert_eq!(Weather::Rain.to_string(), "Rain");
         assert_eq!(Weather::Fog.to_string(), "Fog");
         assert_eq!(Weather::Storm.to_string(), "Storm");

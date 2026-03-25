@@ -9,7 +9,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::ParishError;
-use crate::npc::memory::ShortTermMemory;
+use crate::npc::memory::{LongTermMemory, ShortTermMemory};
 use crate::npc::types::{DailySchedule, NpcState, Relationship, RelationshipKind, ScheduleEntry};
 use crate::npc::{Npc, NpcId};
 use crate::world::LocationId;
@@ -120,6 +120,7 @@ pub fn load_npcs_from_str(json: &str) -> Result<Vec<Npc>, ParishError> {
                 schedule: Some(schedule),
                 relationships,
                 memory: ShortTermMemory::new(),
+                long_term_memory: LongTermMemory::new(),
                 knowledge: entry.knowledge.clone(),
                 state: NpcState::default(),
             }

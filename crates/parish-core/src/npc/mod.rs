@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use crate::world::{LocationId, WorldState};
 use serde::{Deserialize, Serialize};
 
-use memory::ShortTermMemory;
+use memory::{LongTermMemory, ShortTermMemory};
 use types::{DailySchedule, NpcState, Relationship};
 
 /// A pronunciation hint for an Irish word used in NPC dialogue.
@@ -132,6 +132,8 @@ pub struct Npc {
     pub relationships: HashMap<NpcId, Relationship>,
     /// Ring buffer of recent memories.
     pub memory: ShortTermMemory,
+    /// Important memories with keyword-based recall.
+    pub long_term_memory: LongTermMemory,
     /// Things this NPC knows (local gossip, history, etc.).
     pub knowledge: Vec<String>,
     /// Whether the NPC is present at their location or in transit.
@@ -162,6 +164,7 @@ impl Npc {
             schedule: None,
             relationships: HashMap::new(),
             memory: ShortTermMemory::new(),
+            long_term_memory: LongTermMemory::new(),
             knowledge: Vec::new(),
             state: NpcState::default(),
         }
