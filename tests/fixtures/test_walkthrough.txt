@@ -8,7 +8,7 @@ go to pub
 look
 /status
 go to crossroads
-go to church
+go to st. brigid's
 look
 /status
 go to crossroads

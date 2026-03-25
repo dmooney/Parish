@@ -14,8 +14,12 @@ use parish::world::movement::{MovementResult, resolve_movement};
 use parish::world::time::TimeOfDay;
 
 fn load_parish_graph() -> WorldGraph {
-    let path = Path::new("data/parish.json");
-    WorldGraph::load_from_file(path).expect("data/parish.json should load and validate")
+    let base = Path::new("data/parish.json");
+    let roscommon = Path::new("data/roscommon.json");
+    let athlone = Path::new("data/athlone.json");
+    let dublin = Path::new("data/dublin.json");
+    WorldGraph::load_multiple_files(&[base, roscommon, athlone, dublin])
+        .expect("parish world files should load and validate")
 }
 
 #[test]
@@ -31,7 +35,7 @@ fn test_parish_json_loads() {
 #[test]
 fn test_parish_json_location_count() {
     let graph = load_parish_graph();
-    assert_eq!(graph.location_count(), 15);
+    assert_eq!(graph.location_count(), 35);
 }
 
 #[test]
@@ -73,7 +77,7 @@ fn test_parish_find_pub() {
 #[test]
 fn test_parish_find_church() {
     let graph = load_parish_graph();
-    let id = graph.find_by_name("church").unwrap();
+    let id = graph.find_by_name("st. brigid's").unwrap();
     let loc = graph.get(id).unwrap();
     assert_eq!(loc.name, "St. Brigid's Church");
 }
@@ -146,7 +150,7 @@ fn test_movement_go_to_pub() {
 #[test]
 fn test_movement_go_to_church() {
     let graph = load_parish_graph();
-    let result = resolve_movement("church", &graph, LocationId(1));
+    let result = resolve_movement("st. brigid's", &graph, LocationId(1));
     match result {
         MovementResult::Arrived {
             destination,
@@ -156,7 +160,7 @@ fn test_movement_go_to_church() {
             assert_eq!(destination, LocationId(3));
             assert_eq!(minutes, 5);
         }
-        other => panic!("expected Arrived at church, got {:?}", other),
+        other => panic!("expected Arrived at St. Brigid's, got {:?}", other),
     }
 }
 
@@ -257,8 +261,8 @@ fn test_parish_traversal_times_reasonable() {
     for id in graph.location_ids() {
         for (_, conn) in graph.neighbors(id) {
             assert!(
-                conn.traversal_minutes >= 2 && conn.traversal_minutes <= 15,
-                "traversal time {} for connection should be 2-15 minutes",
+                conn.traversal_minutes >= 2 && conn.traversal_minutes <= 120,
+                "traversal time {} for connection should be 2-120 minutes",
                 conn.traversal_minutes
             );
         }

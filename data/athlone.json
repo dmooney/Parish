@@ -1,0 +1,69 @@
+{
+    "locations": [
+        {
+            "id": 201,
+            "name": "Athlone Town Centre",
+            "description_template": "The bustling centre of Athlone, a garrison town straddling the Shannon. Soldiers in red coats mix with market traders. The air carries river damp and the smell of baking bread. It is {time}. The sky is {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 104, "traversal_minutes": 40, "path_description": "the long road north to Roscommon, following the coach route"},
+                {"target": 202, "traversal_minutes": 3, "path_description": "the steep lane up to the castle"},
+                {"target": 203, "traversal_minutes": 2, "path_description": "a short walk down to the Shannon bridge"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 202,
+            "name": "Athlone Castle",
+            "description_template": "The great Norman castle overlooking the Shannon. Its round keep dominates the skyline. A British garrison occupies the castle in 1820. Sentries stand at the gate. It is {time}. The {weather} sky hangs heavy above the battlements.",
+            "indoor": false,
+            "public": false,
+            "connections": [
+                {"target": 201, "traversal_minutes": 3, "path_description": "the steep lane back down to the town centre"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": "The castle guards the crossing of the Shannon since 1210. During the Siege of Athlone in 1691, it withstood a terrible bombardment."
+        },
+        {
+            "id": 203,
+            "name": "Shannon Bridge",
+            "description_template": "The old stone bridge spanning the Shannon, connecting the east and west banks of Athlone. The river flows dark and steady beneath. Fishermen cast lines from the arches. It is {time}. Weather: {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 201, "traversal_minutes": 2, "path_description": "back up from the bridge to the town centre"},
+                {"target": 204, "traversal_minutes": 4, "path_description": "across the bridge and along the west bank"},
+                {"target": 301, "traversal_minutes": 120, "path_description": "the long Dublin road, a full day's journey east by coach"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": "The Shannon — Sionann, named for the goddess who drowned seeking the salmon of knowledge."
+        },
+        {
+            "id": 204,
+            "name": "Luan Gallery",
+            "description_template": "A converted warehouse on the west bank of the Shannon, used for parish meetings and occasional exhibitions. The stone walls keep it cool in summer and freezing in winter. It is {time}. Outside: {weather}.",
+            "indoor": true,
+            "public": true,
+            "connections": [
+                {"target": 203, "traversal_minutes": 4, "path_description": "back along the west bank to the bridge"},
+                {"target": 205, "traversal_minutes": 5, "path_description": "a riverside walk to the coach station"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 205,
+            "name": "Athlone Coach Station",
+            "description_template": "The busy coach station where mail coaches depart for Dublin, Galway, and Roscommon. Horses stamp in the yard. A timekeeper calls out departures. It is {time}. The sky is {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 204, "traversal_minutes": 5, "path_description": "a riverside walk back to the gallery"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        }
+    ]
+}

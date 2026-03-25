@@ -16,7 +16,7 @@ look
 go to crossroads
 
 # 5. St. Brigid's Church
-go to church
+go to st. brigid's
 look
 
 # 6. The Bog Road (via Church)

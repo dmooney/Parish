@@ -11,7 +11,7 @@ go to pub
 
 # Go to Church — Fr. Declan may be here
 go to crossroads
-go to church
+go to st. brigid's
 /debug here
 
 # Go to Connolly's Shop — Roisin Connolly may be here

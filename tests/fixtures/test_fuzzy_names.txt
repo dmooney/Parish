@@ -11,7 +11,7 @@ go to darcy's pub
 go to crossroads
 
 # Church variants
-go to church
+go to st. brigid's
 go to crossroads
 go to st. brigid's church
 go to crossroads
@@ -37,7 +37,7 @@ go to murphy
 go to o'brien
 go to lime kiln
 go to bog road
-go to church
+go to st. brigid's
 go to crossroads
 go to letter office
 go to crossroads

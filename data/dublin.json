@@ -1,0 +1,70 @@
+{
+    "locations": [
+        {
+            "id": 301,
+            "name": "O'Connell Street",
+            "description_template": "The wide thoroughfare of Sackville Street — not yet renamed, but already the beating heart of Dublin. Fine Georgian buildings line both sides. Carriages rattle over the cobblestones. Street sellers cry their wares. It is {time}. The sky is {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 203, "traversal_minutes": 120, "path_description": "the long road west to Athlone, a full day by coach"},
+                {"target": 302, "traversal_minutes": 8, "path_description": "south across the river and through narrow streets to Trinity College"},
+                {"target": 305, "traversal_minutes": 5, "path_description": "a short walk south along the quays to Temple Bar"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 302,
+            "name": "Trinity College",
+            "description_template": "The grand front square of Trinity College Dublin. Cobblestones stretch between the Rubrics and the chapel. Scholars in black gowns hurry between lectures. The campanile rises above. It is {time}. The {weather} sky reflects in puddles on the stones.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 301, "traversal_minutes": 8, "path_description": "north through narrow streets and across the river to Sackville Street"},
+                {"target": 305, "traversal_minutes": 4, "path_description": "a short walk west along Dame Street to Temple Bar"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": "Home to the Book of Kells, the great illuminated manuscript of the four Gospels, created by monks around 800 AD."
+        },
+        {
+            "id": 303,
+            "name": "Heuston Station",
+            "description_template": "The terminus of the Great Southern road. In 1820 there are no railways yet, but the coaching inn here is a major departure point for the west. Coaches to Galway, Limerick, and Cork depart daily. It is {time}. Weather: {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 304, "traversal_minutes": 10, "path_description": "the road west along the Liffey to the gates of Phoenix Park"},
+                {"target": 305, "traversal_minutes": 12, "path_description": "east along the quays to Temple Bar"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 304,
+            "name": "Phoenix Park",
+            "description_template": "The vast expanse of Phoenix Park stretches before you — one of the largest enclosed parks in any European capital. Deer graze beneath ancient oaks. The Vice-Regal Lodge is visible in the distance. It is {time}. The {weather} sky arches over the green.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 303, "traversal_minutes": 10, "path_description": "the road east along the Liffey back toward the coaching inn"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": "Phoenix Park — from fionn uisce, 'clear water', referring to a spring. The park was enclosed as a royal deer park by the Duke of Ormond in 1662."
+        },
+        {
+            "id": 305,
+            "name": "Temple Bar",
+            "description_template": "A warren of narrow streets between Dame Street and the Liffey. Printers, booksellers, and small merchants crowd the lanes. The smell of ink and ale mingles in the air. It is {time}. The sky is {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 301, "traversal_minutes": 5, "path_description": "north along the quays back to Sackville Street"},
+                {"target": 302, "traversal_minutes": 4, "path_description": "east along Dame Street to Trinity College"},
+                {"target": 303, "traversal_minutes": 12, "path_description": "west along the quays to the coaching inn at Kingsbridge"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        }
+    ]
+}

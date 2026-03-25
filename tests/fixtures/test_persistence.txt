@@ -11,7 +11,7 @@ go to pub
 look
 /fork alternate
 /branches
-go to church
+go to st. brigid's
 /save
 /load main
 /status

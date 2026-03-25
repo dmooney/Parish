@@ -19,7 +19,7 @@ look
 go to crossroads
 
 # === St. Brigid's Church ===
-go to church
+go to st. brigid's
 /status
 look
 

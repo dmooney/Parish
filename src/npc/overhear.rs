@@ -61,6 +61,18 @@ mod tests {
     use crate::npc::NpcId;
     use std::path::Path;
 
+    fn load_full_world() -> Option<crate::world::graph::WorldGraph> {
+        let base = Path::new("data/parish.json");
+        let roscommon = Path::new("data/roscommon.json");
+        let athlone = Path::new("data/athlone.json");
+        let dublin = Path::new("data/dublin.json");
+        if !base.exists() {
+            return None;
+        }
+        crate::world::graph::WorldGraph::load_multiple_files(&[base, roscommon, athlone, dublin])
+            .ok()
+    }
+
     fn make_event(location: u32, summary: &str) -> Tier2Event {
         Tier2Event {
             location: LocationId(location),
@@ -73,11 +85,10 @@ mod tests {
 
     #[test]
     fn test_overhear_adjacent_location() {
-        let path = Path::new("data/parish.json");
-        if !path.exists() {
-            return;
-        }
-        let graph = crate::world::graph::WorldGraph::load_from_file(path).unwrap();
+        let graph = match load_full_world() {
+            Some(g) => g,
+            None => return,
+        };
 
         // Player at crossroads (1), event at pub (2) which is 1 edge away
         let events = vec![make_event(2, "Padraig polishes glasses")];
@@ -89,11 +100,10 @@ mod tests {
 
     #[test]
     fn test_overhear_same_location_excluded() {
-        let path = Path::new("data/parish.json");
-        if !path.exists() {
-            return;
-        }
-        let graph = crate::world::graph::WorldGraph::load_from_file(path).unwrap();
+        let graph = match load_full_world() {
+            Some(g) => g,
+            None => return,
+        };
 
         // Event at player's own location — not overheard
         let events = vec![make_event(1, "Something happens here")];
@@ -103,11 +113,10 @@ mod tests {
 
     #[test]
     fn test_overhear_distant_location_excluded() {
-        let path = Path::new("data/parish.json");
-        if !path.exists() {
-            return;
-        }
-        let graph = crate::world::graph::WorldGraph::load_from_file(path).unwrap();
+        let graph = match load_full_world() {
+            Some(g) => g,
+            None => return,
+        };
 
         // Player at crossroads (1), event at fairy fort (11) which is far
         // First check they are NOT neighbors

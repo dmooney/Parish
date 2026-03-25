@@ -6,10 +6,12 @@
 
 pub mod description;
 pub mod encounter;
+pub mod events;
 pub mod graph;
 pub mod movement;
 pub mod palette;
 pub mod time;
+pub mod weather;
 
 use std::collections::HashMap;
 use std::fmt;

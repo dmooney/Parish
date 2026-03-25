@@ -115,13 +115,49 @@ impl WorldGraph {
         Ok(graph)
     }
 
+    /// Merges locations from a JSON string without validation.
+    ///
+    /// Use this to load multiple files before calling `validate()`.
+    /// Returns an error if any location id already exists.
+    pub fn merge_from_str(&mut self, json: &str) -> Result<(), ParishError> {
+        let file: WorldGraphFile = serde_json::from_str(json)?;
+        for loc in file.locations {
+            if self.locations.contains_key(&loc.id) {
+                return Err(ParishError::WorldGraph(format!(
+                    "duplicate location id: {}",
+                    loc.id.0
+                )));
+            }
+            self.locations.insert(loc.id, loc);
+        }
+        Ok(())
+    }
+
+    /// Merges locations from a JSON file without validation.
+    pub fn merge_from_file(&mut self, path: &Path) -> Result<(), ParishError> {
+        let contents = std::fs::read_to_string(path)?;
+        self.merge_from_str(&contents)
+    }
+
+    /// Loads multiple JSON files into a single world graph.
+    ///
+    /// Merges all files first, then validates the combined graph.
+    pub fn load_multiple_files(paths: &[&Path]) -> Result<Self, ParishError> {
+        let mut graph = Self::new();
+        for path in paths {
+            graph.merge_from_file(path)?;
+        }
+        graph.validate()?;
+        Ok(graph)
+    }
+
     /// Validates the world graph.
     ///
     /// Checks that:
     /// - All connection targets exist in the graph
     /// - All connections are bidirectional
     /// - There are no orphan nodes (nodes with no connections)
-    fn validate(&self) -> Result<(), ParishError> {
+    pub fn validate(&self) -> Result<(), ParishError> {
         for (id, loc) in &self.locations {
             if loc.connections.is_empty() {
                 return Err(ParishError::WorldGraph(format!(
@@ -647,5 +683,99 @@ mod tests {
         let graph = WorldGraph::load_from_str(test_graph_json()).unwrap();
         let ids = graph.location_ids();
         assert_eq!(ids.len(), 4);
+    }
+
+    #[test]
+    fn test_merge_from_str() {
+        let base = r#"{
+            "locations": [
+                {
+                    "id": 1,
+                    "name": "A",
+                    "description_template": "A at {time}.",
+                    "indoor": false,
+                    "public": true,
+                    "connections": [{"target": 2, "traversal_minutes": 5, "path_description": "path"}]
+                }
+            ]
+        }"#;
+        let expansion = r#"{
+            "locations": [
+                {
+                    "id": 2,
+                    "name": "B",
+                    "description_template": "B at {time}.",
+                    "indoor": false,
+                    "public": true,
+                    "connections": [{"target": 1, "traversal_minutes": 5, "path_description": "path back"}]
+                }
+            ]
+        }"#;
+        let mut graph = WorldGraph::new();
+        graph.merge_from_str(base).unwrap();
+        assert_eq!(graph.location_count(), 1);
+        graph.merge_from_str(expansion).unwrap();
+        assert_eq!(graph.location_count(), 2);
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn test_merge_duplicate_id_fails() {
+        let base = r#"{
+            "locations": [
+                {
+                    "id": 1,
+                    "name": "A",
+                    "description_template": "A",
+                    "indoor": false,
+                    "public": true,
+                    "connections": [{"target": 2, "traversal_minutes": 5, "path_description": "path"}]
+                }
+            ]
+        }"#;
+        let dup = r#"{
+            "locations": [
+                {
+                    "id": 1,
+                    "name": "Also A",
+                    "description_template": "Also A",
+                    "indoor": false,
+                    "public": true,
+                    "connections": [{"target": 2, "traversal_minutes": 5, "path_description": "path"}]
+                }
+            ]
+        }"#;
+        let mut graph = WorldGraph::new();
+        graph.merge_from_str(base).unwrap();
+        let result = graph.merge_from_str(dup);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn test_load_expanded_world() {
+        let base_path = Path::new("data/parish.json");
+        let roscommon_path = Path::new("data/roscommon.json");
+        let athlone_path = Path::new("data/athlone.json");
+        let dublin_path = Path::new("data/dublin.json");
+        if !base_path.exists()
+            || !roscommon_path.exists()
+            || !athlone_path.exists()
+            || !dublin_path.exists()
+        {
+            return;
+        }
+        let graph = WorldGraph::load_multiple_files(&[
+            base_path,
+            roscommon_path,
+            athlone_path,
+            dublin_path,
+        ])
+        .unwrap();
+        // 15 base + 10 roscommon + 5 athlone + 5 dublin = 35
+        assert_eq!(graph.location_count(), 35);
+        // Can path from crossroads to Dublin
+        let path = graph.shortest_path(LocationId(1), LocationId(301));
+        assert!(path.is_some(), "Should be able to path to Dublin");
     }
 }

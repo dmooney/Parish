@@ -946,8 +946,12 @@ fn test_harness_weather_consistent_at_all_locations() {
     assert_eq!(*h.weather(), weather, "Weather should be consistent");
 
     h.execute("go to crossroads");
-    h.execute("go to church");
-    assert_eq!(*h.weather(), weather, "Weather should be consistent");
+    h.execute("go to st. brigid's");
+    assert_eq!(
+        h.weather().to_string(),
+        weather,
+        "Weather should be consistent"
+    );
 }
 
 #[test]

@@ -53,7 +53,7 @@ fn test_multi_location_circuit() {
     h.execute("go to crossroads");
     assert_eq!(h.player_location(), "The Crossroads");
 
-    h.execute("go to church");
+    h.execute("go to st. brigid's");
     assert_eq!(h.player_location(), "St. Brigid's Church");
 
     h.execute("go to crossroads");

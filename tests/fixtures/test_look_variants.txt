@@ -19,7 +19,7 @@ look around
 
 # Move to Church
 go to crossroads
-go to church
+go to st. brigid's
 look
 l
 look around

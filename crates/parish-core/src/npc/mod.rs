@@ -5,10 +5,13 @@
 //! scales with distance from the player (4 LOD tiers).
 
 pub mod data;
+pub mod gossip;
 pub mod manager;
 pub mod memory;
 pub mod overhear;
 pub mod ticks;
+pub mod tier3;
+pub mod tier4;
 pub mod types;
 
 use std::collections::HashMap;

@@ -16,7 +16,7 @@ go to pub
 
 # St. Brigid's Church
 go to crossroads
-go to church
+go to st. brigid's
 /debug here
 /debug tiers
 

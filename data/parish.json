@@ -15,7 +15,8 @@
                 {"target": 6, "traversal_minutes": 4, "path_description": "a muddy path along the schoolmaster's wall"},
                 {"target": 9, "traversal_minutes": 8, "path_description": "a narrow road between stone walls"},
                 {"target": 13, "traversal_minutes": 3, "path_description": "a few steps across the road"},
-                {"target": 15, "traversal_minutes": 6, "path_description": "the Kilteevan road heading south past low fields"}
+                {"target": 15, "traversal_minutes": 6, "path_description": "the Kilteevan road heading south past low fields"},
+                {"target": 101, "traversal_minutes": 30, "path_description": "the long road north to Roscommon town"}
             ],
             "associated_npcs": [],
             "mythological_significance": "Crossroads hold power in Irish folklore — a place between places, where the veil is thin."

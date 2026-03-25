@@ -85,6 +85,10 @@ pub struct NpcManager {
     last_tier2_game_time: Option<DateTime<Utc>>,
     /// Set of NPC ids that have introduced themselves to the player.
     introduced_npcs: HashSet<NpcId>,
+    /// Game time of the last Tier 3 tick (None if never ticked).
+    last_tier3_game_time: Option<DateTime<Utc>>,
+    /// Game time of the last Tier 4 tick (None if never ticked).
+    last_tier4_game_time: Option<DateTime<Utc>>,
 }
 
 impl NpcManager {
@@ -95,6 +99,8 @@ impl NpcManager {
             tier_assignments: HashMap::new(),
             last_tier2_game_time: None,
             introduced_npcs: HashSet::new(),
+            last_tier3_game_time: None,
+            last_tier4_game_time: None,
         }
     }
 
@@ -196,7 +202,8 @@ impl NpcManager {
             let tier = match distance {
                 Some(0) => CogTier::Tier1,
                 Some(1..=2) => CogTier::Tier2,
-                _ => CogTier::Tier3,
+                Some(3..=4) => CogTier::Tier3,
+                _ => CogTier::Tier4,
             };
 
             self.tier_assignments.insert(npc.id, tier);
@@ -206,6 +213,8 @@ impl NpcManager {
             player_location = player_location.0,
             tier1 = self.tier1_npcs().len(),
             tier2 = self.tier2_npcs().len(),
+            tier3 = self.tier3_npcs().len(),
+            tier4 = self.tier4_npcs().len(),
             "Tier assignment complete"
         );
     }
@@ -334,14 +343,73 @@ impl NpcManager {
         }
     }
 
+    /// Returns the game time of the last Tier 2 tick, if any.
+    pub fn last_tier2_game_time(&self) -> Option<DateTime<Utc>> {
+        self.last_tier2_game_time
+    }
+
     /// Records that a Tier 2 tick has been performed at the given game time.
     pub fn record_tier2_tick(&mut self, time: DateTime<Utc>) {
         self.last_tier2_game_time = Some(time);
     }
 
-    /// Returns the game time of the last Tier 2 tick, if any.
-    pub fn last_tier2_game_time(&self) -> Option<DateTime<Utc>> {
-        self.last_tier2_game_time
+    /// Returns the ids of all NPCs assigned to Tier 3.
+    pub fn tier3_npcs(&self) -> Vec<NpcId> {
+        self.tier_assignments
+            .iter()
+            .filter(|(_, tier)| **tier == CogTier::Tier3)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Returns the ids of all NPCs assigned to Tier 4.
+    pub fn tier4_npcs(&self) -> Vec<NpcId> {
+        self.tier_assignments
+            .iter()
+            .filter(|(_, tier)| **tier == CogTier::Tier4)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Returns a mutable iterator over all NPCs.
+    pub fn npcs_mut(&mut self) -> impl Iterator<Item = &mut Npc> {
+        self.npcs.values_mut()
+    }
+
+    /// Returns whether enough game time has elapsed for a Tier 3 tick.
+    ///
+    /// Tier 3 ticks run every 1440 game-minutes (1 game day).
+    pub fn needs_tier3_tick(&self, current_game_time: DateTime<Utc>) -> bool {
+        match self.last_tier3_game_time {
+            None => true,
+            Some(last) => {
+                let elapsed = current_game_time.signed_duration_since(last);
+                elapsed.num_minutes() >= crate::npc::tier3::TIER3_TICK_GAME_MINUTES
+            }
+        }
+    }
+
+    /// Records that a Tier 3 tick has been performed at the given game time.
+    pub fn record_tier3_tick(&mut self, time: DateTime<Utc>) {
+        self.last_tier3_game_time = Some(time);
+    }
+
+    /// Returns whether enough game time has elapsed for a Tier 4 tick.
+    ///
+    /// Tier 4 ticks run every 129600 game-minutes (~1 game season = 90 days).
+    pub fn needs_tier4_tick(&self, current_game_time: DateTime<Utc>) -> bool {
+        match self.last_tier4_game_time {
+            None => true,
+            Some(last) => {
+                let elapsed = current_game_time.signed_duration_since(last);
+                elapsed.num_minutes() >= crate::npc::tier4::TIER4_TICK_GAME_MINUTES
+            }
+        }
+    }
+
+    /// Records that a Tier 4 tick has been performed at the given game time.
+    pub fn record_tier4_tick(&mut self, time: DateTime<Utc>) {
+        self.last_tier4_game_time = Some(time);
     }
 
     /// Groups Tier 2 NPCs by their current location.
@@ -446,9 +514,12 @@ mod tests {
 
     /// Loads the parish graph for tests that need real topology.
     fn load_test_graph() -> Option<WorldGraph> {
-        let path = Path::new("data/parish.json");
-        if path.exists() {
-            WorldGraph::load_from_file(path).ok()
+        let base = Path::new("data/parish.json");
+        let roscommon = Path::new("data/roscommon.json");
+        let athlone = Path::new("data/athlone.json");
+        let dublin = Path::new("data/dublin.json");
+        if base.exists() {
+            WorldGraph::load_multiple_files(&[base, roscommon, athlone, dublin]).ok()
         } else {
             None
         }
@@ -721,5 +792,82 @@ mod tests {
     fn test_default_manager() {
         let mgr = NpcManager::default();
         assert_eq!(mgr.npc_count(), 0);
+    }
+
+    #[test]
+    fn test_needs_tier3_tick_initially_true() {
+        let mgr = NpcManager::new();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap();
+        assert!(mgr.needs_tier3_tick(now));
+    }
+
+    #[test]
+    fn test_tier3_tick_interval() {
+        let mut mgr = NpcManager::new();
+        let t0 = Utc.with_ymd_and_hms(1820, 3, 20, 0, 0, 0).unwrap();
+        mgr.record_tier3_tick(t0);
+
+        // 1000 minutes later: not yet (need 1440)
+        let t1 = t0 + Duration::minutes(1000);
+        assert!(!mgr.needs_tier3_tick(t1));
+
+        // 1440 minutes later: yes
+        let t2 = t0 + Duration::minutes(1440);
+        assert!(mgr.needs_tier3_tick(t2));
+    }
+
+    #[test]
+    fn test_needs_tier4_tick_initially_true() {
+        let mgr = NpcManager::new();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap();
+        assert!(mgr.needs_tier4_tick(now));
+    }
+
+    #[test]
+    fn test_tier4_tick_interval() {
+        let mut mgr = NpcManager::new();
+        let t0 = Utc.with_ymd_and_hms(1820, 1, 1, 0, 0, 0).unwrap();
+        mgr.record_tier4_tick(t0);
+
+        // 1 day later: not yet (need 90 days)
+        let t1 = t0 + Duration::minutes(1440);
+        assert!(!mgr.needs_tier4_tick(t1));
+
+        // 90 days later: yes
+        let t2 = t0 + Duration::minutes(129_600);
+        assert!(mgr.needs_tier4_tick(t2));
+    }
+
+    #[test]
+    fn test_tier3_and_tier4_npc_lists() {
+        let graph = match load_test_graph() {
+            Some(g) => g,
+            None => return,
+        };
+
+        let mut mgr = NpcManager::new();
+        mgr.add_npc(make_test_npc(1, 1)); // At crossroads with player -> Tier1
+        mgr.add_npc(make_test_npc(2, 2)); // Pub, 1 edge away -> Tier2
+
+        mgr.assign_tiers(LocationId(1), &graph);
+
+        // Tier3 and Tier4 lists may be empty for this small graph,
+        // but the methods should not panic.
+        let _tier3 = mgr.tier3_npcs();
+        let _tier4 = mgr.tier4_npcs();
+    }
+
+    #[test]
+    fn test_npcs_mut() {
+        let mut mgr = NpcManager::new();
+        mgr.add_npc(make_test_npc(1, 1));
+        mgr.add_npc(make_test_npc(2, 2));
+
+        for npc in mgr.npcs_mut() {
+            npc.mood = "happy".to_string();
+        }
+
+        assert_eq!(mgr.get(NpcId(1)).unwrap().mood, "happy");
+        assert_eq!(mgr.get(NpcId(2)).unwrap().mood, "happy");
     }
 }

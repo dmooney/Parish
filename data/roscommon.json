@@ -1,0 +1,136 @@
+{
+    "locations": [
+        {
+            "id": 101,
+            "name": "Roscommon Main Street",
+            "description_template": "The wide main street of Roscommon town. Shopfronts with painted signs line both sides — drapers, chandlers, a spirit merchant. A horse and cart stands outside the market house. The {weather} sky hangs over the rooftops. It is {time}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 1, "traversal_minutes": 30, "path_description": "the long road south through open countryside to the crossroads"},
+                {"target": 102, "traversal_minutes": 2, "path_description": "a short walk down the street to the square"},
+                {"target": 104, "traversal_minutes": 3, "path_description": "the street leading past the infirmary to the coach stop"},
+                {"target": 108, "traversal_minutes": 4, "path_description": "the road past the abbey hotel toward the parish church"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 102,
+            "name": "Roscommon Market Square",
+            "description_template": "The market square buzzes on fair days with cattle dealers, egg sellers, and travelling tinkers. The old market house stands at its centre, a solid stone building with arched entries. It is {time}. The weather is {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 101, "traversal_minutes": 2, "path_description": "the short walk back up to Main Street"},
+                {"target": 106, "traversal_minutes": 5, "path_description": "the lane past the courthouse to the abbey hotel"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 103,
+            "name": "Roscommon County Infirmary",
+            "description_template": "A two-storey stone building where the county surgeon tends to the sick and injured. The smell of carbolic and linen drifts from the open windows. It is {time}. The sky is {weather}.",
+            "indoor": true,
+            "public": true,
+            "connections": [
+                {"target": 104, "traversal_minutes": 2, "path_description": "a short walk past the yard to the coach stop"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 104,
+            "name": "Roscommon Coach Stop",
+            "description_template": "The coach stop where the mail coach from Dublin arrives three times a week. Passengers stamp their feet and blow on their hands waiting for the next departure. A schedule board is nailed to the wall. It is {time}. Weather: {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 101, "traversal_minutes": 3, "path_description": "the street back to Main Street"},
+                {"target": 103, "traversal_minutes": 2, "path_description": "a short walk past the yard to the infirmary"},
+                {"target": 201, "traversal_minutes": 40, "path_description": "the long road south to Athlone, following the coach route"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 105,
+            "name": "Roscommon Castle",
+            "description_template": "The imposing ruins of Roscommon Castle, a Norman stronghold with massive drum towers at each corner. Cattle graze in the inner ward. Jackdaws wheel above the broken battlements. It is {time}. The {weather} sky frames the ruins.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 107, "traversal_minutes": 4, "path_description": "a track past the old workhouse walls"},
+                {"target": 108, "traversal_minutes": 3, "path_description": "the path back through the fields to the parish church"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": "Built in 1269 by Robert de Ufford, burned and rebuilt many times. The locals say a headless horseman rides from the castle on stormy nights."
+        },
+        {
+            "id": 106,
+            "name": "Abbey Hotel",
+            "description_template": "A respectable coaching inn near the square. The common room has a good fire and the food is plain but wholesome. Travellers and cattle dealers mingle at the bar. It is {time}. Outside: {weather}.",
+            "indoor": true,
+            "public": true,
+            "connections": [
+                {"target": 102, "traversal_minutes": 5, "path_description": "the lane back to the market square"},
+                {"target": 108, "traversal_minutes": 3, "path_description": "the road past the church"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 107,
+            "name": "Roscommon Workhouse",
+            "description_template": "The bleak stone workhouse stands behind high walls. Even in 1820, years before the Famine, it casts a long shadow over the town. The porter's lodge guards the entrance. It is {time}. The sky is {weather}.",
+            "indoor": true,
+            "public": false,
+            "connections": [
+                {"target": 105, "traversal_minutes": 4, "path_description": "the track past the castle ruins"},
+                {"target": 110, "traversal_minutes": 3, "path_description": "a lane leading to the subscription library"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 108,
+            "name": "Roscommon Parish Church",
+            "description_template": "The parish church of Roscommon, a handsome stone building with a square tower. The churchyard is well-kept, with yew trees along the path. It is {time}. The sky is {weather}.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 101, "traversal_minutes": 4, "path_description": "the road back to Main Street"},
+                {"target": 105, "traversal_minutes": 3, "path_description": "the path through the fields to the castle"},
+                {"target": 106, "traversal_minutes": 3, "path_description": "the road past the abbey hotel"},
+                {"target": 109, "traversal_minutes": 5, "path_description": "a lane past the rectory to the GAA grounds"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 109,
+            "name": "Roscommon GAA Grounds",
+            "description_template": "An open field where Roscommon men practice hurling and football. The pitch is marked out with whitewash. A few rough benches line one side. It is {time}. The {weather} sky stretches above.",
+            "indoor": false,
+            "public": true,
+            "connections": [
+                {"target": 108, "traversal_minutes": 5, "path_description": "the lane past the rectory back to the church"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        },
+        {
+            "id": 110,
+            "name": "Roscommon Subscription Library",
+            "description_template": "A modest room above a shopfront, lined with shelves of books. The subscription library serves the gentry and the few literate tradesmen of the town. It is {time}. Light filters through the window under a {weather} sky.",
+            "indoor": true,
+            "public": true,
+            "connections": [
+                {"target": 107, "traversal_minutes": 3, "path_description": "the lane back toward the workhouse"}
+            ],
+            "associated_npcs": [],
+            "mythological_significance": null
+        }
+    ]
+}
