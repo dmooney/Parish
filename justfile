@@ -81,6 +81,14 @@ ui-check-watch:
 ui-test:
     cd ui && npx vitest run
 
+# Run gptlint on frontend source files (requires OPENAI_API_KEY)
+ui-gptlint:
+    cd ui && npx gptlint
+
+# Run gptlint dry-run to estimate cost without making LLM calls
+ui-gptlint-dry-run:
+    cd ui && npx gptlint --dry-run
+
 # ─── Test ────────────────────────────────────────────────────────────────────
 
 # Run all Rust tests

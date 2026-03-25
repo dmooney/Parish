@@ -1,0 +1,9 @@
+# Build output
+dist/
+.svelte-kit/
+node_modules/
+
+# Test files (covered by vitest, not gptlint)
+**/*.test.ts
+**/__mocks__/**
+**/test-setup.ts

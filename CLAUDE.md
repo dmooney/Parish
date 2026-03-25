@@ -9,6 +9,8 @@
 - Test one: `cargo test <test_name>`
 - Format: `cargo fmt --check` (apply: `cargo fmt`)
 - Lint: `cargo clippy -- -D warnings`
+- Frontend AI lint: `cd ui && npx gptlint` (requires `OPENAI_API_KEY`)
+- Frontend AI lint dry-run: `cd ui && npx gptlint --dry-run`
 
 Run `cargo fmt`, `cargo clippy`, and `cargo test` before committing.
 
@@ -111,6 +113,7 @@ Parish/
 | tracing | Structured logging |
 | chrono | Time representation |
 | vitest + @testing-library/svelte | Frontend component tests |
+| gptlint | LLM-powered linting for JS/TS (AI code quality) |
 
 ## Gotchas
 
