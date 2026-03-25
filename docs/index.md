@@ -19,6 +19,7 @@ See [Roadmap](requirements/roadmap.md) for detailed per-item status tracking.
 | 5 | [Full LOD & Scale](plans/phase-5-full-lod-scale.md) | Planned | [Cognitive LOD](design/cognitive-lod.md), [Weather](design/weather-system.md) |
 | 6 | [Polish & Mythology](plans/phase-6-polish-mythology.md) | Planned | [Mythology Hooks](design/mythology-hooks.md) |
 | 7 | [Web & Mobile Apps](plans/phase-7-web-mobile.md) | Planned | [ADR-014](adr/014-web-mobile-architecture.md) |
+| 8 | [Tauri GUI Rewrite](plans/phase-8-tauri-gui.md) | **Complete** | [ADR-016](adr/016-tauri-svelte-gui.md) |
 
 ---
 
@@ -88,7 +89,8 @@ Detailed, implementation-ready plans for each development phase.
 | [Phase 4: Persistence](plans/phase-4-persistence.md) | SQLite, journal, snapshots, branching | **Next** |
 | [Phase 5: Full LOD & Scale](plans/phase-5-full-lod-scale.md) | Tiers 3-4, weather, gossip, memory | Planned |
 | [Phase 6: Polish & Mythology](plans/phase-6-polish-mythology.md) | Commands UI, mythology data hooks | Planned |
-| [Phase 7: Web & Mobile Apps](plans/phase-7-web-mobile.md) | Web (WASM) + Tauri mobile clients, game server | Planned |
+| [Phase 7: Web & Mobile Apps](plans/phase-7-web-mobile.md) | Svelte transport abstraction, axum game server, Tauri mobile | Planned |
+| [Phase 8: Tauri GUI Rewrite](plans/phase-8-tauri-gui.md) | Replace egui with Tauri 2 + Svelte 5 | **Complete** |
 
 ## Getting Started
 

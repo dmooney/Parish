@@ -100,19 +100,26 @@
 
 ## Phase 7 — Web & Mobile Apps
 
-> [Detailed plan](../plans/phase-7-web-mobile.md)
+> [Detailed plan](../plans/phase-7-web-mobile.md) | [ADR-014 (revised)](../adr/014-web-mobile-architecture.md)
 
-- [ ] Client-server protocol definition (`ClientMessage` / `ServerMessage`)
-- [ ] `GameSession` extraction (decouple game engine from UI)
-- [ ] axum game server with WebSocket support
-- [ ] Session management (create, resume, idle timeout)
-- [ ] Web client: Svelte SPA deployed to static hosting
-- [ ] Web client: WebSocket networking layer
-- [ ] Mobile client: Tauri v2 project (iOS + Android)
-- [ ] Mobile-specific adaptations (touch input, responsive layout)
-- [ ] Authentication (session tokens)
-- [ ] Server deployment (Docker, health checks)
-- [ ] Monitoring and rate limiting
+- [ ] `GameTransport` abstraction in `ui/src/lib/transport.ts` (interface + factory)
+- [ ] `TauriTransport` implementation (wrap existing `ipc.ts`)
+- [ ] `WebSocketTransport` implementation (native browser WebSocket)
+- [ ] Migrate all Svelte components/stores to use `GameTransport`
+- [ ] `parish-server` crate: axum HTTP/WebSocket game server
+- [ ] Server-side protocol mirroring Tauri IPC contract
+- [ ] `GameSession` wrapper around `parish-core` for server use
+- [ ] `SessionManager` (create, resume, idle timeout, memory cap)
+- [ ] Extract shared command dispatch from `src-tauri` into `parish-core`
+- [ ] `--server` CLI mode in `src/main.rs`
+- [ ] Vite web-only build (`npm run build:web`, no Tauri plugin)
+- [ ] Tauri v2 iOS initialization and build
+- [ ] Tauri v2 Android initialization and build
+- [ ] Mobile responsive layout (CSS media queries, touch targets)
+- [ ] Mobile lifecycle handling (pause/resume, WebSocket reconnect)
+- [ ] Session token authentication
+- [ ] Dockerfile and docker-compose for server deployment
+- [ ] Monitoring, rate limiting, and health checks
 
 ## Phase 8 — Tauri GUI Rewrite
 
