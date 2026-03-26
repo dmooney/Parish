@@ -186,3 +186,17 @@ Custom slash commands defined in `.claude/skills/`:
 | `/verify` | Full pre-push checklist (quality gate + harness) |
 | `/screenshot` | Regenerate GUI screenshots via xvfb |
 | `/fix-issue <N>` | End-to-end GitHub issue workflow |
+
+## Claude Code Hooks
+
+Automated hooks configured in `.claude/settings.json` that run at lifecycle events:
+
+| Hook | Event | Trigger | What It Does |
+|------|-------|---------|--------------|
+| `auto-fmt.sh` | PostToolUse | After any Edit/Write to a `.rs` file | Runs `cargo fmt --quiet` to auto-format |
+| `protect-files.sh` | PreToolUse | Before any Edit/Write | Blocks direct edits to `Cargo.lock` (exit 2) |
+| `quality-gates.sh` | Stop | When Claude finishes responding | Runs fmt + clippy + test if `.rs` files changed |
+| `compact-context.sh` | SessionStart | After context compaction | Re-injects key project context |
+| `notify.sh` | Notification | When Claude needs attention | Sends desktop notification via `notify-send` |
+
+Hook scripts live in `.claude/hooks/` and require `jq` for JSON parsing. All scripts are executable (`chmod +x`).
