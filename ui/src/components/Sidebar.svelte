@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { npcsHere, irishHints } from '../stores/game';
+	import MoodIcon from './MoodIcon.svelte';
 </script>
 
 <aside class="sidebar">
@@ -12,7 +13,7 @@
 						<span class="npc-name">{npc.name}</span>
 						{#if npc.introduced}
 							<span class="npc-detail">{npc.occupation}</span>
-							<span class="npc-mood" title={npc.mood}>{npc.mood_emoji}</span>
+							<span class="npc-mood"><MoodIcon mood={npc.mood} /></span>
 						{/if}
 					</li>
 				{/each}
