@@ -23,6 +23,7 @@ use parish_core::world::palette::{RawColor, RawPalette, compute_palette};
 use parish_core::world::{LocationId, WorldState};
 
 // ── IPC type definitions ─────────────────────────────────────────────────────
+// Re-exported from parish_core::ipc so all frontends share one definition.
 
 /// A serializable snapshot of the world state sent to the frontend.
 #[derive(serde::Serialize, Clone)]
@@ -520,16 +521,9 @@ pub fn run() {
                     // before the first capture (screenshot mode skips the normal
                     // 500ms theme tick, leaving the WebView on its default white).
                     {
-                        use chrono::Timelike;
                         let world = state_ss.world.lock().await;
-                        let now = world.clock.now();
-                        let raw = compute_palette(
-                            now.hour(),
-                            now.minute(),
-                            world.clock.season(),
-                            world.weather,
-                        );
-                        let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, ThemePalette::from(raw));
+                        let palette = parish_core::ipc::build_theme(&world);
+                        let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, palette);
                     }
                     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -547,14 +541,7 @@ pub fn run() {
                             let delta = ((*target_hour as i64) - current_hour).rem_euclid(24) * 60;
                             world.clock.advance(delta);
                             // Push updated theme to frontend
-                            let now = world.clock.now();
-                            let raw = compute_palette(
-                                now.hour(),
-                                now.minute(),
-                                world.clock.season(),
-                                world.weather,
-                            );
-                            let palette = ThemePalette::from(raw);
+                            let palette = parish_core::ipc::build_theme(&world);
                             let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, palette);
                         }
 
@@ -719,7 +706,7 @@ pub fn run() {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         {
                             let world = state_tick.world.lock().await;
-                            let snapshot = crate::commands::get_world_snapshot_inner(&world);
+                            let snapshot = parish_core::ipc::snapshot_from_world(&world);
                             let _ = handle_tick.emit(events::EVENT_WORLD_UPDATE, snapshot);
                         }
                         {
@@ -740,15 +727,7 @@ pub fn run() {
                     loop {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         let world = state_theme.world.lock().await;
-                        use chrono::Timelike;
-                        let now = world.clock.now();
-                        let raw = compute_palette(
-                            now.hour(),
-                            now.minute(),
-                            world.clock.season(),
-                            world.weather,
-                        );
-                        let palette = ThemePalette::from(raw);
+                        let palette = parish_core::ipc::build_theme(&world);
                         let _ = handle_theme.emit(events::EVENT_THEME_UPDATE, palette);
                     }
                 });
