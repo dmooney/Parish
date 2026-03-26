@@ -86,20 +86,99 @@ The NPC system prompt would note this was whispered privately. Other NPCs presen
 
 ---
 
-## 6. Quick Reactions / Emoji Responses (Slack, Discord, iMessage, Telegram)
+## 6. Bidirectional Emoji Reactions (Slack, Discord, iMessage, Telegram)
 
-**Inspiration**: Slack's emoji reactions on messages, Discord reactions, iMessage tapbacks.
+**Inspiration**: Slack's emoji reactions on messages, Discord reactions, iMessage tapbacks — but **both directions**.
 
-Let the player react to NPC dialogue with a quick gesture instead of typing a full response:
+### Player reacts to NPC messages
 
-- Click a small reaction bar below the NPC's message: nod, laugh, frown, shrug, applaud
-- Or type shortcodes: `:nod:`, `:laugh:`, `:suspicious:`
-- The NPC receives the reaction as context: "The player nodded in response"
-- Faster than typing "I nod" — reduces friction for roleplay
+Hover over (or tap) any NPC message in the chat log to reveal a reaction picker. Click to attach a reaction emoji beneath the message:
 
-Keep reactions period-appropriate: no modern emoji, use gestures and expressions from 1820s Ireland.
+```
+Padraig Darcy:
+  "Ah, the land agent was here again. Raised the rent on
+   Murphy's place by a full shilling."
+   😠 👀 😢
+```
 
-**Effort**: Medium — frontend reaction UI + backend prompt injection.
+- The reaction is injected into the NPC's conversation context on the next exchange: "The player reacted with anger to your comment about the rent increase"
+- NPCs adjust their behavior accordingly — a laugh might encourage gossip, anger might make them cautious, a suspicious look might make them clam up
+- Multiple reactions accumulate: the NPC sees the pattern of your nonverbal responses over time
+
+### NPCs react to player messages
+
+When the player says something, present NPCs can spontaneously attach reactions to the player's message — **without generating a full dialogue response**:
+
+```
+You:
+  "I heard Father Callahan was seen at the fairy fort."
+   😳 (Padraig)   🤫 (Siobhan)
+```
+
+- Generated cheaply: the LLM returns a reaction emoji as structured output alongside (or instead of) a full response
+- Multiple NPCs can react simultaneously — even NPCs who aren't the conversation target
+- Creates a sense of a living room: say something provocative and watch the reactions ripple
+- Could use a tiny/fast model or even rule-based keyword matching for common reactions
+
+### NPC-to-NPC reactions
+
+When an NPC speaks, other NPCs present can react too:
+
+```
+Padraig Darcy:
+  "The harvest will be poor this year, mark my words."
+   😟 (Siobhan)   🙄 (Niamh)
+```
+
+- Generated during Tier 2 background ticks — no extra latency for the player
+- Reveals NPC relationships and opinions nonverbally
+- Siobhan the farmer worries about the harvest; Niamh rolls her eyes at her father's doom-saying
+
+### Reaction Palette
+
+Period-appropriate gestures mapped to emoji. The UI shows emoji but the NPC context receives the natural language description:
+
+| Emoji | NPC sees | When to use |
+|-------|----------|-------------|
+| 😊 | "smiled warmly" | Approval, friendliness |
+| 😠 | "looked angry" | Disagreement, offense |
+| 😢 | "looked sorrowful" | Sympathy, sadness |
+| 😳 | "looked startled" | Surprise, shock |
+| 🤔 | "looked thoughtful" | Pondering, interest |
+| 😏 | "smirked knowingly" | Skepticism, irony |
+| 👀 | "raised an eyebrow" | Curiosity, suspicion |
+| 🤫 | "made a hushing gesture" | Secrecy, warning |
+| 😂 | "laughed heartily" | Amusement |
+| 🙄 | "rolled their eyes" | Dismissal, impatience |
+| 🍺 | "raised a glass" | Toast, camaraderie |
+| ✝️ | "crossed themselves" | Piety, superstition, shock |
+
+### Implementation sketch
+
+```
+ChatPanel.svelte:
+  - Each message gets a hover → reaction picker (row of emoji buttons)
+  - Reactions stored in textLog entries: reactions: [{emoji, source}]
+  - Rendered below message text, small and inline
+
+Backend (commands.rs):
+  - New IPC command: react_to_message(message_id, emoji)
+  - Stores reaction in NPC conversation context for next exchange
+  - New IPC event: npc_reaction — emitted when NPC reacts
+
+NPC prompt injection:
+  - "Recent nonverbal reactions from the player: smiled at your joke,
+     looked angry when you mentioned the rent"
+  - "React to the player's message with a single emoji from this set: [...]"
+
+Tier 2 ticks:
+  - When NPCs are in the same room, generate reactions to each other's
+    statements as part of the group simulation prompt
+```
+
+**Effort**: Medium-High — reaction UI + backend context tracking + NPC reaction generation.
+
+**Why this is worth the effort**: Reactions are the fastest form of player expression. They let you participate in a conversation without composing a sentence. And NPC reactions make a room full of characters feel alive — you can *see* Siobhan's worry and Niamh's eye-roll without either of them saying a word.
 
 ---
 
@@ -252,18 +331,110 @@ Different from @mention — this is general-purpose completion for any recognize
 
 ---
 
+## 16. Push-to-Talk Voice Input (Claude Code, Discord, Xbox Game Chat)
+
+**Inspiration**: Claude Code's spacebar-hold voice mode, Discord push-to-talk, Xbox party chat, Siri hold-to-speak.
+
+Hold spacebar (when the input field is empty) to speak instead of type. Release to transcribe and insert the text into the input field — then the player can review/edit before hitting Enter.
+
+### UX flow
+
+1. Player holds spacebar (input field must be empty or focused and empty to avoid capturing typing)
+2. Microphone activates — a visual waveform/pulse indicator appears in/above the input field
+3. Player speaks: "Go to the pub and talk to Padraig about the harvest"
+4. Player releases spacebar
+5. Transcribed text appears in the input field: `go to the pub and talk to Padraig about the harvest`
+6. Player can edit, add @mentions, or just hit Enter to submit
+
+### Implementation options
+
+| Approach | Platforms | Latency | Offline | Dependencies |
+|----------|-----------|---------|---------|-------------|
+| **Web Speech API** | Windows + macOS | Low | No* | None — built into WebView |
+| **Whisper.cpp sidecar** | All (incl. Linux) | Medium | Yes | ~75MB model, `cpal` for mic capture |
+| **Whisper via Ollama** | All | Medium | Yes | Ollama (already required) |
+
+\* Web Speech API on some platforms sends audio to cloud services for recognition.
+
+**Recommended phased approach:**
+
+1. **Phase 1**: Web Speech API — works immediately on Windows (WebView2/Chromium) and macOS (WKWebView). Zero new dependencies. Feature-detect and hide the button on unsupported platforms (Linux/WebKitGTK).
+2. **Phase 2**: Whisper.cpp as a Tauri sidecar process for full offline, cross-platform support. Ship the `tiny` or `base` model (~75MB). Captures audio via Rust `cpal` crate, pipes to whisper, returns text via IPC.
+
+### Platform support matrix
+
+| Platform | WebView | Web Speech API | Whisper sidecar |
+|----------|---------|----------------|-----------------|
+| Windows | WebView2 (Chromium) | Works | Works |
+| macOS | WKWebView | Works (uses Siri STT) | Works |
+| Linux | WebKitGTK | Unreliable | Works (recommended path) |
+
+### Frontend implementation sketch
+
+```svelte
+<!-- In InputField.svelte -->
+<script>
+  let isRecording = $state(false);
+
+  function handleKeydown(e: KeyboardEvent) {
+    // Hold space to record (only when input is empty)
+    if (e.key === ' ' && text === '' && !isRecording) {
+      e.preventDefault();
+      startRecording();
+    }
+  }
+
+  function handleKeyup(e: KeyboardEvent) {
+    if (e.key === ' ' && isRecording) {
+      stopRecording(); // triggers transcription → fills text
+    }
+  }
+
+  function startRecording() {
+    isRecording = true;
+    const recognition = new webkitSpeechRecognition();
+    recognition.lang = 'en-IE'; // Irish English!
+    recognition.interimResults = true;
+    recognition.onresult = (e) => {
+      text = e.results[0][0].transcript;
+    };
+    recognition.start();
+  }
+</script>
+
+{#if isRecording}
+  <div class="recording-indicator">Listening...</div>
+{/if}
+```
+
+### Considerations
+
+- **Language**: Set recognition locale to `en-IE` (Irish English) for better handling of place names and Irish-English speech patterns
+- **Privacy**: Web Speech API may send audio to cloud services; document this. Whisper.cpp is fully local.
+- **Irish words**: Neither Web Speech API nor Whisper will handle Irish Gaelic words well. Player can always edit the transcription before submitting.
+- **Keybinding conflict**: Only activate spacebar-hold when input is empty. When the player has typed text, spacebar inserts a normal space.
+- **Tauri permissions**: Need to add microphone capability to `src-tauri/capabilities/default.json`
+- **Visual feedback**: Show a waveform or pulsing dot during recording so the player knows the mic is active
+
+**Effort**: Low (Web Speech API path) to Medium (Whisper sidecar path).
+
+**Why this matters**: Voice input is faster than typing for natural language. Parish is a conversation game — speaking to NPCs instead of typing to them is a natural fit. And with push-to-talk (not always-on), it stays intentional.
+
+---
+
 ## Priority Ranking
 
 | Idea | Effort | Impact | Recommendation |
 |------|--------|--------|----------------|
 | `/slash` command autocomplete | Low | High | **Build next** — reuses @mention infra |
 | Input history (Up/Down) | Low | High | **Build next** — table stakes UX |
+| Push-to-talk voice input | Low | High | **Build next** — Web Speech API phase first |
 | `*action*` emotes | Low | Medium | **Build soon** — enhances RP |
 | Multi-line input | Low | Medium | Build soon |
 | Typing indicator | Low-Med | Medium | Build soon — makes NPCs feel alive |
 | Location quick-travel chips | Low | Medium | Build soon |
+| Bidirectional emoji reactions | Med-High | High | **Build soon** — makes rooms feel alive |
 | Whisper syntax | Medium | Medium | Build later — needs context scoping |
-| Quick reactions | Medium | Medium | Build later |
 | Reply-to context | Medium | Medium | Build later |
 | Inline rich preview | Medium | Low-Med | Nice to have |
 | Tone indicator | Medium | Low-Med | Nice to have |
