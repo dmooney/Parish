@@ -33,7 +33,16 @@
 	{/each}
 	{#if $streamingActive && ($textLog.length === 0 || !$textLog[$textLog.length - 1].streaming)}
 		<div class="spinner-row">
-			<span class="spinner"></span>
+			<span class="spinner" aria-label="Loading">
+				<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+					<path class="strand strand-b"
+						d="M 18,2 C 18,8 6,8 6,12 C 6,16 18,16 18,22"
+						fill="none" stroke-width="2.5" stroke-linecap="round" />
+					<path class="strand strand-a"
+						d="M 6,2 C 6,8 18,8 18,12 C 18,16 6,16 6,22"
+						fill="none" stroke-width="2.5" stroke-linecap="round" />
+				</svg>
+			</span>
 		</div>
 	{/if}
 </div>
@@ -90,15 +99,47 @@
 
 	.spinner {
 		display: inline-block;
-		width: 1rem;
-		height: 1rem;
-		border: 2px solid var(--color-border);
-		border-top-color: var(--color-accent);
-		border-radius: 50%;
-		animation: spin 0.8s linear infinite;
+		width: 1.5rem;
+		height: 1.5rem;
 	}
 
-	@keyframes spin {
-		to { transform: rotate(360deg); }
+	.spinner svg {
+		width: 100%;
+		height: 100%;
+	}
+
+	.strand {
+		stroke-dasharray: 40;
+		stroke-dashoffset: 40;
+		animation: knit 2.4s ease-in-out infinite;
+	}
+
+	.strand-a {
+		stroke: var(--color-accent);
+	}
+
+	.strand-b {
+		stroke: var(--color-muted);
+		animation-delay: 0.15s;
+	}
+
+	@keyframes knit {
+		0%   { stroke-dashoffset: 40; opacity: 0.3; }
+		10%  { opacity: 1; }
+		60%  { stroke-dashoffset: 0; opacity: 1; }
+		80%  { stroke-dashoffset: 0; opacity: 0; }
+		100% { stroke-dashoffset: 40; opacity: 0; }
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.strand {
+			animation: pulse 2s ease-in-out infinite;
+			stroke-dashoffset: 0;
+		}
+
+		@keyframes pulse {
+			0%, 100% { opacity: 0.5; }
+			50% { opacity: 1; }
+		}
 	}
 </style>
