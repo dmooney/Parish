@@ -189,3 +189,4 @@ Custom slash commands defined in `.claude/skills/`:
 | `/verify` | Full pre-push checklist (quality gate + harness) |
 | `/screenshot` | Regenerate GUI screenshots via xvfb |
 | `/fix-issue <N>` | End-to-end GitHub issue workflow |
+| `/rebase-prs` | Auto-rebase open PRs onto latest main (use with `/loop` for monitoring) |
