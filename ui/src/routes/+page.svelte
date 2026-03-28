@@ -151,7 +151,7 @@
 
 <svelte:window on:keydown={handleKeydown} />
 
-<div class="app-shell">
+<div class="app-shell" class:debug-open={$debugVisible}>
 	<StatusBar />
 	<div class="main-area">
 		<div class="chat-col">
@@ -173,6 +173,11 @@
 		flex-direction: column;
 		height: 100vh;
 		overflow: hidden;
+		transition: height 0.15s ease;
+	}
+
+	.app-shell.debug-open {
+		height: 60vh;
 	}
 
 	.main-area {

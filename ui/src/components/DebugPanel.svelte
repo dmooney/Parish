@@ -64,14 +64,14 @@
 				</div>
 				<div class="section">
 					<h4>Location</h4>
-					<div class="field accent">@ {snap.world.player_location_name}</div>
+					<div class="field accent"># {snap.world.player_location_name}</div>
 					<div class="field muted">{snap.world.location_count} locations total</div>
 				</div>
 				<div class="section">
 					<h4>Tiers</h4>
 					<div class="field">T1: {snap.tier_summary.tier1_count} | T2: {snap.tier_summary.tier2_count} | T3: {snap.tier_summary.tier3_count} | T4: {snap.tier_summary.tier4_count}</div>
 					{#if snap.tier_summary.tier1_names.length > 0}
-						<div class="field muted">Here: {snap.tier_summary.tier1_names.join(', ')}</div>
+						<div class="field muted">T1 NPCs: {snap.tier_summary.tier1_names.join(', ')}</div>
 					{/if}
 				</div>
 
@@ -144,7 +144,7 @@
 								<span class="npc-name">{npc.name}</span>
 								<span class="npc-tier">[{npc.tier}]</span>
 								<span class="npc-mood">{npc.mood}</span>
-								<span class="npc-loc muted">@ {npc.location_name}</span>
+								<span class="npc-loc muted"># {npc.location_name}</span>
 								{#if npc.state !== 'Present'}
 									<span class="npc-state muted">{npc.state}</span>
 								{/if}
@@ -215,17 +215,12 @@
 
 <style>
 	.debug-panel {
-		position: fixed;
-		bottom: 0;
-		left: 0;
-		right: 0;
 		height: 40vh;
 		background: var(--color-panel-bg);
 		border-top: 2px solid var(--color-accent);
 		display: flex;
 		flex-direction: column;
 		font-size: 0.75rem;
-		z-index: 100;
 		overflow: hidden;
 	}
 
