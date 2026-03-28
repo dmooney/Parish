@@ -105,7 +105,7 @@ struct Cli {
     #[arg(long, env = "PARISH_INTENT_API_KEY")]
     intent_api_key: Option<String>,
 
-    /// Path to a game mod directory (default: auto-detect mods/parish-1820-ireland/)
+    /// Path to a game mod directory (default: auto-detect mods/kilteevan-1820/)
     #[arg(long, value_name = "DIR", env = "PARISH_MOD")]
     game_mod: Option<String>,
 }

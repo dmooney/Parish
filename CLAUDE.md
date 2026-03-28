@@ -58,7 +58,7 @@ Parish/
 │       ├── inference/   #   LLM client (OpenAI-compatible), queue, Ollama bootstrap
 │       └── persistence/ #   SQLite save/load, WAL journal
 ├── mods/                # Game data packages (Factorio-style engine/mod separation)
-│   └── parish-1820-ireland/  # Default mod: 1820 rural Ireland
+│   └── kilteevan-1820/  # Default mod: 1820 rural Ireland
 │       ├── mod.toml     #   Manifest (start_date, start_location, period_year)
 │       ├── world.json   #   World graph (locations, connections)
 │       ├── npcs.json    #   NPC definitions

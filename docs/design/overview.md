@@ -56,7 +56,7 @@ The engine is generic and knows nothing about any specific setting. All game-spe
 A mod is a directory with a `mod.toml` manifest and data files:
 
 ```
-mods/parish-1820-ireland/
+mods/kilteevan-1820/
 ├── mod.toml              # Manifest: name, version, start_date, start_location, period_year
 ├── world.json            # Location graph (from data/parish.json)
 ├── npcs.json             # NPC definitions (from data/npcs.json)
@@ -71,7 +71,7 @@ mods/parish-1820-ireland/
 └── ui.toml               # UI customisation: sidebar labels, accent colour
 ```
 
-The engine loads a `GameMod` at startup (via `--game-mod <dir>` or auto-detected from `mods/parish-1820-ireland/`) and passes it through the application:
+The engine loads a `GameMod` at startup (via `--game-mod <dir>` or auto-detected from `mods/kilteevan-1820/`) and passes it through the application:
 
 - `WorldState::from_mod(&game_mod)` — loads world graph and start date from mod
 - `LoadingAnimation::from_config(&game_mod.loading)` — configurable spinner

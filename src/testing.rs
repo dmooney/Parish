@@ -118,7 +118,7 @@ pub struct GameTestHarness {
 impl GameTestHarness {
     /// Creates a new harness with the full parish world loaded.
     ///
-    /// Prefers mod data from `mods/parish-1820-ireland/` if available, otherwise
+    /// Prefers mod data from `mods/kilteevan-1820/` if available, otherwise
     /// falls back to `data/parish.json`. Adds NPCs from the mod or data directory.
     pub fn new() -> Self {
         let mut app = App::new();

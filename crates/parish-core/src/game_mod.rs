@@ -34,7 +34,7 @@ pub struct ModManifest {
 pub struct ModMeta {
     /// Human-readable mod name.
     pub name: String,
-    /// Machine-friendly mod identifier (e.g. `parish-1820-ireland`).
+    /// Machine-friendly mod identifier (e.g. `kilteevan-1820`).
     pub id: String,
     /// Semantic version string.
     pub version: String,
@@ -377,15 +377,15 @@ pub fn interpolate_template(template: &str, vars: &[(&str, &str)]) -> String {
 }
 
 /// Walk up from the current working directory looking for
-/// `mods/parish-1820-ireland/mod.toml`.
+/// `mods/kilteevan-1820/mod.toml`.
 ///
 /// Returns the mod directory path (not the `mod.toml` path) if found.
 pub fn find_default_mod() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
-        let candidate = dir.join("mods/parish-1820-ireland/mod.toml");
+        let candidate = dir.join("mods/kilteevan-1820/mod.toml");
         if candidate.is_file() {
-            return Some(dir.join("mods/parish-1820-ireland"));
+            return Some(dir.join("mods/kilteevan-1820"));
         }
         if !dir.pop() {
             return None;
