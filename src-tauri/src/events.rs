@@ -186,13 +186,104 @@ pub async fn stream_npc_response(
         let _ = app.emit(EVENT_STREAM_TOKEN, StreamTokenPayload { token: batch });
     }
 
-    // Flush any remaining displayed text if no separator was ever found
+    // Flush any remaining displayed text if no separator was ever found.
+    // Strip trailing JSON metadata that the model may have appended without
+    // a proper `---` separator (common with weaker/free models).
     if !separator_found && displayed_len < accumulated.len() {
-        let remaining = accumulated[displayed_len..].to_string();
-        if !remaining.is_empty() {
-            let _ = app.emit(EVENT_STREAM_TOKEN, StreamTokenPayload { token: remaining });
+        let remaining = &accumulated[displayed_len..];
+        let clean = strip_trailing_json(remaining);
+        if !clean.is_empty() {
+            let _ = app.emit(
+                EVENT_STREAM_TOKEN,
+                StreamTokenPayload {
+                    token: clean.to_string(),
+                },
+            );
         }
     }
 
     accumulated
+}
+
+/// Strips trailing JSON metadata from a response that lacks a `---` separator.
+///
+/// Some weaker models emit the metadata JSON block directly after dialogue
+/// without the expected `---` delimiter. This function finds the last
+/// top-level `{...}` block at the end of the text and removes it, returning
+/// only the dialogue portion. If no trailing JSON is found, returns the
+/// original text trimmed.
+fn strip_trailing_json(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    if !trimmed.ends_with('}') {
+        return trimmed;
+    }
+    // Walk backwards to find the matching opening brace
+    let mut depth = 0i32;
+    let mut json_start = None;
+    for (i, ch) in trimmed.char_indices().rev() {
+        match ch {
+            '}' => depth += 1,
+            '{' => {
+                depth -= 1;
+                if depth == 0 {
+                    json_start = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = json_start {
+        // Only strip if what we found actually parses as JSON
+        let candidate = &trimmed[start..];
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return trimmed[..start].trim_end();
+        }
+    }
+    trimmed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_trailing_json_with_json() {
+        let text =
+            "(Looks up) Ah, good morning to ye! {\"action\": \"speaks\", \"mood\": \"friendly\"}";
+        assert_eq!(
+            strip_trailing_json(text),
+            "(Looks up) Ah, good morning to ye!"
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_json_no_json() {
+        let text = "Well hello there, stranger!";
+        assert_eq!(strip_trailing_json(text), text);
+    }
+
+    #[test]
+    fn test_strip_trailing_json_braces_in_dialogue() {
+        // Curly braces in dialogue that aren't valid JSON should not be stripped
+        let text = "The rent is {too high} says I.";
+        assert_eq!(strip_trailing_json(text), text);
+    }
+
+    #[test]
+    fn test_strip_trailing_json_with_newline_separator() {
+        let text = "Good day to ye!\n{\"action\": \"nods\", \"mood\": \"content\"}";
+        assert_eq!(strip_trailing_json(text), "Good day to ye!");
+    }
+
+    #[test]
+    fn test_strip_trailing_json_empty() {
+        assert_eq!(strip_trailing_json(""), "");
+    }
+
+    #[test]
+    fn test_strip_trailing_json_only_json() {
+        let text = "{\"action\": \"speaks\"}";
+        assert_eq!(strip_trailing_json(text), "");
+    }
 }

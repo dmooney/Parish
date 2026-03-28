@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import StatusBar from '../components/StatusBar.svelte';
 	import ChatPanel from '../components/ChatPanel.svelte';
 	import MapPanel from '../components/MapPanel.svelte';
@@ -88,20 +89,24 @@
 			}),
 
 			onLoading((payload) => {
+				const wasActive = get(streamingActive);
 				streamingActive.set(payload.active);
 				if (payload.active) {
 					// Update animated loading phrase and spinner
 					if (payload.spinner) loadingSpinner.set(payload.spinner);
 					if (payload.phrase) loadingPhrase.set(payload.phrase);
 					if (payload.color) loadingColor.set(payload.color);
-					// Prepare for new streaming entry
-					textLog.update((log) => {
-						// Remove any stale streaming entry
-						if (log.length > 0 && log[log.length - 1].streaming) {
-							return log.slice(0, -1);
-						}
-						return log;
-					});
+					// Only clean up stale streaming entries on the *first*
+					// loading event (transition from inactive → active), not
+					// on every animation tick, to avoid erasing in-progress text.
+					if (!wasActive) {
+						textLog.update((log) => {
+							if (log.length > 0 && log[log.length - 1].streaming) {
+								return log.slice(0, -1);
+							}
+							return log;
+						});
+					}
 				}
 			}),
 
