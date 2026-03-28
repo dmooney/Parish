@@ -327,6 +327,7 @@ mod tests {
         Npc {
             id: NpcId(id),
             name: name.to_string(),
+            brief_description: format!("a test NPC named {}", name),
             age: 40,
             occupation: "Test".to_string(),
             personality: "Friendly".to_string(),
