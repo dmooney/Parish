@@ -230,6 +230,7 @@ export interface SaveBranchDisplay {
 export interface SaveFileInfo {
 	path: string;
 	filename: string;
+	file_size: string;
 	branches: SaveBranchDisplay[];
 }
 

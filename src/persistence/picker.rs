@@ -167,11 +167,22 @@ fn read_save_branches(
     Ok(displays)
 }
 
-/// Formats a chrono DateTime into a short game-date string.
+/// Formats a chrono DateTime into a short game-date string with time of day.
 ///
-/// Example: "20 Mar 1820"
+/// Example: "20 Mar 1820, Morning"
 fn format_game_date(dt: &chrono::DateTime<chrono::Utc>) -> String {
-    dt.format("%-d %b %Y").to_string()
+    use chrono::Timelike;
+    let hour = dt.hour();
+    let tod = match hour {
+        5..=8 => "Morning",
+        9..=11 => "Late Morning",
+        12..=13 => "Midday",
+        14..=16 => "Afternoon",
+        17..=19 => "Dusk",
+        20..=21 => "Evening",
+        _ => "Night",
+    };
+    format!("{}, {}", dt.format("%-d %b %Y"), tod)
 }
 
 /// Returns the next auto-numbered save filename.
@@ -511,7 +522,7 @@ mod tests {
         use chrono::{TimeZone, Utc};
         let dt = Utc.with_ymd_and_hms(1820, 3, 20, 8, 0, 0).unwrap();
         let formatted = format_game_date(&dt);
-        assert_eq!(formatted, "20 Mar 1820");
+        assert_eq!(formatted, "20 Mar 1820, Morning");
     }
 
     #[test]

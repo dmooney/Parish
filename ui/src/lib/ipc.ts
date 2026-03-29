@@ -41,9 +41,12 @@ export const saveGame = () => invoke<string>('save_game');
 export const loadBranch = (filePath: string, branchId: number) =>
 	invoke<void>('load_branch', { filePath, branchId });
 
-export const createBranch = (name: string) => invoke<string>('create_branch', { name });
+export const createBranch = (name: string, parentBranchId: number) =>
+	invoke<string>('create_branch', { name, parentBranchId });
 
 export const newSaveFile = () => invoke<void>('new_save_file');
+
+export const newGame = () => invoke<void>('new_game');
 
 export const getSaveState = () => invoke<SaveState>('get_save_state');
 

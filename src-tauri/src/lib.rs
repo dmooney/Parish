@@ -238,7 +238,7 @@ pub struct AppState {
 ///
 /// During `cargo tauri dev` the cwd is `src-tauri/`; in production bundles it
 /// may be the app resources directory. We walk up at most 3 levels.
-fn find_data_dir() -> PathBuf {
+pub(crate) fn find_data_dir() -> PathBuf {
     let mut p = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for _ in 0..4 {
         if p.join("data/parish.json").exists() {
@@ -497,6 +497,7 @@ pub fn run() {
             commands::load_branch,
             commands::create_branch,
             commands::new_save_file,
+            commands::new_game,
             commands::get_save_state,
         ])
         .setup(move |app| {
@@ -793,11 +794,11 @@ pub fn run() {
                     }
                 });
 
-                // Autosave tick: save snapshot every 45 seconds (if a save file is active)
+                // Autosave tick: save snapshot every 60 seconds (if a save file is active)
                 let state_autosave = Arc::clone(&state_setup);
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(45)).await;
+                        tokio::time::sleep(Duration::from_secs(60)).await;
 
                         // Only autosave if a save file and branch are active
                         let save_path = state_autosave.save_path.lock().await.clone();

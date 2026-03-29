@@ -2,19 +2,7 @@
 	import { worldState } from '../stores/game';
 	import { debugVisible } from '../stores/debug';
 	import { savePickerVisible } from '../stores/save';
-	import { saveGame } from '$lib/ipc';
 	import { onMount } from 'svelte';
-
-	let saveFlash = false;
-	async function quickSave() {
-		try {
-			await saveGame();
-			saveFlash = true;
-			setTimeout(() => { saveFlash = false; }, 600);
-		} catch (e) {
-			console.error('Quick save failed:', e);
-		}
-	}
 
 	let displayHour = $state(0);
 	let displayMinute = $state(0);
@@ -87,7 +75,6 @@
 			<span class="paused">⏸ Paused</span>
 		{/if}
 		<span class="spacer"></span>
-		<button class="save-toggle" class:save-flash={saveFlash} onclick={quickSave} title="Quick save (F6)">SAVE</button>
 		<button class="save-toggle" class:save-active={$savePickerVisible} onclick={() => savePickerVisible.update(v => !v)} title="Save/Load picker (F5)">LEDGER</button>
 		<button class="debug-toggle" class:debug-active={$debugVisible} onclick={() => debugVisible.update(v => !v)} title="Toggle debug panel (F12)">DBG</button>
 		<span class="clock">{#each displayHour.toString().padStart(2, '0').split('') as d}<span class="digit">{d}</span>{/each}<span class="colon">:</span>{#each displayMinute.toString().padStart(2, '0').split('') as d}<span class="digit">{d}</span>{/each}</span>
@@ -172,11 +159,6 @@
 	}
 
 	.save-toggle.save-active {
-		color: var(--color-accent);
-		border-color: var(--color-accent);
-	}
-
-	.save-toggle.save-flash {
 		color: var(--color-accent);
 		border-color: var(--color-accent);
 	}
