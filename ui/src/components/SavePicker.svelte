@@ -7,11 +7,151 @@
 	let loading = false;
 	let forkingBranchId: number | null = null;
 	let forkName = '';
-	/** When true, show the multi-file "ledgers" view instead of branches. */
 	let showLedgers = false;
 
-	/** The active save file (matched by filename from save state). */
 	$: activeFile = files.find(f => f.filename === saveState?.filename) ?? files[0] ?? null;
+
+	// ── DAG layout ──────────────────────────────────────────────────
+
+	const NODE_W = 160;
+	const NODE_H = 70;
+	const GAP_X = 24;
+	const GAP_Y = 44;
+
+	interface TreeNode {
+		branch: SaveBranchDisplay;
+		children: TreeNode[];
+		x: number;
+		y: number;
+		span: number; // number of leaf-slots this subtree occupies
+	}
+
+	interface LayoutResult {
+		nodes: TreeNode[];
+		width: number;
+		height: number;
+		edges: { x1: number; y1: number; x2: number; y2: number }[];
+	}
+
+	function layoutTree(branches: SaveBranchDisplay[]): LayoutResult {
+		if (branches.length === 0) return { nodes: [], width: 0, height: 0, edges: [] };
+
+		// Build tree structure
+		function buildNode(branch: SaveBranchDisplay): TreeNode {
+			const children = branches
+				.filter(b => b.parent_name === branch.name)
+				.map(b => buildNode(b));
+			return { branch, children, x: 0, y: 0, span: 0 };
+		}
+
+		const roots = branches
+			.filter(b => b.parent_name === null)
+			.map(b => buildNode(b));
+
+		// If somehow no roots, treat all as roots
+		const tree = roots.length > 0 ? roots : branches.map(b => buildNode(b));
+
+		// Compute spans (how many leaf slots each subtree needs)
+		function computeSpan(node: TreeNode): number {
+			if (node.children.length === 0) {
+				node.span = 1;
+			} else {
+				node.span = node.children.reduce((sum, c) => sum + computeSpan(c), 0);
+			}
+			return node.span;
+		}
+
+		let totalSpan = 0;
+		for (const root of tree) {
+			totalSpan += computeSpan(root);
+		}
+
+		// Compute depth (for y positioning)
+		let maxDepth = 0;
+		function computeDepth(node: TreeNode, depth: number) {
+			if (depth > maxDepth) maxDepth = depth;
+			for (const child of node.children) {
+				computeDepth(child, depth + 1);
+			}
+		}
+		for (const root of tree) {
+			computeDepth(root, 0);
+		}
+
+		// Assign x positions: each leaf gets a slot, parents center over children
+		let leafSlot = 0;
+		function assignX(node: TreeNode) {
+			if (node.children.length === 0) {
+				node.x = leafSlot * (NODE_W + GAP_X);
+				leafSlot++;
+			} else {
+				for (const child of node.children) {
+					assignX(child);
+				}
+				// Center parent over children
+				const firstChild = node.children[0];
+				const lastChild = node.children[node.children.length - 1];
+				node.x = (firstChild.x + lastChild.x) / 2;
+			}
+		}
+
+		for (const root of tree) {
+			assignX(root);
+		}
+
+		// Assign y positions: root at bottom (maxDepth), leaves at top (0)
+		// Inverted: depth 0 is at the bottom of the container
+		function assignY(node: TreeNode, depth: number) {
+			node.y = (maxDepth - depth) * (NODE_H + GAP_Y);
+			for (const child of node.children) {
+				assignY(child, depth + 1);
+			}
+		}
+		for (const root of tree) {
+			assignY(root, 0);
+		}
+
+		// Collect all nodes flat
+		const allNodes: TreeNode[] = [];
+		function collectNodes(node: TreeNode) {
+			allNodes.push(node);
+			for (const child of node.children) {
+				collectNodes(child);
+			}
+		}
+		for (const root of tree) {
+			collectNodes(root);
+		}
+
+		// Compute edges (parent bottom-center → child top-center)
+		const edges: { x1: number; y1: number; x2: number; y2: number }[] = [];
+		function collectEdges(node: TreeNode) {
+			for (const child of node.children) {
+				edges.push({
+					x1: node.x + NODE_W / 2,
+					y1: node.y,       // top of parent (parent is below)
+					x2: child.x + NODE_W / 2,
+					y2: child.y + NODE_H // bottom of child (child is above)
+				});
+				collectEdges(child);
+			}
+		}
+		for (const root of tree) {
+			collectEdges(root);
+		}
+
+		// Compute container size
+		let maxX = 0;
+		for (const n of allNodes) {
+			if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
+		}
+		const width = maxX;
+		const height = (maxDepth + 1) * (NODE_H + GAP_Y) - GAP_Y;
+
+		return { nodes: allNodes, width, height, edges };
+	}
+
+	// ── Handlers ────────────────────────────────────────────────────
 
 	async function refreshSaves() {
 		loading = true;
@@ -41,7 +181,7 @@
 		}
 	}
 
-	async function handleLoad(file: SaveFileInfo, branch: SaveBranchDisplay) {
+	async function handleLoadBranch(file: SaveFileInfo, branch: SaveBranchDisplay) {
 		loading = true;
 		try {
 			await loadBranch(file.path, branch.id);
@@ -49,17 +189,6 @@
 			savePickerVisible.set(false);
 		} catch (e) {
 			console.error('Load failed:', e);
-		}
-		loading = false;
-	}
-
-	async function handleSaveHere() {
-		loading = true;
-		try {
-			await saveGame();
-			await refreshSaves();
-		} catch (e) {
-			console.error('Save failed:', e);
 		}
 		loading = false;
 	}
@@ -91,7 +220,6 @@
 	}
 
 	async function handleSwitchLedger(file: SaveFileInfo) {
-		// Load the first branch of the selected file
 		const branch = file.branches[0];
 		if (!branch) return;
 		loading = true;
@@ -111,14 +239,12 @@
 		if (!name) return;
 		loading = true;
 		try {
-			const result = await createBranch(name, parentBranch.id);
-			console.log('Branch created:', result);
+			await createBranch(name, parentBranch.id);
 			forkingBranchId = null;
 			forkName = '';
 			await refreshSaves();
 		} catch (e: any) {
 			console.error('Branch creation failed:', e);
-			// Show error in the text log via a simple approach
 			forkName = String(e).substring(0, 60);
 		}
 		loading = false;
@@ -143,7 +269,9 @@
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
-			if (showLedgers) {
+			if (forkingBranchId !== null) {
+				cancelFork();
+			} else if (showLedgers) {
 				showLedgers = false;
 			} else {
 				close();
@@ -151,32 +279,6 @@
 		}
 	}
 
-	interface FlatBranch {
-		branch: SaveBranchDisplay;
-		depth: number;
-		isLast: boolean;
-	}
-
-	/** Flattens a branch tree into a depth-first ordered list with depth info. */
-	function flattenBranches(branches: SaveBranchDisplay[]): FlatBranch[] {
-		const result: FlatBranch[] = [];
-
-		function addChildren(parentName: string | null, depth: number) {
-			const children = branches.filter(b =>
-				parentName === null ? b.parent_name === null : b.parent_name === parentName
-			);
-			children.forEach((branch, i) => {
-				const isLast = i === children.length - 1;
-				result.push({ branch, depth, isLast });
-				addChildren(branch.name, depth + 1);
-			});
-		}
-
-		addChildren(null, 0);
-		return result;
-	}
-
-	// Refresh saves when the picker opens
 	let prevVisible = false;
 	$: {
 		const visible = $savePickerVisible;
@@ -188,6 +290,7 @@
 
 	$: files = $saveFiles;
 	$: saveState = $currentSaveState;
+	$: layout = activeFile ? layoutTree(activeFile.branches) : null;
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -211,20 +314,19 @@
 				{/if}
 
 				{#if showLedgers}
-					<!-- Multi-file ledger picker -->
 					{#each files as file, fileIdx}
 						{@const isActive = file.filename === saveState?.filename}
 						<div class="ledger-row" class:ledger-active={isActive}>
 							<span class="file-number">{fileIdx + 1}.</span>
 							<span class="file-name">{file.filename}</span>
-							<span class="branch-meta">
+							<span class="ledger-meta">
 								{file.file_size}
 								{#if file.branches[0]?.latest_location}
 									— {file.branches[0].latest_location}
 								{/if}
 							</span>
 							{#if isActive}
-								<span class="ledger-current">current</span>
+								<span class="ledger-current">You are here</span>
 							{:else}
 								<button class="action-btn" on:click={() => handleSwitchLedger(file)} disabled={loading}>Open</button>
 							{/if}
@@ -240,47 +342,67 @@
 						<span class="file-number">+</span>
 						<span class="file-name">New Game</span>
 					</div>
-				{:else}
-					<!-- Branch view for the active save file -->
-					{#if activeFile}
-						{#each flattenBranches(activeFile.branches) as { branch, depth, isLast }}
-							{@const isCurrent = branch.name === saveState?.branch_name}
-							<div class="branch-row" class:branch-current={isCurrent} style="padding-left: {0.4 + depth * 1.2}rem">
-								<span class="tree-connector">{isLast ? '\u2514\u2500' : '\u251c\u2500'}</span>
-								<span class="branch-name">{branch.name}</span>
-								<span class="branch-meta">
-									{branch.latest_location ?? 'New'}
-									{#if branch.latest_game_date}
-										, {branch.latest_game_date}
-									{/if}
-								</span>
-								<span class="branch-actions">
-									{#if isCurrent}
-										<span class="current-marker">current</span>
-									{:else}
-										<button class="action-btn" on:click={() => handleLoad(activeFile, branch)} disabled={loading}>Load</button>
-									{/if}
-									<button class="action-btn" on:click={() => startFork(branch.id)} disabled={loading}>New Branch</button>
-								</span>
-							</div>
-
-							{#if forkingBranchId === branch.id}
-								<div class="fork-input-row" style="padding-left: {0.4 + (depth + 1) * 1.2}rem">
-									<input
-										class="fork-input"
-										type="text"
-										placeholder="New branch name..."
-										bind:value={forkName}
-										on:keydown|stopPropagation={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleFork(branch); } if (e.key === 'Escape') cancelFork(); }}
+				{:else if layout && activeFile}
+					<!-- Inverted DAG tree -->
+					<div class="dag-scroll">
+						<div class="dag-container" style="width: {layout.width}px; height: {layout.height}px;">
+							<!-- Connection lines -->
+							<svg class="dag-edges" width={layout.width} height={layout.height}>
+								{#each layout.edges as edge}
+									<path
+										d="M {edge.x1} {edge.y1} C {edge.x1} {edge.y1 - GAP_Y * 0.5}, {edge.x2} {edge.y2 + GAP_Y * 0.5}, {edge.x2} {edge.y2}"
+										fill="none"
+										stroke="var(--color-border)"
+										stroke-width="1.5"
 									/>
-									<button class="action-btn" on:click|stopPropagation={() => handleFork(branch)} disabled={loading || !forkName.trim()}>Create</button>
-									<button class="action-btn" on:click={cancelFork}>Cancel</button>
+								{/each}
+							</svg>
+
+							<!-- Node boxes -->
+							{#each layout.nodes as node (node.branch.id)}
+								{@const isCurrent = node.branch.name === saveState?.branch_name}
+								<div
+									class="dag-node"
+									class:dag-current={isCurrent}
+									style="left: {node.x}px; top: {node.y}px; width: {NODE_W}px; height: {NODE_H}px;"
+								>
+									<button
+										class="node-body"
+										disabled={loading}
+										on:click={() => handleLoadBranch(activeFile, node.branch)}
+									>
+										<span class="node-name">{node.branch.name}</span>
+										<span class="node-location">{node.branch.latest_location ?? 'New'}</span>
+										<span class="node-date">{node.branch.latest_game_date ?? ''}</span>
+									</button>
+									{#if isCurrent}
+										<span class="node-current-badge">You are here</span>
+									{/if}
+									<button
+										class="node-branch-btn"
+										disabled={loading}
+										on:click|stopPropagation={() => startFork(node.branch.id)}
+									>Branch From Here</button>
 								</div>
-							{/if}
-						{/each}
-					{:else}
-						<div class="loading-msg">No save file found.</div>
-					{/if}
+
+								<!-- Fork input (appears above the node) -->
+								{#if forkingBranchId === node.branch.id}
+									<div class="dag-fork-input" style="left: {node.x}px; top: {node.y - 32}px; width: {NODE_W}px;">
+										<input
+											class="fork-input"
+											type="text"
+											placeholder="Branch name..."
+											bind:value={forkName}
+											on:keydown|stopPropagation={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleFork(node.branch); } if (e.key === 'Escape') cancelFork(); }}
+										/>
+										<button class="fork-go" on:click|stopPropagation={() => handleFork(node.branch)} disabled={loading || !forkName.trim()}>OK</button>
+									</div>
+								{/if}
+							{/each}
+						</div>
+					</div>
+				{:else}
+					<div class="loading-msg">No save file found.</div>
 				{/if}
 			</div>
 
@@ -315,7 +437,7 @@
 	.modal {
 		background: var(--color-panel-bg);
 		border: 1px solid var(--color-border);
-		max-width: 650px;
+		max-width: 85vw;
 		width: 90%;
 		height: 67vh;
 		display: flex;
@@ -340,7 +462,7 @@
 
 	.modal-body {
 		flex: 1;
-		overflow-y: auto;
+		overflow: auto;
 		padding: 0.75rem;
 	}
 
@@ -365,103 +487,186 @@
 	.footer-spacer {
 		flex: 1;
 	}
-
 	.footer-btn:hover {
 		color: var(--color-accent);
 		border-color: var(--color-accent);
 	}
 
-	/* ── Branch view ──────────────────────────────────────────────── */
+	/* ── DAG tree ────────────────────────────────────────────────── */
 
-	.branch-row {
+	.dag-scroll {
+		overflow: auto;
 		display: flex;
-		align-items: baseline;
-		gap: 0.3rem;
-		padding: 0.2rem 0;
-		font-size: 0.8rem;
-	}
-	.branch-row:hover {
-		background: var(--color-input-bg);
-	}
-	.branch-row.branch-current {
-		background: var(--color-input-bg);
+		justify-content: center;
+		min-height: 100%;
+		align-items: flex-end;
+		padding: 1rem 0;
 	}
 
-	.tree-connector {
-		color: var(--color-muted);
-		font-family: monospace;
+	.dag-container {
+		position: relative;
 		flex-shrink: 0;
 	}
 
-	.branch-name {
-		color: var(--color-accent);
-		font-weight: bold;
-		flex-shrink: 0;
+	.dag-edges {
+		position: absolute;
+		top: 0;
+		left: 0;
+		pointer-events: none;
 	}
 
-	.branch-meta {
-		color: var(--color-muted);
-		font-size: 0.75rem;
-		flex: 1;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+	.dag-node {
+		position: absolute;
+		border: 1px solid var(--color-border);
+		background: var(--color-panel-bg);
+		box-sizing: border-box;
+		padding-top: 0;
+	}
+	.dag-node::before {
+		content: '';
+		position: absolute;
+		top: -24px;
+		left: 0;
+		right: 0;
+		height: 24px;
+	}
+	.dag-node:hover {
+		border-color: var(--color-accent);
+	}
+	.dag-node.dag-current {
+		border-color: var(--color-accent);
+		border-width: 2px;
 	}
 
-	.branch-actions {
+	.node-body {
 		display: flex;
-		gap: 0.3rem;
-		flex-shrink: 0;
+		flex-direction: column;
 		align-items: center;
-	}
-
-	.current-marker {
-		font-size: 0.6rem;
-		color: var(--color-muted);
-		font-style: italic;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
-
-	.action-btn {
+		justify-content: center;
+		gap: 0.15rem;
+		padding: 0.3rem 0.5rem;
+		width: 100%;
+		height: 100%;
 		background: none;
+		border: none;
+		color: var(--color-fg);
+		cursor: pointer;
+		text-align: center;
+		box-sizing: border-box;
+	}
+	.node-body:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+
+	.node-branch-btn {
+		display: none;
+		position: absolute;
+		bottom: 100%;
+		left: 50%;
+		transform: translateX(-50%);
+		background: var(--color-panel-bg);
+		backdrop-filter: blur(4px);
 		border: 1px solid var(--color-border);
 		color: var(--color-muted);
 		cursor: pointer;
-		font-size: 0.65rem;
-		padding: 0.1rem 0.4rem;
+		font-size: 0.6rem;
+		padding: 0.15rem 0.4rem;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+		white-space: nowrap;
+		margin-bottom: 4px;
+		z-index: 5;
 	}
-	.action-btn:hover:not(:disabled) {
+	.dag-node:hover .node-branch-btn {
+		display: block;
+	}
+	.node-branch-btn:hover {
 		color: var(--color-accent);
 		border-color: var(--color-accent);
 	}
-	.action-btn:disabled {
+	.node-branch-btn:disabled {
 		opacity: 0.4;
 		cursor: default;
 	}
 
-	.fork-input-row {
+	.node-name {
+		font-size: 0.75rem;
+		font-weight: bold;
+		color: var(--color-accent);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 100%;
+	}
+
+	.node-location {
+		font-size: 0.6rem;
+		color: var(--color-muted);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 100%;
+	}
+
+	.node-date {
+		font-size: 0.55rem;
+		color: var(--color-muted);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 100%;
+	}
+
+	.node-current-badge {
+		position: absolute;
+		top: -0.5rem;
+		right: 0.3rem;
+		font-size: 0.65rem;
+		color: var(--color-accent);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		font-weight: bold;
+		background: var(--color-panel-bg);
+		padding: 0 0.25rem;
+	}
+
+	.dag-fork-input {
+		position: absolute;
 		display: flex;
-		align-items: center;
-		gap: 0.3rem;
-		padding: 0.2rem 0;
-		font-size: 0.8rem;
+		gap: 2px;
+		z-index: 10;
 	}
 
 	.fork-input {
 		background: var(--color-input-bg);
 		border: 1px solid var(--color-border);
 		color: var(--color-fg);
-		font-size: 0.75rem;
-		padding: 0.15rem 0.4rem;
+		font-size: 0.65rem;
+		padding: 0.15rem 0.3rem;
 		flex: 1;
-		max-width: 200px;
+		min-width: 0;
 	}
 	.fork-input:focus {
 		border-color: var(--color-accent);
 		outline: none;
+	}
+
+	.fork-go {
+		background: none;
+		border: 1px solid var(--color-border);
+		color: var(--color-muted);
+		cursor: pointer;
+		font-size: 0.55rem;
+		padding: 0.1rem 0.3rem;
+		text-transform: uppercase;
+	}
+	.fork-go:hover:not(:disabled) {
+		color: var(--color-accent);
+		border-color: var(--color-accent);
+	}
+	.fork-go:disabled {
+		opacity: 0.4;
 	}
 
 	/* ── Ledger view ─────────────────────────────────────────────── */
@@ -496,6 +701,12 @@
 		flex-shrink: 0;
 	}
 
+	.ledger-meta {
+		color: var(--color-muted);
+		font-size: 0.75rem;
+		flex: 1;
+	}
+
 	.ledger-current {
 		font-size: 0.6rem;
 		color: var(--color-muted);
@@ -515,5 +726,24 @@
 		font-style: italic;
 		padding: 1rem 0;
 		text-align: center;
+	}
+
+	.action-btn {
+		background: none;
+		border: 1px solid var(--color-border);
+		color: var(--color-muted);
+		cursor: pointer;
+		font-size: 0.6rem;
+		padding: 0.15rem 0.4rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.action-btn:hover:not(:disabled) {
+		color: var(--color-accent);
+		border-color: var(--color-accent);
+	}
+	.action-btn:disabled {
+		opacity: 0.4;
+		cursor: default;
 	}
 </style>

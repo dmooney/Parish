@@ -20,6 +20,17 @@ const SAVE_PREFIX: &str = "parish_";
 /// Extension for save files.
 const SAVE_EXT: &str = "db";
 
+/// A single snapshot cell for the grid display.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SnapshotCell {
+    /// Snapshot database id (used when loading).
+    pub id: i64,
+    /// Formatted game date with time of day (e.g. "20 Mar 1820, Morning").
+    pub game_date: String,
+    /// Resolved location name (if available).
+    pub location: Option<String>,
+}
+
 /// Information about a branch within a save file for display.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SaveBranchDisplay {
@@ -35,6 +46,8 @@ pub struct SaveBranchDisplay {
     pub latest_location: Option<String>,
     /// Formatted game date from the latest snapshot (if available).
     pub latest_game_date: Option<String>,
+    /// All snapshots on this branch, oldest first (for grid display).
+    pub snapshots: Vec<SnapshotCell>,
 }
 
 /// Information about a save file for display in the picker.
@@ -131,13 +144,33 @@ fn read_save_branches(
         let log = db.branch_log(branch.id)?;
         let snapshot_count = log.len();
 
-        // Read latest snapshot to get location and game date
+        // Build snapshot cells from the log (oldest first for grid display)
+        let mut snapshots: Vec<SnapshotCell> = log
+            .iter()
+            .rev() // branch_log returns newest first, we want oldest first
+            .map(|info| {
+                let game_date = chrono::DateTime::parse_from_rfc3339(&info.game_time)
+                    .map(|dt| format_game_date(&dt.with_timezone(&chrono::Utc)))
+                    .unwrap_or_else(|_| info.game_time.clone());
+                SnapshotCell {
+                    id: info.id,
+                    game_date,
+                    location: None, // filled in for latest below
+                }
+            })
+            .collect();
+
+        // Read latest snapshot to get location
         let (latest_location, latest_game_date) =
             if let Ok(Some((_id, snapshot))) = db.load_latest_snapshot(branch.id) {
                 let loc_name = graph
                     .get(snapshot.player_location)
                     .map(|ld| ld.name.clone());
                 let game_date = format_game_date(&snapshot.clock.game_time);
+                // Set location on the last cell
+                if let Some(last) = snapshots.last_mut() {
+                    last.location = loc_name.clone();
+                }
                 (loc_name, Some(game_date))
             } else {
                 (None, None)
@@ -158,6 +191,7 @@ fn read_save_branches(
             snapshot_count,
             latest_location,
             latest_game_date,
+            snapshots,
         });
     }
 

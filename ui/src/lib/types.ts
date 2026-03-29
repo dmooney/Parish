@@ -218,6 +218,12 @@ export interface InferenceLogEntry {
 
 // ── Persistence types ───────────────────────────────────────────────────────
 
+export interface SnapshotCell {
+	id: number;
+	game_date: string;
+	location: string | null;
+}
+
 export interface SaveBranchDisplay {
 	name: string;
 	id: number;
@@ -225,6 +231,7 @@ export interface SaveBranchDisplay {
 	snapshot_count: number;
 	latest_location: string | null;
 	latest_game_date: string | null;
+	snapshots: SnapshotCell[];
 }
 
 export interface SaveFileInfo {
