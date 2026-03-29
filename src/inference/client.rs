@@ -1,5 +1,6 @@
 //! HTTP client for the Ollama REST API at localhost:11434.
 
+use crate::config::InferenceConfig;
 use crate::error::ParishError;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,8 @@ use tokio::sync::mpsc;
 pub struct OllamaClient {
     /// The underlying HTTP client.
     client: reqwest::Client,
+    /// Streaming request timeout in seconds.
+    streaming_timeout_secs: u64,
     /// Base URL for the Ollama API (e.g. "http://localhost:11434").
     base_url: String,
 }
