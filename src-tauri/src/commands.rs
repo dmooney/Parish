@@ -997,6 +997,12 @@ async fn handle_npc_conversation(
         },
     );
 
+    // Pause the game clock while waiting for the inference response
+    {
+        let mut world = state.world.lock().await;
+        world.clock.inference_pause();
+    }
+
     match queue
         .send(
             req_id,
@@ -1113,6 +1119,12 @@ async fn handle_npc_conversation(
                 },
             );
         }
+    }
+
+    // Resume the game clock now that inference is complete
+    {
+        let mut world = state.world.lock().await;
+        world.clock.inference_resume();
     }
 
     // Stop the animated loading indicator (emits active: false)
