@@ -332,7 +332,7 @@
 		border: 1px solid var(--color-border);
 		max-width: 650px;
 		width: 90%;
-		max-height: 80vh;
+		height: 67vh;
 		display: flex;
 		flex-direction: column;
 		border-radius: 2px;
