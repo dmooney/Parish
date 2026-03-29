@@ -5,15 +5,19 @@
 	import type { SaveFileInfo, SaveBranchDisplay } from '$lib/types';
 
 	let loading = false;
-	let forkingFileIdx: number | null = null;
 	let forkingBranchId: number | null = null;
 	let forkName = '';
+	/** When true, show the multi-file "ledgers" view instead of branches. */
+	let showLedgers = false;
+
+	/** The active save file (matched by filename from save state). */
+	$: activeFile = files.find(f => f.filename === saveState?.filename) ?? files[0] ?? null;
 
 	async function refreshSaves() {
 		loading = true;
 		try {
-			const files = await discoverSaveFiles();
-			saveFiles.set(files);
+			const allFiles = await discoverSaveFiles();
+			saveFiles.set(allFiles);
 			const state = await getSaveState();
 			currentSaveState.set(state);
 		} catch (e) {
@@ -65,9 +69,26 @@
 		try {
 			await newSaveFile();
 			await refreshGameState();
+			showLedgers = false;
 			savePickerVisible.set(false);
 		} catch (e) {
 			console.error('New game failed:', e);
+		}
+		loading = false;
+	}
+
+	async function handleSwitchLedger(file: SaveFileInfo) {
+		// Load the first branch of the selected file
+		const branch = file.branches[0];
+		if (!branch) return;
+		loading = true;
+		try {
+			await loadBranch(file.path, branch.id);
+			await refreshGameState();
+			showLedgers = false;
+			await refreshSaves();
+		} catch (e) {
+			console.error('Switch ledger failed:', e);
 		}
 		loading = false;
 	}
@@ -87,28 +108,30 @@
 		loading = false;
 	}
 
-	function startFork(fileIdx: number, branchId: number) {
-		forkingFileIdx = fileIdx;
+	function startFork(branchId: number) {
 		forkingBranchId = branchId;
 		forkName = '';
 	}
 
 	function cancelFork() {
-		forkingFileIdx = null;
 		forkingBranchId = null;
 		forkName = '';
 	}
 
 	function close() {
 		savePickerVisible.set(false);
-		forkingFileIdx = null;
 		forkingBranchId = null;
 		forkName = '';
+		showLedgers = false;
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
-			close();
+			if (showLedgers) {
+				showLedgers = false;
+			} else {
+				close();
+			}
 		}
 	}
 
@@ -146,10 +169,16 @@
 <svelte:window on:keydown={handleKeydown} />
 
 {#if $savePickerVisible}
-	<div class="overlay" role="dialog" aria-modal="true" aria-label="Save Files">
+	<div class="overlay" role="dialog" aria-modal="true" aria-label="The Parish Ledger">
 		<div class="modal">
 			<div class="modal-header">
-				<span class="modal-title">SAVE FILES</span>
+				<span class="modal-title">
+					{#if showLedgers}
+						Ledgers
+					{:else}
+						The Parish Ledger
+					{/if}
+				</span>
 				<button class="modal-close" on:click={close}>X</button>
 			</div>
 
@@ -158,17 +187,39 @@
 					<div class="loading-msg">Scanning save files...</div>
 				{/if}
 
-				{#each files as file, fileIdx}
-					<div class="save-file">
-						<div class="file-header">
+				{#if showLedgers}
+					<!-- Multi-file ledger picker -->
+					{#each files as file, fileIdx}
+						{@const isActive = file.filename === saveState?.filename}
+						<div class="ledger-row" class:ledger-active={isActive}>
 							<span class="file-number">{fileIdx + 1}.</span>
 							<span class="file-name">{file.filename}</span>
+							<span class="branch-meta">
+								{file.branches.length} {file.branches.length === 1 ? 'branch' : 'branches'}
+								{#if file.branches[0]?.latest_location}
+									— {file.branches[0].latest_location}
+								{/if}
+							</span>
+							{#if isActive}
+								<span class="ledger-current">current</span>
+							{:else}
+								<button class="action-btn" on:click={() => handleSwitchLedger(file)} disabled={loading}>Open</button>
+							{/if}
 						</div>
+					{/each}
 
-						{#each getRootBranches(file.branches) as branch, branchIdx}
-							{@const lastRoot = isLastRoot(file.branches, branch, branchIdx)}
-							{@const children = getChildren(file.branches, branch.name)}
-							<div class="branch-row">
+					<div class="ledger-row new-ledger" on:click={handleNewGame} role="button" tabindex="0" on:keydown={(e) => { if (e.key === 'Enter') handleNewGame(); }}>
+						<span class="file-number">+</span>
+						<span class="file-name">Fork New Ledger</span>
+					</div>
+				{:else}
+					<!-- Branch view for the active save file -->
+					{#if activeFile}
+						{#each getRootBranches(activeFile.branches) as branch, branchIdx}
+							{@const lastRoot = isLastRoot(activeFile.branches, branch, branchIdx)}
+							{@const children = getChildren(activeFile.branches, branch.name)}
+							{@const isCurrent = branch.name === saveState?.branch_name}
+							<div class="branch-row" class:branch-current={isCurrent}>
 								<span class="tree-connector">{connector(lastRoot)}</span>
 								<span class="branch-name">{branch.name}</span>
 								<span class="branch-meta">
@@ -179,30 +230,34 @@
 									({branch.snapshot_count} {branch.snapshot_count === 1 ? 'save' : 'saves'})
 								</span>
 								<span class="branch-actions">
-									<button class="action-btn" on:click={() => handleLoad(file, branch)} disabled={loading}>Load</button>
-									<button class="action-btn" on:click={() => handleSaveHere()} disabled={loading}>Save</button>
-									<button class="action-btn" on:click={() => startFork(fileIdx, branch.id)} disabled={loading}>Fork</button>
+									{#if isCurrent}
+										<span class="current-marker">current</span>
+									{:else}
+										<button class="action-btn" on:click={() => handleLoad(activeFile, branch)} disabled={loading}>Load</button>
+									{/if}
+									<button class="action-btn" on:click={() => startFork(branch.id)} disabled={loading}>New Branch</button>
 								</span>
 							</div>
 
-							{#if forkingFileIdx === fileIdx && forkingBranchId === branch.id}
+							{#if forkingBranchId === branch.id}
 								<div class="fork-input-row">
 									<span class="tree-indent">{indent(lastRoot)}</span>
 									<input
 										class="fork-input"
 										type="text"
-										placeholder="Branch name..."
+										placeholder="New branch name..."
 										bind:value={forkName}
-										on:keydown={(e) => { if (e.key === 'Enter') handleFork(file, branch); if (e.key === 'Escape') cancelFork(); }}
+										on:keydown={(e) => { if (e.key === 'Enter') handleFork(activeFile, branch); if (e.key === 'Escape') cancelFork(); }}
 									/>
-									<button class="action-btn" on:click={() => handleFork(file, branch)} disabled={loading || !forkName.trim()}>Create</button>
+									<button class="action-btn" on:click={() => handleFork(activeFile, branch)} disabled={loading || !forkName.trim()}>Create</button>
 									<button class="action-btn" on:click={cancelFork}>Cancel</button>
 								</div>
 							{/if}
 
 							{#each children as child, childIdx}
 								{@const lastChild = childIdx === children.length - 1}
-								<div class="branch-row child">
+								{@const isChildCurrent = child.name === saveState?.branch_name}
+								<div class="branch-row child" class:branch-current={isChildCurrent}>
 									<span class="tree-indent">{indent(lastRoot)}</span>
 									<span class="tree-connector">{connector(lastChild)}</span>
 									<span class="branch-name">{child.name}</span>
@@ -214,43 +269,47 @@
 										({child.snapshot_count} {child.snapshot_count === 1 ? 'save' : 'saves'})
 									</span>
 									<span class="branch-actions">
-										<button class="action-btn" on:click={() => handleLoad(file, child)} disabled={loading}>Load</button>
-										<button class="action-btn" on:click={() => handleSaveHere()} disabled={loading}>Save</button>
-										<button class="action-btn" on:click={() => startFork(fileIdx, child.id)} disabled={loading}>Fork</button>
+										{#if isChildCurrent}
+											<span class="current-marker">current</span>
+										{:else}
+											<button class="action-btn" on:click={() => handleLoad(activeFile, child)} disabled={loading}>Load</button>
+										{/if}
+										<button class="action-btn" on:click={() => startFork(child.id)} disabled={loading}>New Branch</button>
 									</span>
 								</div>
 
-								{#if forkingFileIdx === fileIdx && forkingBranchId === child.id}
+								{#if forkingBranchId === child.id}
 									<div class="fork-input-row">
 										<span class="tree-indent">{indent(lastRoot)}</span>
 										<span class="tree-indent">{indent(lastChild)}</span>
 										<input
 											class="fork-input"
 											type="text"
-											placeholder="Branch name..."
+											placeholder="New branch name..."
 											bind:value={forkName}
-											on:keydown={(e) => { if (e.key === 'Enter') handleFork(file, child); if (e.key === 'Escape') cancelFork(); }}
+											on:keydown={(e) => { if (e.key === 'Enter') handleFork(activeFile, child); if (e.key === 'Escape') cancelFork(); }}
 										/>
-										<button class="action-btn" on:click={() => handleFork(file, child)} disabled={loading || !forkName.trim()}>Create</button>
+										<button class="action-btn" on:click={() => handleFork(activeFile, child)} disabled={loading || !forkName.trim()}>Create</button>
 										<button class="action-btn" on:click={cancelFork}>Cancel</button>
 									</div>
 								{/if}
 							{/each}
 						{/each}
-					</div>
-				{/each}
+					{:else}
+						<div class="loading-msg">No save file found.</div>
+					{/if}
+				{/if}
+			</div>
 
-				<div class="save-file new-game">
-					<button class="new-game-btn" on:click={handleNewGame} disabled={loading}>
-						N. New Game
+			<div class="modal-footer">
+				{#if showLedgers}
+					<button class="footer-btn" on:click={() => { showLedgers = false; }}>
+						← Back
 					</button>
-				</div>
-
-				{#if saveState?.filename}
-					<div class="current-save">
-						Current: {saveState.filename} (branch: {saveState.branch_name ?? 'main'})
-						<button class="action-btn" on:click={handleSaveHere} disabled={loading}>Quick Save</button>
-					</div>
+				{:else}
+					<button class="footer-btn" on:click={() => { showLedgers = true; }}>
+						Ledgers
+					</button>
 				{/if}
 			</div>
 		</div>
@@ -312,31 +371,30 @@
 		padding: 0.75rem;
 	}
 
-	.save-file {
-		margin-bottom: 0.75rem;
-		border-bottom: 1px solid var(--color-border);
-		padding-bottom: 0.5rem;
-	}
-	.save-file:last-child {
-		border-bottom: none;
-	}
-
-	.file-header {
+	.modal-footer {
+		padding: 0.4rem 0.75rem;
+		border-top: 1px solid var(--color-border);
 		display: flex;
-		align-items: baseline;
-		gap: 0.4rem;
-		margin-bottom: 0.3rem;
+		align-items: center;
+		gap: 0.5rem;
 	}
 
-	.file-number {
+	.footer-btn {
+		background: none;
+		border: 1px solid var(--color-border);
 		color: var(--color-muted);
-		font-size: 0.8rem;
+		cursor: pointer;
+		font-size: 0.65rem;
+		padding: 0.15rem 0.5rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.footer-btn:hover {
+		color: var(--color-accent);
+		border-color: var(--color-accent);
 	}
 
-	.file-name {
-		color: var(--color-accent);
-		font-size: 0.85rem;
-	}
+	/* ── Branch view ──────────────────────────────────────────────── */
 
 	.branch-row {
 		display: flex;
@@ -350,6 +408,9 @@
 		padding-left: 1.2rem;
 	}
 	.branch-row:hover {
+		background: var(--color-input-bg);
+	}
+	.branch-row.branch-current {
 		background: var(--color-input-bg);
 	}
 
@@ -384,6 +445,15 @@
 		display: flex;
 		gap: 0.3rem;
 		flex-shrink: 0;
+		align-items: center;
+	}
+
+	.current-marker {
+		font-size: 0.6rem;
+		color: var(--color-muted);
+		font-style: italic;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
 	}
 
 	.action-btn {
@@ -428,37 +498,49 @@
 		outline: none;
 	}
 
-	.new-game {
+	/* ── Ledger view ─────────────────────────────────────────────── */
+
+	.ledger-row {
+		display: flex;
+		align-items: baseline;
+		gap: 0.4rem;
+		padding: 0.35rem 0.5rem;
+		font-size: 0.8rem;
+		border-bottom: 1px solid var(--color-border);
+	}
+	.ledger-row:last-child {
 		border-bottom: none;
 	}
-
-	.new-game-btn {
-		background: none;
-		border: 1px solid var(--color-border);
-		color: var(--color-fg);
-		cursor: pointer;
-		font-size: 0.85rem;
-		padding: 0.4rem 0.75rem;
-		width: 100%;
-		text-align: left;
+	.ledger-row:hover {
+		background: var(--color-input-bg);
 	}
-	.new-game-btn:hover:not(:disabled) {
-		color: var(--color-accent);
-		border-color: var(--color-accent);
-	}
-	.new-game-btn:disabled {
-		opacity: 0.4;
-		cursor: default;
+	.ledger-row.ledger-active {
+		background: var(--color-input-bg);
 	}
 
-	.current-save {
-		font-size: 0.7rem;
+	.file-number {
 		color: var(--color-muted);
-		padding-top: 0.5rem;
-		border-top: 1px solid var(--color-border);
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+		font-size: 0.8rem;
+		flex-shrink: 0;
+	}
+
+	.file-name {
+		color: var(--color-accent);
+		font-size: 0.85rem;
+		flex-shrink: 0;
+	}
+
+	.ledger-current {
+		font-size: 0.6rem;
+		color: var(--color-muted);
+		font-style: italic;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.new-ledger {
+		border-bottom: none;
+		cursor: pointer;
 	}
 
 	.loading-msg {
