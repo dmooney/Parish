@@ -60,14 +60,18 @@ Every request processed by the inference worker is logged in a shared ring buffe
 
 ```rust
 pub struct InferenceLogEntry {
-    pub request_id: u64,      // Unique request ID
-    pub timestamp: String,     // Wall-clock time (HH:MM:SS)
-    pub model: String,         // Model name used
-    pub streaming: bool,       // Whether SSE streaming was used
-    pub duration_ms: u64,      // End-to-end latency
-    pub prompt_len: usize,     // Prompt length in characters
-    pub response_len: usize,   // Response length in characters
-    pub error: Option<String>, // Error message if failed
+    pub request_id: u64,            // Unique request ID
+    pub timestamp: String,           // Wall-clock time (HH:MM:SS)
+    pub model: String,               // Model name used
+    pub streaming: bool,             // Whether SSE streaming was used
+    pub duration_ms: u64,            // End-to-end latency
+    pub prompt_len: usize,           // Prompt length in characters
+    pub response_len: usize,         // Response length in characters
+    pub error: Option<String>,       // Error message if failed
+    pub system_prompt: Option<String>, // System prompt (if any)
+    pub prompt_text: String,         // Full user prompt
+    pub response_text: String,       // Full response text
+    pub max_tokens: Option<u32>,     // Token limit (if set)
 }
 ```
 

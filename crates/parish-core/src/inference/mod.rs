@@ -172,6 +172,9 @@ pub fn spawn_inference_worker(
             let streaming = request.token_tx.is_some();
             let prompt_len = request.prompt.len();
             let model = request.model.clone();
+            let system_prompt = request.system.clone();
+            let prompt_text = request.prompt.clone();
+            let max_tokens = request.max_tokens;
             let req_id = request.id;
             let start = Instant::now();
 
@@ -198,7 +201,7 @@ pub fn spawn_inference_worker(
 
             let elapsed = start.elapsed();
 
-            let (response, entry_error, response_len) = match &result {
+            let (response, entry_error, response_len, response_text) = match &result {
                 Ok(text) => (
                     InferenceResponse {
                         id: req_id,
@@ -207,6 +210,7 @@ pub fn spawn_inference_worker(
                     },
                     None,
                     text.len(),
+                    text.clone(),
                 ),
                 Err(e) => (
                     InferenceResponse {
@@ -216,6 +220,7 @@ pub fn spawn_inference_worker(
                     },
                     Some(e.to_string()),
                     0,
+                    String::new(),
                 ),
             };
 
@@ -230,6 +235,10 @@ pub fn spawn_inference_worker(
                     prompt_len,
                     response_len,
                     error: entry_error,
+                    system_prompt,
+                    prompt_text,
+                    response_text,
+                    max_tokens,
                 };
                 let mut log = log.lock().await;
                 if log.len() >= INFERENCE_LOG_CAPACITY {

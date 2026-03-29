@@ -245,6 +245,14 @@ pub struct InferenceLogEntry {
     pub response_len: usize,
     /// Error message if the request failed (None = success).
     pub error: Option<String>,
+    /// System prompt sent (if any).
+    pub system_prompt: Option<String>,
+    /// User prompt text.
+    pub prompt_text: String,
+    /// Full response text (empty on error).
+    pub response_text: String,
+    /// Max tokens limit sent to provider (if any).
+    pub max_tokens: Option<u32>,
 }
 
 /// Builds a complete debug snapshot from live game state.
@@ -605,6 +613,10 @@ mod tests {
             prompt_len: 500,
             response_len: 200,
             error: None,
+            system_prompt: Some("You are helpful.".to_string()),
+            prompt_text: "Hello world".to_string(),
+            response_text: "Hi there!".to_string(),
+            max_tokens: Some(300),
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("qwen3:14b"));
@@ -623,6 +635,10 @@ mod tests {
             prompt_len: 100,
             response_len: 0,
             error: Some("timeout".to_string()),
+            system_prompt: None,
+            prompt_text: "test prompt".to_string(),
+            response_text: String::new(),
+            max_tokens: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("timeout"));
@@ -643,6 +659,10 @@ mod tests {
             prompt_len: 100,
             response_len: 50,
             error: None,
+            system_prompt: None,
+            prompt_text: "test".to_string(),
+            response_text: "response".to_string(),
+            max_tokens: None,
         };
         let inference = InferenceDebug {
             provider_name: "test".to_string(),

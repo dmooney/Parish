@@ -209,4 +209,8 @@ export interface InferenceLogEntry {
 	prompt_len: number;
 	response_len: number;
 	error: string | null;
+	system_prompt: string | null;
+	prompt_text: string;
+	response_text: string;
+	max_tokens: number | null;
 }
