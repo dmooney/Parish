@@ -11,7 +11,9 @@ import type {
 	TextLogPayload,
 	WorldUpdatePayload,
 	LoadingPayload,
-	DebugSnapshot
+	DebugSnapshot,
+	SaveFileInfo,
+	SaveState
 } from './types';
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -29,6 +31,21 @@ export const submitInput = (text: string) => invoke<void>('submit_input', { text
 export const getDebugSnapshot = () => invoke<DebugSnapshot>('get_debug_snapshot');
 
 export const getUiConfig = () => invoke<UiConfig>('get_ui_config');
+
+// ── Persistence commands ────────────────────────────────────────────────────
+
+export const discoverSaveFiles = () => invoke<SaveFileInfo[]>('discover_save_files');
+
+export const saveGame = () => invoke<string>('save_game');
+
+export const loadBranch = (filePath: string, branchId: number) =>
+	invoke<void>('load_branch', { filePath, branchId });
+
+export const createBranch = (name: string) => invoke<string>('create_branch', { name });
+
+export const newSaveFile = () => invoke<void>('new_save_file');
+
+export const getSaveState = () => invoke<SaveState>('get_save_state');
 
 // ── Events ───────────────────────────────────────────────────────────────────
 
@@ -52,3 +69,6 @@ export const onThemeUpdate = (cb: (payload: ThemePalette) => void) =>
 
 export const onDebugUpdate = (cb: (payload: DebugSnapshot) => void) =>
 	listen<DebugSnapshot>('debug-update', (e) => cb(e.payload));
+
+export const onSavePicker = (cb: () => void) =>
+	listen<void>('save-picker', () => cb());
