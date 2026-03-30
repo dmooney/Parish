@@ -94,17 +94,34 @@ Panel Rendering
 
 ### Map Panel
 
-The map renders the `WorldGraph` as a visual node-link diagram:
+The map has two views: a **player-centered minimap** in the sidebar and a **full map overlay** triggered by `/map` command or `M` hotkey.
 
-- **Nodes**: Circles positioned using WGS 84 geo-coordinates (lat/lon projected to screen space), with circular fallback for locations without coordinates
-- **Edges**: Lines connecting neighboring locations
-- **Player location**: Highlighted with accent color and thicker border
-- **Adjacent locations**: Semi-highlighted, clickable to trigger movement
-- **NPC markers**: Small dots above nodes showing NPC presence
-- **Click-to-move**: Clicking an adjacent node calls `handle_movement()` directly
-- **Label collision avoidance**: When locations are geographically close (e.g. the village core), labels are nudged apart by an iterative force-directed repulsion pass so they never overlap. Thin leader lines connect displaced labels back to their nodes.
+#### Minimap (MapPanel.svelte)
 
-See [Map Evolution](map-evolution.md) for future map improvements (minimap, OSM tiles, fog of war).
+The sidebar minimap shows only nearby locations (within 3 graph hops of the player) and smoothly pans to follow the player:
+
+- **Player-centered viewport**: The SVG viewBox centers on the player's projected position, using Svelte `tweened` stores for smooth panning animation when the player moves
+- **Hop filtering**: Only locations with `hops <= 3` are rendered as nodes; distant locations are hidden to reduce clutter
+- **Off-screen indicators**: Locations beyond the viewport but within 5 hops are shown as small chevron arrows at the viewport boundary, pointing toward their direction
+- **Nodes**: Circles positioned using a fixed-scale mercator projection (`map-projection.ts`), with grid fallback for locations without coordinates
+- **Edges**: Lines connecting neighboring locations (only between visible nodes)
+- **Player location**: Highlighted with accent color and larger radius
+- **Adjacent locations**: Clickable to trigger movement
+- **Expand button**: Opens the full map overlay
+- **Label collision avoidance**: Force-directed repulsion (`map-labels.ts`) with leader lines for displaced labels
+
+#### Full Map Overlay (FullMapOverlay.svelte)
+
+A modal overlay showing all parish locations with zoom and pan:
+
+- **Triggered by**: `/map` command, `M` hotkey, or expand button on minimap
+- **Zoom**: Mouse wheel zoom (0.5x–4x range) via CSS `scale()` transform
+- **Pan**: Click-and-drag via pointer events
+- **Close**: `Escape` key, `M` key toggle, backdrop click, or close button
+- **Labels**: Larger font (9px), longer truncation (20 chars) for readability
+- **Click-to-travel**: Adjacent locations remain clickable
+
+See [Map Evolution](map-evolution.md) for future map improvements (fog of war, animated travel, OSM tiles).
 
 ### Sidebar
 
