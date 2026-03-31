@@ -71,6 +71,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .route("/api/map", get(routes::get_map))
         .route("/api/npcs-here", get(routes::get_npcs_here))
         .route("/api/theme", get(routes::get_theme))
+        .route("/api/debug-snapshot", get(routes::get_debug_snapshot))
         .route("/api/submit-input", post(routes::submit_input))
         .route("/api/ws", get(ws::ws_handler))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))

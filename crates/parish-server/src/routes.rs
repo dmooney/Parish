@@ -25,6 +25,8 @@ use parish_core::npc::ticks;
 use parish_core::world::description::{format_exits, render_description};
 use parish_core::world::movement::{self, MovementResult};
 
+use parish_core::debug_snapshot::{self, DebugSnapshot, InferenceDebug};
+
 use crate::state::{AppState, GameConfig};
 
 /// Monotonically increasing request ID counter for inference requests.
@@ -55,6 +57,29 @@ pub async fn get_npcs_here(State(state): State<Arc<AppState>>) -> Json<Vec<NpcIn
 pub async fn get_theme(State(state): State<Arc<AppState>>) -> Json<ThemePalette> {
     let world = state.world.lock().await;
     Json(parish_core::ipc::build_theme(&world))
+}
+
+/// `GET /api/debug-snapshot` — returns full debug state for the debug panel.
+pub async fn get_debug_snapshot(State(state): State<Arc<AppState>>) -> Json<DebugSnapshot> {
+    let world = state.world.lock().await;
+    let npc_manager = state.npc_manager.lock().await;
+    let config = state.config.lock().await;
+    let events = std::collections::VecDeque::new();
+    let inference = InferenceDebug {
+        provider_name: config.provider_name.clone(),
+        model_name: config.model_name.clone(),
+        base_url: config.base_url.clone(),
+        cloud_provider: config.cloud_provider_name.clone(),
+        cloud_model: config.cloud_model_name.clone(),
+        has_queue: state.inference_queue.lock().await.is_some(),
+        improv_enabled: config.improv_enabled,
+    };
+    Json(debug_snapshot::build_debug_snapshot(
+        &world,
+        &npc_manager,
+        &events,
+        &inference,
+    ))
 }
 
 // ── Input endpoint ──────────────────────────────────────────────────────────
