@@ -3,7 +3,7 @@
 Parish LOC Growth Projector
 ============================
 Uses actual daily net-LOC data from git history, fits a growth model
-with diminishing returns (logistic-ish), and projects milestones.
+with diminishing returns, and projects milestones.
 
 Model: daily output follows a learning curve that ramps up then
 gradually declines as the codebase matures and more time goes to
@@ -31,11 +31,11 @@ ACTUAL = [
     ("2026-03-27",  4721),
     ("2026-03-28",  3787),
     ("2026-03-29", 11953),
-    ("2026-03-30",  2794),
+    ("2026-03-30",  6055),
 ]
 
 START_DATE = date(2026, 3, 18)
-CURRENT_LOC = 72270
+CURRENT_LOC = 75089
 CURRENT_DAY = (date(2026, 3, 30) - START_DATE).days  # day 12
 
 MILESTONES = [100_000, 250_000, 500_000, 1_000_000]
@@ -87,6 +87,7 @@ for datestr, net in ACTUAL:
         print(f"  Day {day_num:2d} {DIM}{datestr}{RESET}  {MAGENTA}{b}{RESET} {net:>+7,d}  ({fmt_loc(cumulative)})")
 
 print(f"\n  {BOLD}Current: {CURRENT_LOC:,} LOC on day {CURRENT_DAY}{RESET}")
+print(f"  {BOLD}Commits: 126 across 13 days{RESET}")
 
 
 # ── Projection scenarios ─────────────────────────────────────────
@@ -98,7 +99,6 @@ def project(name, daily_fn):
     """
     loc = CURRENT_LOC
     results = {}
-    # Project up to 3 years out
     for day in range(CURRENT_DAY + 1, CURRENT_DAY + 1100):
         loc += daily_fn(day)
         for m in MILESTONES:
@@ -114,16 +114,13 @@ recent = [n for _, n in ACTUAL[-7:] if n > 0]
 avg_recent = sum(recent) / len(recent) if recent else 5000
 
 # Scenario 2: Ramp up with diminishing returns
-# Peak productivity around day 30, then slow decay
 def scenario_ramp(day):
     peak = avg_recent * 1.5
     ramp = 1 - math.exp(-0.08 * day)
     decay = math.exp(-0.003 * (day - 30)) if day > 30 else 1.0
-    # Refactor tax: 15% of output is churn
     return peak * ramp * decay * 0.85
 
 # Scenario 3: Claude-assisted hypergrowth
-# Higher peak, faster ramp, slower decay (AI keeps productivity high)
 def scenario_hyper(day):
     peak = avg_recent * 2.5
     ramp = 1 - math.exp(-0.12 * day)
@@ -131,11 +128,10 @@ def scenario_hyper(day):
     return peak * ramp * decay * 0.85
 
 # Scenario 4: Steady state / maturity
-# Rapid decline to maintenance pace
 def scenario_mature(day):
     peak = avg_recent
     decay = math.exp(-0.01 * day)
-    maintenance = 500  # baseline maintenance LOC/day
+    maintenance = 500
     return max(peak * decay, maintenance)
 
 
@@ -171,7 +167,7 @@ for name, desc, fn in scenarios:
 
 total_days = CURRENT_DAY
 avg_all = CURRENT_LOC / total_days
-lines_per_hour = avg_all / 16  # assuming 16 active hours/day
+lines_per_hour = avg_all / 16
 
 print(f"{BOLD}{'─' * 50}")
 print(f"Fun Stats{RESET}")
@@ -179,7 +175,7 @@ print(f"{'─' * 50}\n")
 print(f"  Average net output:    {BOLD}{avg_all:,.0f}{RESET} LOC/day")
 print(f"  That's roughly:        {BOLD}{lines_per_hour:,.0f}{RESET} LOC/hour")
 print(f"  Or:                    {BOLD}{lines_per_hour/60:,.1f}{RESET} LOC/minute")
-print(f"  Peak single day:       {BOLD}{max(n for _,n in ACTUAL):,}{RESET} LOC (Mar 25 🚀)")
-print(f"  Biggest refactor:      {BOLD}{min(n for _,n in ACTUAL):,}{RESET} LOC (Mar 26 🔥)")
+print(f"  Peak single day:       {BOLD}{max(n for _,n in ACTUAL):,}{RESET} LOC (Mar 25)")
+print(f"  Biggest refactor:      {BOLD}{min(n for _,n in ACTUAL):,}{RESET} LOC (Mar 26)")
 print(f"  Days to write a novel: {DIM}(~80k words){RESET} {BOLD}{80000/avg_all:.1f}{RESET} days at this pace")
 print()
