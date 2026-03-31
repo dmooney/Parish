@@ -1,8 +1,8 @@
 //! Parish web server — serves the Svelte UI in a browser via axum.
 //!
 //! Provides the same game experience as the Tauri desktop app, but over
-//! standard HTTP + WebSocket so it can run in any browser. Primarily
-//! intended for automated Chrome testing via Playwright.
+//! standard HTTP + WebSocket so it can run in any browser. Each visitor
+//! gets their own isolated game session.
 
 pub mod routes;
 pub mod state;
@@ -19,41 +19,45 @@ use tower_http::services::ServeDir;
 
 use parish_core::inference::openai_client::OpenAiClient;
 use parish_core::inference::{InferenceQueue, new_inference_log, spawn_inference_worker};
-use parish_core::npc::manager::NpcManager;
-use parish_core::world::{LocationId, WorldState};
+use parish_core::world::LocationId;
 
-use state::{AppState, GameConfig, build_app_state};
+use state::{GameConfig, GameSession, ServerState, SessionManager};
+
+/// Default maximum concurrent sessions.
+const DEFAULT_MAX_SESSIONS: usize = 50;
+
+/// Idle session timeout (10 minutes).
+const SESSION_TIMEOUT_SECS: u64 = 600;
 
 /// Starts the Parish web server on the given port.
 ///
 /// Loads game data from `data_dir`, serves the Svelte frontend from
 /// `static_dir` (typically `ui/dist/`), and exposes REST + WebSocket
-/// endpoints for the game.
+/// endpoints for the game. Each visitor gets an isolated game session.
 pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    // Load world
-    let world = WorldState::from_parish_file(&data_dir.join("parish.json"), LocationId(15))
-        .unwrap_or_else(|e| {
-            tracing::warn!("Failed to load parish.json: {}. Using default world.", e);
-            WorldState::new()
-        });
+    let max_sessions: usize = std::env::var("PARISH_MAX_SESSIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_SESSIONS);
 
-    // Load NPCs
-    let mut npc_manager =
-        NpcManager::load_from_file(&data_dir.join("npcs.json")).unwrap_or_else(|e| {
-            tracing::warn!("Failed to load npcs.json: {}. No NPCs.", e);
-            NpcManager::new()
-        });
-    npc_manager.assign_tiers(world.player_location, &world.graph);
-
-    // Build client from env
+    // Build shared inference client from env
     let (client, config) = build_client_and_config();
     let cloud_client = build_cloud_client();
 
-    let state = build_app_state(world, npc_manager, client.clone(), config, cloud_client);
+    // Build session manager with data dir for per-session world loading
+    let session_manager = SessionManager::new(data_dir, LocationId(15), max_sessions);
 
-    // Initialize inference queue
+    let state = Arc::new(ServerState {
+        sessions: session_manager,
+        inference_queue: tokio::sync::Mutex::new(None),
+        client: tokio::sync::Mutex::new(client.clone()),
+        cloud_client: tokio::sync::Mutex::new(cloud_client),
+        config: tokio::sync::Mutex::new(config),
+    });
+
+    // Initialize shared inference queue
     if let Some(ref client) = client {
         let (tx, rx) = tokio::sync::mpsc::channel(32);
         let _worker = spawn_inference_worker(client.clone(), rx, new_inference_log());
@@ -62,11 +66,12 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         *iq = Some(queue);
     }
 
-    // Spawn background ticks
-    spawn_background_ticks(Arc::clone(&state));
+    // Spawn session cleanup task
+    spawn_session_cleanup(Arc::clone(&state));
 
     // Build router
     let app = Router::new()
+        .route("/api/session", post(routes::create_session))
         .route("/api/world-snapshot", get(routes::get_world_snapshot))
         .route("/api/map", get(routes::get_map))
         .route("/api/npcs-here", get(routes::get_npcs_here))
@@ -80,6 +85,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Parish web server listening on http://{}", addr);
     tracing::info!("Serving static files from {}", static_dir.display());
+    tracing::info!("Max sessions: {}", max_sessions);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -87,21 +93,26 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     Ok(())
 }
 
-/// Spawns the background tick tasks (world update + theme update).
-fn spawn_background_ticks(state: Arc<AppState>) {
-    // Idle tick: broadcast world snapshot every 5 seconds
-    let state_tick = Arc::clone(&state);
+/// Spawns per-session background tick tasks (world update + theme update).
+///
+/// Uses `Arc::downgrade` so that ticks automatically stop when the
+/// session is cleaned up (the `Weak` upgrade fails and the loop exits).
+pub fn spawn_session_ticks(session: Arc<GameSession>) {
+    let weak_tick = Arc::downgrade(&session);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
+            let Some(session) = weak_tick.upgrade() else {
+                break;
+            };
             {
-                let world = state_tick.world.lock().await;
+                let world = session.world.lock().await;
                 let snapshot = parish_core::ipc::snapshot_from_world(&world);
-                state_tick.event_bus.emit("world-update", &snapshot);
+                session.event_bus.emit("world-update", &snapshot);
             }
             {
-                let world = state_tick.world.lock().await;
-                let mut npc_mgr = state_tick.npc_manager.lock().await;
+                let world = session.world.lock().await;
+                let mut npc_mgr = session.npc_manager.lock().await;
                 let events = npc_mgr.tick_schedules(&world.clock, &world.graph);
                 if !events.is_empty() {
                     tracing::debug!("NPC schedule tick: {} events", events.len());
@@ -110,14 +121,34 @@ fn spawn_background_ticks(state: Arc<AppState>) {
         }
     });
 
-    // Theme tick: broadcast updated palette every 500 ms
-    let state_theme = Arc::clone(&state);
+    let weak_theme = Arc::downgrade(&session);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let world = state_theme.world.lock().await;
+            let Some(session) = weak_theme.upgrade() else {
+                break;
+            };
+            let world = session.world.lock().await;
             let palette = parish_core::ipc::build_theme(&world);
-            state_theme.event_bus.emit("theme-update", &palette);
+            session.event_bus.emit("theme-update", &palette);
+        }
+    });
+}
+
+/// Spawns a background task that cleans up idle sessions periodically.
+fn spawn_session_cleanup(state: Arc<ServerState>) {
+    tokio::spawn(async move {
+        let timeout = Duration::from_secs(SESSION_TIMEOUT_SECS);
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let removed = state.sessions.remove_idle(timeout).await;
+            if removed > 0 {
+                tracing::info!(
+                    "Cleaned up {} idle sessions ({} active)",
+                    removed,
+                    state.sessions.session_count().await
+                );
+            }
         }
     });
 }

@@ -1,0 +1,15 @@
+target/
+node_modules/
+ui/dist/
+ui/.svelte-kit/
+logs/
+.git/
+.env
+parish.toml
+*.db
+*.db-wal
+*.db-shm
+docs/
+.devcontainer/
+.claude/
+.github/

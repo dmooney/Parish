@@ -1,30 +1,40 @@
 //! WebSocket handler for server-push events.
 //!
-//! Each connected client gets a WebSocket that receives JSON-encoded
-//! [`ServerEvent`] frames from the [`EventBus`].
+//! Each connected client gets a WebSocket scoped to their session,
+//! receiving JSON-encoded [`ServerEvent`] frames from that session's
+//! [`EventBus`].
 
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-use crate::state::AppState;
+use crate::routes::SessionQuery;
+use crate::state::{GameSession, ServerState};
 
-/// Upgrades the HTTP connection to a WebSocket.
+/// Upgrades the HTTP connection to a WebSocket scoped to a session.
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let session = state
+        .sessions
+        .get(&q.session)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+    session.touch().await;
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, session)))
 }
 
 /// Handles a single WebSocket connection.
 ///
-/// Subscribes to the [`EventBus`] and forwards each event as a JSON text
-/// frame until the client disconnects or the bus is dropped.
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    let mut rx = state.event_bus.subscribe();
+/// Subscribes to the session's [`EventBus`] and forwards each event as a
+/// JSON text frame until the client disconnects or the bus is dropped.
+async fn handle_socket(mut socket: WebSocket, session: Arc<GameSession>) {
+    let mut rx = session.event_bus.subscribe();
     tracing::info!("WebSocket client connected");
 
     loop {
@@ -54,7 +64,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(_)) => {
-                        // Client messages are ignored (commands use REST)
+                        // Touch session on client activity
+                        session.touch().await;
                     }
                     _ => break,
                 }

@@ -4,6 +4,9 @@
  * In Tauri mode, uses `@tauri-apps/api` invoke/listen.
  * In browser mode, uses fetch for commands and WebSocket for events.
  * All exported function signatures are identical regardless of transport.
+ *
+ * Browser sessions: on first load, `initSession()` creates a server-side
+ * game session and stores the session ID for all subsequent requests.
  */
 
 import type {
@@ -26,6 +29,33 @@ import type {
 
 const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+// ── Session management (browser mode) ──────────────────────────────────────
+
+let sessionId: string | null = null;
+
+/**
+ * Creates a new game session on the server.
+ * Must be called before any other commands in browser mode.
+ */
+export async function initSession(): Promise<void> {
+	if (IS_TAURI) return;
+
+	const resp = await fetch('/api/session', { method: 'POST' });
+	if (!resp.ok) {
+		throw new Error(`Failed to create session: ${resp.status} ${resp.statusText}`);
+	}
+	const data = (await resp.json()) as { session_id: string };
+	sessionId = data.session_id;
+}
+
+/**
+ * Returns the query string suffix for the current session.
+ */
+function sessionParam(): string {
+	if (!sessionId) return '';
+	return `session=${encodeURIComponent(sessionId)}`;
+}
+
 // ── Commands ────────────────────────────────────────────────────────────────
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
@@ -35,7 +65,9 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 	}
 	// Web mode: REST API
 	const endpoint = `/api/${name.replace(/^get_/, '').replace(/_/g, '-')}`;
-	const resp = await fetch(endpoint, {
+	const sep = endpoint.includes('?') ? '&' : '?';
+	const url = sessionId ? `${endpoint}${sep}${sessionParam()}` : endpoint;
+	const resp = await fetch(url, {
 		method: args ? 'POST' : 'GET',
 		headers: args ? { 'Content-Type': 'application/json' } : {},
 		body: args ? JSON.stringify(args) : undefined
@@ -95,7 +127,8 @@ function ensureWebSocket(): void {
 	if (IS_TAURI || ws) return;
 
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-	const url = `${protocol}//${window.location.host}/api/ws`;
+	const sp = sessionId ? `?${sessionParam()}` : '';
+	const url = `${protocol}//${window.location.host}/api/ws${sp}`;
 
 	ws = new WebSocket(url);
 

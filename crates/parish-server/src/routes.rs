@@ -1,13 +1,13 @@
 //! HTTP route handlers for the Parish web server.
 //!
-//! Each route maps to a Tauri command, calling the shared handlers in
-//! [`parish_core::ipc`] and returning JSON responses.
+//! Each route extracts a session ID from the query string and operates
+//! on that session's isolated game state. The inference pipeline is shared.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use tokio::sync::mpsc;
@@ -27,42 +27,112 @@ use parish_core::world::movement::{self, MovementResult};
 
 use parish_core::debug_snapshot::{self, DebugSnapshot, InferenceDebug};
 
-use crate::state::{AppState, GameConfig};
+use crate::state::{GameConfig, GameSession, ServerState};
 
 /// Monotonically increasing request ID counter for inference requests.
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Query parameter for session identification.
+#[derive(serde::Deserialize)]
+pub struct SessionQuery {
+    /// The session UUID.
+    pub session: String,
+}
+
+/// Response body for session creation.
+#[derive(serde::Serialize)]
+pub struct CreateSessionResponse {
+    /// The newly created session UUID.
+    pub session_id: String,
+}
+
+/// Helper: look up a session and touch its activity timestamp.
+async fn get_session(
+    state: &Arc<ServerState>,
+    session_id: &str,
+) -> Result<Arc<GameSession>, StatusCode> {
+    let session = state
+        .sessions
+        .get(session_id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+    session.touch().await;
+    Ok(session)
+}
+
+// ── Session management ─────────────────────────────────────────────────────
+
+/// `POST /api/session` — creates a new game session.
+pub async fn create_session(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Json<CreateSessionResponse>, StatusCode> {
+    let (id, session) = state
+        .sessions
+        .create_session()
+        .await
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    // Spawn per-session background ticks
+    crate::spawn_session_ticks(Arc::clone(&session));
+
+    tracing::info!("Created session {}", id);
+    Ok(Json(CreateSessionResponse { session_id: id }))
+}
+
 // ── Query endpoints ─────────────────────────────────────────────────────────
 
 /// `GET /api/world-snapshot` — returns the current world snapshot.
-pub async fn get_world_snapshot(State(state): State<Arc<AppState>>) -> Json<WorldSnapshot> {
-    let world = state.world.lock().await;
-    Json(parish_core::ipc::snapshot_from_world(&world))
+pub async fn get_world_snapshot(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
+) -> Result<Json<WorldSnapshot>, StatusCode> {
+    let session = get_session(&state, &q.session).await?;
+    let world = session.world.lock().await;
+    Ok(Json(parish_core::ipc::snapshot_from_world(&world)))
 }
 
 /// `GET /api/map` — returns the map with all locations and edges.
-pub async fn get_map(State(state): State<Arc<AppState>>) -> Json<MapData> {
-    let world = state.world.lock().await;
-    Json(parish_core::ipc::build_map_data(&world))
+pub async fn get_map(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
+) -> Result<Json<MapData>, StatusCode> {
+    let session = get_session(&state, &q.session).await?;
+    let world = session.world.lock().await;
+    Ok(Json(parish_core::ipc::build_map_data(&world)))
 }
 
 /// `GET /api/npcs-here` — returns NPCs at the player's current location.
-pub async fn get_npcs_here(State(state): State<Arc<AppState>>) -> Json<Vec<NpcInfo>> {
-    let world = state.world.lock().await;
-    let npc_manager = state.npc_manager.lock().await;
-    Json(parish_core::ipc::build_npcs_here(&world, &npc_manager))
+pub async fn get_npcs_here(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
+) -> Result<Json<Vec<NpcInfo>>, StatusCode> {
+    let session = get_session(&state, &q.session).await?;
+    let world = session.world.lock().await;
+    let npc_manager = session.npc_manager.lock().await;
+    Ok(Json(parish_core::ipc::build_npcs_here(
+        &world,
+        &npc_manager,
+    )))
 }
 
 /// `GET /api/theme` — returns the current time-of-day theme palette.
-pub async fn get_theme(State(state): State<Arc<AppState>>) -> Json<ThemePalette> {
-    let world = state.world.lock().await;
-    Json(parish_core::ipc::build_theme(&world))
+pub async fn get_theme(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
+) -> Result<Json<ThemePalette>, StatusCode> {
+    let session = get_session(&state, &q.session).await?;
+    let world = session.world.lock().await;
+    Ok(Json(parish_core::ipc::build_theme(&world)))
 }
 
 /// `GET /api/debug-snapshot` — returns full debug state for the debug panel.
-pub async fn get_debug_snapshot(State(state): State<Arc<AppState>>) -> Json<DebugSnapshot> {
-    let world = state.world.lock().await;
-    let npc_manager = state.npc_manager.lock().await;
+pub async fn get_debug_snapshot(
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
+) -> Result<Json<DebugSnapshot>, StatusCode> {
+    let session = get_session(&state, &q.session).await?;
+    let world = session.world.lock().await;
+    let npc_manager = session.npc_manager.lock().await;
     let config = state.config.lock().await;
     let events = std::collections::VecDeque::new();
     let inference = InferenceDebug {
@@ -75,12 +145,12 @@ pub async fn get_debug_snapshot(State(state): State<Arc<AppState>>) -> Json<Debu
         improv_enabled: config.improv_enabled,
         call_log: Vec::new(),
     };
-    Json(debug_snapshot::build_debug_snapshot(
+    Ok(Json(debug_snapshot::build_debug_snapshot(
         &world,
         &npc_manager,
         &events,
         &inference,
-    ))
+    )))
 }
 
 // ── Input endpoint ──────────────────────────────────────────────────────────
@@ -94,16 +164,18 @@ pub struct SubmitInputRequest {
 
 /// `POST /api/submit-input` — processes player text input.
 pub async fn submit_input(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<ServerState>>,
+    Query(q): Query<SessionQuery>,
     Json(body): Json<SubmitInputRequest>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, StatusCode> {
+    let session = get_session(&state, &q.session).await?;
     let text = body.text.trim().to_string();
     if text.is_empty() {
-        return StatusCode::OK;
+        return Ok(StatusCode::OK);
     }
 
     // Emit the player's own text as a log entry
-    state.event_bus.emit(
+    session.event_bus.emit(
         "text-log",
         &TextLogPayload {
             source: "player".to_string(),
@@ -113,20 +185,20 @@ pub async fn submit_input(
 
     match classify_input(&text) {
         InputResult::SystemCommand(cmd) => {
-            handle_system_command(cmd, &state).await;
+            handle_system_command(cmd, &session, &state).await;
         }
         InputResult::GameInput(raw) => {
-            handle_game_input(raw, &state).await;
+            handle_game_input(raw, &session, &state).await;
         }
     }
 
-    StatusCode::OK
+    Ok(StatusCode::OK)
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
 /// Rebuilds the inference pipeline after a provider/key/client change.
-async fn rebuild_inference(state: &Arc<AppState>) {
+async fn rebuild_inference(state: &Arc<ServerState>) {
     let config = state.config.lock().await;
     let new_client = OpenAiClient::new(&config.base_url, config.api_key.as_deref());
     drop(config);
@@ -143,7 +215,11 @@ async fn rebuild_inference(state: &Arc<AppState>) {
 }
 
 /// Handles `/command` system inputs.
-async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<AppState>) {
+async fn handle_system_command(
+    cmd: parish_core::input::Command,
+    session: &Arc<GameSession>,
+    state: &Arc<ServerState>,
+) {
     use parish_core::input::Command;
     use parish_core::ipc::mask_key;
 
@@ -151,17 +227,17 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
 
     let response = match cmd {
         Command::Pause => {
-            let mut world = state.world.lock().await;
+            let mut world = session.world.lock().await;
             world.clock.pause();
             "The clocks of the parish stand still.".to_string()
         }
         Command::Resume => {
-            let mut world = state.world.lock().await;
+            let mut world = session.world.lock().await;
             world.clock.resume();
             "Time stirs again in the parish.".to_string()
         }
         Command::Status => {
-            let world = state.world.lock().await;
+            let world = session.world.lock().await;
             let tod = world.clock.time_of_day();
             let season = world.clock.season();
             let loc = world.current_location().name.clone();
@@ -185,7 +261,7 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
             "The web server cannot be quit from the game. Close your browser tab.".to_string()
         }
         Command::ShowSpeed => {
-            let world = state.world.lock().await;
+            let world = session.world.lock().await;
             let s = world
                 .clock
                 .current_speed()
@@ -194,7 +270,7 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
             format!("Speed: {}", s)
         }
         Command::SetSpeed(speed) => {
-            let mut world = state.world.lock().await;
+            let mut world = session.world.lock().await;
             world.clock.set_speed(speed);
             speed.activation_message().to_string()
         }
@@ -381,7 +457,7 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
         rebuild_inference(state).await;
     }
 
-    state.event_bus.emit(
+    session.event_bus.emit(
         "text-log",
         &TextLogPayload {
             source: "system".to_string(),
@@ -389,15 +465,15 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
         },
     );
 
-    let world = state.world.lock().await;
-    state.event_bus.emit(
+    let world = session.world.lock().await;
+    session.event_bus.emit(
         "world-update",
         &parish_core::ipc::snapshot_from_world(&world),
     );
 }
 
 /// Handles free-form game input: parses intent then dispatches.
-async fn handle_game_input(raw: String, state: &Arc<AppState>) {
+async fn handle_game_input(raw: String, session: &Arc<GameSession>, state: &Arc<ServerState>) {
     let intent = parse_intent_local(&raw);
 
     let is_move = intent
@@ -415,9 +491,9 @@ async fn handle_game_input(raw: String, state: &Arc<AppState>) {
 
     if is_move {
         if let Some(target) = move_target {
-            handle_movement(&target, state).await;
+            handle_movement(&target, session).await;
         } else {
-            state.event_bus.emit(
+            session.event_bus.emit(
                 "text-log",
                 &TextLogPayload {
                     source: "system".to_string(),
@@ -429,17 +505,17 @@ async fn handle_game_input(raw: String, state: &Arc<AppState>) {
     }
 
     if is_look {
-        handle_look(state).await;
+        handle_look(session).await;
         return;
     }
 
-    handle_npc_conversation(raw, state).await;
+    handle_npc_conversation(raw, session, state).await;
 }
 
 /// Resolves movement to a named location.
-async fn handle_movement(target: &str, state: &Arc<AppState>) {
+async fn handle_movement(target: &str, session: &Arc<GameSession>) {
     let result = {
-        let world = state.world.lock().await;
+        let world = session.world.lock().await;
         movement::resolve_movement(target, &world.graph, world.player_location)
     };
 
@@ -451,7 +527,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
             ..
         } => {
             {
-                let mut world = state.world.lock().await;
+                let mut world = session.world.lock().await;
                 world.clock.advance(minutes as i64);
                 world.player_location = destination;
 
@@ -471,7 +547,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
                 }
             }
 
-            state.event_bus.emit(
+            session.event_bus.emit(
                 "text-log",
                 &TextLogPayload {
                     source: "system".to_string(),
@@ -479,16 +555,16 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
                 },
             );
 
-            handle_look(state).await;
+            handle_look(session).await;
 
-            let world = state.world.lock().await;
-            state.event_bus.emit(
+            let world = session.world.lock().await;
+            session.event_bus.emit(
                 "world-update",
                 &parish_core::ipc::snapshot_from_world(&world),
             );
         }
         MovementResult::AlreadyHere => {
-            state.event_bus.emit(
+            session.event_bus.emit(
                 "text-log",
                 &TextLogPayload {
                     source: "system".to_string(),
@@ -497,9 +573,9 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
             );
         }
         MovementResult::NotFound(name) => {
-            let world = state.world.lock().await;
+            let world = session.world.lock().await;
             let exits = format_exits(world.player_location, &world.graph);
-            state.event_bus.emit(
+            session.event_bus.emit(
                 "text-log",
                 &TextLogPayload {
                     source: "system".to_string(),
@@ -514,9 +590,9 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
 }
 
 /// Renders the current location description and exits.
-async fn handle_look(state: &Arc<AppState>) {
-    let world = state.world.lock().await;
-    let npc_manager = state.npc_manager.lock().await;
+async fn handle_look(session: &Arc<GameSession>) {
+    let world = session.world.lock().await;
+    let npc_manager = session.npc_manager.lock().await;
 
     let desc = if let Some(loc_data) = world.current_location_data() {
         let tod = world.clock.time_of_day();
@@ -534,7 +610,7 @@ async fn handle_look(state: &Arc<AppState>) {
 
     let exits = format_exits(world.player_location, &world.graph);
 
-    state.event_bus.emit(
+    session.event_bus.emit(
         "text-log",
         &TextLogPayload {
             source: "system".to_string(),
@@ -544,10 +620,14 @@ async fn handle_look(state: &Arc<AppState>) {
 }
 
 /// Routes input to the NPC at the player's location, or shows idle message.
-async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
+async fn handle_npc_conversation(
+    raw: String,
+    session: &Arc<GameSession>,
+    state: &Arc<ServerState>,
+) {
     let (npc_name, npc_id, system_prompt, context, queue) = {
-        let world = state.world.lock().await;
-        let mut npc_manager = state.npc_manager.lock().await;
+        let world = session.world.lock().await;
+        let mut npc_manager = session.npc_manager.lock().await;
         let queue = state.inference_queue.lock().await;
 
         let npcs_here = npc_manager.npcs_at(world.player_location);
@@ -577,7 +657,7 @@ async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
             "The clouds shift. The parish carries on.",
         ];
         let idx = REQUEST_ID.fetch_add(1, Ordering::SeqCst) as usize % idle_messages.len();
-        state.event_bus.emit(
+        session.event_bus.emit(
             "text-log",
             &TextLogPayload {
                 source: "system".to_string(),
@@ -593,14 +673,14 @@ async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
     };
     let req_id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
 
-    state
+    session
         .event_bus
         .emit("loading", &LoadingPayload { active: true });
 
     let (token_tx, token_rx) = mpsc::unbounded_channel::<String>();
 
     let display_label = capitalize_first(&npc_name);
-    state.event_bus.emit(
+    session.event_bus.emit(
         "text-log",
         &TextLogPayload {
             source: display_label,
@@ -620,12 +700,12 @@ async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
         .await
     {
         Ok(mut response_rx) => {
-            let bus = &state.event_bus;
+            let bus = &session.event_bus;
 
             let stream_handle = tokio::spawn({
-                let state_clone = Arc::clone(state);
+                let session_clone = Arc::clone(session);
                 async move {
-                    crate::streaming::stream_npc_response(&state_clone.event_bus, token_rx).await
+                    crate::streaming::stream_npc_response(&session_clone.event_bus, token_rx).await
                 }
             });
 
@@ -666,7 +746,7 @@ async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
         }
     }
 
-    state
+    session
         .event_bus
         .emit("loading", &LoadingPayload { active: false });
 }

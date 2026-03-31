@@ -14,6 +14,7 @@
 	import { savePickerVisible } from '../stores/save';
 	import { palette } from '../stores/theme';
 	import {
+		initSession,
 		getWorldSnapshot,
 		getMap,
 		getNpcsHere,
@@ -49,6 +50,13 @@
 	}
 
 	onMount(async () => {
+		// Create a server-side session (no-op in Tauri mode)
+		try {
+			await initSession();
+		} catch (e) {
+			console.warn('Session init failed (expected in Tauri dev):', e);
+		}
+
 		// Initial data fetch (theme first to avoid color flash)
 		try {
 			const [snap, map, npcs, theme] = await Promise.all([
