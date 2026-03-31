@@ -203,7 +203,14 @@ impl GameTestHarness {
         };
 
         // Simulation tick after each action
-        self.app.npc_manager.assign_tiers(&self.app.world, &[]);
+        let tier_transitions = self.app.npc_manager.assign_tiers(&self.app.world, &[]);
+        for tt in &tier_transitions {
+            let direction = if tt.promoted { "promoted" } else { "demoted" };
+            self.app.debug_event(format!(
+                "[tier] {} {} {:?} → {:?}",
+                tt.npc_name, direction, tt.old_tier, tt.new_tier,
+            ));
+        }
         let schedule_events = self
             .app
             .npc_manager
@@ -1398,5 +1405,23 @@ mod tests {
         } else {
             panic!("Expected SystemCommand");
         }
+    }
+
+    #[test]
+    fn test_tier_transitions_logged_on_movement() {
+        let mut h = GameTestHarness::new();
+
+        // Move far from starting location to trigger tier changes
+        h.execute("go to crossroads");
+        h.execute("go to fairy fort");
+
+        // Check that tier transition events appeared in the debug log
+        let log = h.debug_log();
+        let has_tier_event = log.iter().any(|e| e.contains("[tier]"));
+        assert!(
+            has_tier_event,
+            "Expected tier transition events in debug log after movement, got: {:?}",
+            log
+        );
     }
 }

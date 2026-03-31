@@ -775,6 +775,30 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
                 },
             );
 
+            // Reassign tiers after movement
+            {
+                let world = state.world.lock().await;
+                let mut npc_manager = state.npc_manager.lock().await;
+                let tier_transitions = npc_manager.assign_tiers(&world, &[]);
+                if !tier_transitions.is_empty() {
+                    let mut debug_events = state.debug_events.lock().await;
+                    for tt in &tier_transitions {
+                        if debug_events.len() >= crate::DEBUG_EVENT_CAPACITY {
+                            debug_events.pop_front();
+                        }
+                        let direction = if tt.promoted { "promoted" } else { "demoted" };
+                        debug_events.push_back(DebugEvent {
+                            timestamp: String::new(),
+                            category: "tier".to_string(),
+                            message: format!(
+                                "{} {} {:?} → {:?}",
+                                tt.npc_name, direction, tt.old_tier, tt.new_tier,
+                            ),
+                        });
+                    }
+                }
+            }
+
             // Emit arrival description
             handle_look(state, app).await;
 

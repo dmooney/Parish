@@ -221,7 +221,14 @@ pub async fn run_headless(
         }
 
         // Simulation tick after each player action
-        app.npc_manager.assign_tiers(&app.world, &[]);
+        let tier_transitions = app.npc_manager.assign_tiers(&app.world, &[]);
+        for tt in &tier_transitions {
+            let direction = if tt.promoted { "promoted" } else { "demoted" };
+            app.debug_event(format!(
+                "[tier] {} {} {:?} → {:?}",
+                tt.npc_name, direction, tt.old_tier, tt.new_tier,
+            ));
+        }
         let schedule_events = app
             .npc_manager
             .tick_schedules(&app.world.clock, &app.world.graph);

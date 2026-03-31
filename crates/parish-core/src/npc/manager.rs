@@ -71,6 +71,21 @@ impl ScheduleEvent {
     }
 }
 
+/// A tier transition that occurred during `assign_tiers`.
+#[derive(Debug, Clone)]
+pub struct TierTransition {
+    /// Which NPC changed tier.
+    pub npc_id: NpcId,
+    /// Name of the NPC.
+    pub npc_name: String,
+    /// Previous cognitive tier.
+    pub old_tier: CogTier,
+    /// New cognitive tier.
+    pub new_tier: CogTier,
+    /// Whether this was a promotion (closer to player).
+    pub promoted: bool,
+}
+
 /// Central coordinator for all NPC state and behavior.
 ///
 /// Owns all NPCs, assigns cognitive tiers based on distance from the
@@ -210,7 +225,11 @@ impl NpcManager {
     /// (demotion) is performed to manage narrative context. Tier 1
     /// arrivals are published as [`GameEvent::NpcArrived`] on the
     /// world's event bus.
-    pub fn assign_tiers(&mut self, world: &WorldState, recent_events: &[GameEvent]) {
+    pub fn assign_tiers(
+        &mut self,
+        world: &WorldState,
+        recent_events: &[GameEvent],
+    ) -> Vec<TierTransition> {
         let player_location = world.player_location;
         let graph = &world.graph;
         let game_time = world.clock.now();
@@ -257,9 +276,16 @@ impl NpcManager {
         }
 
         // Second pass: handle tier transitions (inflate/deflate)
+        let mut transitions = Vec::new();
+
         for (npc_id, old_tier, new_tier) in &changes {
             let promoted = tier_rank(*new_tier) < tier_rank(*old_tier);
             let demoted = tier_rank(*new_tier) > tier_rank(*old_tier);
+            let npc_name = self
+                .npcs
+                .get(npc_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
 
             if promoted && let Some(npc) = self.npcs.get_mut(npc_id) {
                 inflate_npc_context(npc, recent_events, game_time);
@@ -295,15 +321,25 @@ impl NpcManager {
                     timestamp: game_time,
                 });
             }
+
+            transitions.push(TierTransition {
+                npc_id: *npc_id,
+                npc_name,
+                old_tier: *old_tier,
+                new_tier: *new_tier,
+                promoted,
+            });
         }
 
         tracing::debug!(
             player_location = player_location.0,
             tier1 = self.tier1_npcs().len(),
             tier2 = self.tier2_npcs().len(),
-            transitions = changes.len(),
+            transitions = transitions.len(),
             "Tier assignment complete"
         );
+
+        transitions
     }
 
     /// Returns the current cognitive tier for an NPC.

@@ -743,9 +743,38 @@ pub fn run() {
                         {
                             let world = state_tick.world.lock().await;
                             let mut npc_mgr = state_tick.npc_manager.lock().await;
-                            let events = npc_mgr.tick_schedules(&world.clock, &world.graph);
-                            if !events.is_empty() {
-                                tracing::debug!("NPC schedule tick: {} events", events.len());
+                            let schedule_events =
+                                npc_mgr.tick_schedules(&world.clock, &world.graph);
+                            let tier_transitions = npc_mgr.assign_tiers(&world, &[]);
+
+                            // Log schedule events and tier transitions to debug panel
+                            if !schedule_events.is_empty() || !tier_transitions.is_empty() {
+                                let mut debug_events = state_tick.debug_events.lock().await;
+                                for evt in &schedule_events {
+                                    if debug_events.len() >= crate::DEBUG_EVENT_CAPACITY {
+                                        debug_events.pop_front();
+                                    }
+                                    debug_events.push_back(DebugEvent {
+                                        timestamp: String::new(),
+                                        category: "schedule".to_string(),
+                                        message: evt.debug_string(),
+                                    });
+                                }
+                                for tt in &tier_transitions {
+                                    if debug_events.len() >= crate::DEBUG_EVENT_CAPACITY {
+                                        debug_events.pop_front();
+                                    }
+                                    let direction =
+                                        if tt.promoted { "promoted" } else { "demoted" };
+                                    debug_events.push_back(DebugEvent {
+                                        timestamp: String::new(),
+                                        category: "tier".to_string(),
+                                        message: format!(
+                                            "{} {} {:?} → {:?}",
+                                            tt.npc_name, direction, tt.old_tier, tt.new_tier,
+                                        ),
+                                    });
+                                }
                             }
                         }
                     }
