@@ -21,7 +21,8 @@ use parish_core::inference::{
     InferenceLog, InferenceQueue, new_inference_log, spawn_inference_worker,
 };
 use parish_core::npc::manager::NpcManager;
-use parish_core::world::palette::{RawColor, RawPalette, compute_palette};
+use parish_core::world::palette::{RawColor, RawPalette, compute_themed_palette};
+use parish_core::world::themes::{ColorTheme, is_dark_hour};
 use parish_core::world::transport::TransportConfig;
 use parish_core::world::{LocationId, WorldState};
 
@@ -120,10 +121,13 @@ pub struct ThemePalette {
     pub border: String,
     /// Muted colour for secondary text.
     pub muted: String,
+    /// Whether the dark variant is currently active.
+    pub is_dark: bool,
 }
 
-impl From<RawPalette> for ThemePalette {
-    fn from(raw: RawPalette) -> Self {
+impl ThemePalette {
+    /// Converts a [`RawPalette`] into CSS hex strings with the `is_dark` flag.
+    fn from_raw(raw: RawPalette, is_dark: bool) -> Self {
         let hex = |c: RawColor| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
         ThemePalette {
             bg: hex(raw.bg),
@@ -133,7 +137,14 @@ impl From<RawPalette> for ThemePalette {
             input_bg: hex(raw.input_bg),
             border: hex(raw.border),
             muted: hex(raw.muted),
+            is_dark,
         }
+    }
+}
+
+impl From<RawPalette> for ThemePalette {
+    fn from(raw: RawPalette) -> Self {
+        ThemePalette::from_raw(raw, false)
     }
 }
 
@@ -245,6 +256,8 @@ pub struct AppState {
     pub current_branch_name: Mutex<Option<String>>,
     /// Transport mode configuration from the loaded game mod.
     pub transport: TransportConfig,
+    /// Active color theme for palette selection.
+    pub active_theme: ColorTheme,
 }
 
 // ── Data path resolution ─────────────────────────────────────────────────────
@@ -472,6 +485,12 @@ pub fn run() {
         }
     };
 
+    // Extract active color theme from the game mod
+    let active_theme = game_mod
+        .as_ref()
+        .map(|gm| gm.themes.get(&gm.ui.theme.default_theme).clone())
+        .unwrap_or_else(|| parish_core::world::themes::fallback_theme());
+
     // Extract pronunciation data from the game mod
     let pronunciations = game_mod
         .as_ref()
@@ -494,6 +513,7 @@ pub fn run() {
         current_branch_id: Mutex::new(None),
         current_branch_name: Mutex::new(None),
         transport,
+        active_theme,
         config: Mutex::new(GameConfig {
             provider_name,
             base_url,
@@ -552,13 +572,19 @@ pub fn run() {
                         use chrono::Timelike;
                         let world = state_ss.world.lock().await;
                         let now = world.clock.now();
-                        let raw = compute_palette(
-                            now.hour(),
-                            now.minute(),
+                        let hour = now.hour();
+                        let dark = is_dark_hour(hour);
+                        let base = state_ss.active_theme.palette_for_hour(hour);
+                        let raw = compute_themed_palette(
+                            base,
                             world.clock.season(),
                             world.weather,
+                            &parish_core::config::PaletteConfig::default(),
                         );
-                        let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, ThemePalette::from(raw));
+                        let _ = handle_ss.emit(
+                            events::EVENT_THEME_UPDATE,
+                            ThemePalette::from_raw(raw, dark),
+                        );
                     }
                     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -577,13 +603,16 @@ pub fn run() {
                             world.clock.advance(delta);
                             // Push updated theme to frontend
                             let now = world.clock.now();
-                            let raw = compute_palette(
-                                now.hour(),
-                                now.minute(),
+                            let hour = now.hour();
+                            let dark = is_dark_hour(hour);
+                            let base_pal = state_ss.active_theme.palette_for_hour(hour);
+                            let raw = compute_themed_palette(
+                                base_pal,
                                 world.clock.season(),
                                 world.weather,
+                                &parish_core::config::PaletteConfig::default(),
                             );
-                            let palette = ThemePalette::from(raw);
+                            let palette = ThemePalette::from_raw(raw, dark);
                             let _ = handle_ss.emit(events::EVENT_THEME_UPDATE, palette);
                         }
 
@@ -807,13 +836,16 @@ pub fn run() {
                         let world = state_theme.world.lock().await;
                         use chrono::Timelike;
                         let now = world.clock.now();
-                        let raw = compute_palette(
-                            now.hour(),
-                            now.minute(),
+                        let hour = now.hour();
+                        let dark = is_dark_hour(hour);
+                        let base = state_theme.active_theme.palette_for_hour(hour);
+                        let raw = compute_themed_palette(
+                            base,
                             world.clock.season(),
                             world.weather,
+                            &parish_core::config::PaletteConfig::default(),
                         );
-                        let palette = ThemePalette::from(raw);
+                        let palette = ThemePalette::from_raw(raw, dark);
                         let _ = handle_theme.emit(events::EVENT_THEME_UPDATE, palette);
                     }
                 });

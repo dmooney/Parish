@@ -452,6 +452,50 @@ pub fn compute_palette(hour: u32, minute: u32, season: Season, weather: Weather)
     compute_palette_with_config(hour, minute, season, weather, &PaletteConfig::default())
 }
 
+/// Computes a themed palette: picks the light or dark variant of the given
+/// theme based on time of day, then applies season/weather tinting and
+/// contrast enforcement.
+///
+/// Returns `(palette, is_dark)` where `is_dark` indicates which variant was
+/// selected. The frontend uses this flag to trigger a wipe transition when
+/// the variant flips.
+pub fn compute_themed_palette(
+    base: &RawPalette,
+    season: Season,
+    weather: Weather,
+    config: &PaletteConfig,
+) -> RawPalette {
+    let mut palette = *base;
+
+    // Season tinting
+    let (rm, gm, bm, desat) = season_tint_with_config(season, config);
+    palette.bg = tint_color(palette.bg, rm, gm, bm, desat, 1.0);
+    palette.fg = tint_color(palette.fg, rm, gm, bm, desat, 1.0);
+    palette.accent = tint_color(palette.accent, rm, gm, bm, desat, 1.0);
+    palette.panel_bg = tint_color(palette.panel_bg, rm, gm, bm, desat, 1.0);
+    palette.input_bg = tint_color(palette.input_bg, rm, gm, bm, desat, 1.0);
+    palette.border = tint_color(palette.border, rm, gm, bm, desat, 1.0);
+    palette.muted = tint_color(palette.muted, rm, gm, bm, desat, 1.0);
+
+    // Weather tinting
+    let (rm, gm, bm, desat, bright, contrast_reduction) = weather_tint_with_config(weather, config);
+    palette.bg = tint_color(palette.bg, rm, gm, bm, desat, bright);
+    palette.fg = tint_color(palette.fg, rm, gm, bm, desat, bright);
+    palette.accent = tint_color(palette.accent, rm, gm, bm, desat, bright);
+    palette.panel_bg = tint_color(palette.panel_bg, rm, gm, bm, desat, bright);
+    palette.input_bg = tint_color(palette.input_bg, rm, gm, bm, desat, bright);
+    palette.border = tint_color(palette.border, rm, gm, bm, desat, bright);
+    palette.muted = tint_color(palette.muted, rm, gm, bm, desat, bright);
+
+    if contrast_reduction > 0.0 {
+        palette.fg = lerp_color(palette.fg, palette.bg, contrast_reduction);
+        palette.muted = lerp_color(palette.muted, palette.bg, contrast_reduction * 0.5);
+    }
+
+    ensure_contrast_with_config(&mut palette, config);
+    palette
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

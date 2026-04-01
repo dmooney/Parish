@@ -54,10 +54,13 @@ pub async fn get_npcs_here(State(state): State<Arc<AppState>>) -> Json<Vec<NpcIn
     Json(parish_core::ipc::build_npcs_here(&world, &npc_manager))
 }
 
-/// `GET /api/theme` — returns the current time-of-day theme palette.
+/// `GET /api/theme` — returns the current theme palette (light or dark variant).
 pub async fn get_theme(State(state): State<Arc<AppState>>) -> Json<ThemePalette> {
     let world = state.world.lock().await;
-    Json(parish_core::ipc::build_theme(&world))
+    Json(parish_core::ipc::build_themed_palette(
+        &world,
+        &state.active_theme,
+    ))
 }
 
 /// `GET /api/ui-config` — returns UI configuration (splash text, labels, accent).

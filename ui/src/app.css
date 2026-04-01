@@ -45,6 +45,24 @@ body {
 	flex: 0 0 auto !important;
 }
 
+/* Theme wipe transition overlay */
+.theme-wipe {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	pointer-events: none;
+	animation: wipe-across 600ms ease-in-out forwards;
+}
+
+@keyframes wipe-across {
+	0% {
+		clip-path: inset(0 100% 0 0);
+	}
+	100% {
+		clip-path: inset(0 0 0 0);
+	}
+}
+
 ::-webkit-scrollbar {
 	width: 6px;
 }

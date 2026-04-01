@@ -11,6 +11,7 @@ pub mod geo;
 pub mod graph;
 pub mod movement;
 pub mod palette;
+pub mod themes;
 pub mod time;
 pub mod transport;
 

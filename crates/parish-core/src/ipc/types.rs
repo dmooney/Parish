@@ -103,10 +103,16 @@ pub struct ThemePalette {
     pub border: String,
     /// Muted colour for secondary text.
     pub muted: String,
+    /// Whether the dark variant is active (used by the frontend to trigger
+    /// a wipe transition when this flag flips).
+    #[serde(default)]
+    pub is_dark: bool,
 }
 
-impl From<RawPalette> for ThemePalette {
-    fn from(raw: RawPalette) -> Self {
+impl ThemePalette {
+    /// Converts a [`RawPalette`] into CSS hex strings, tagging it with the
+    /// `is_dark` flag so the frontend knows which variant is active.
+    pub fn from_raw(raw: RawPalette, is_dark: bool) -> Self {
         let hex = |c: RawColor| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
         ThemePalette {
             bg: hex(raw.bg),
@@ -116,7 +122,14 @@ impl From<RawPalette> for ThemePalette {
             input_bg: hex(raw.input_bg),
             border: hex(raw.border),
             muted: hex(raw.muted),
+            is_dark,
         }
+    }
+}
+
+impl From<RawPalette> for ThemePalette {
+    fn from(raw: RawPalette) -> Self {
+        ThemePalette::from_raw(raw, false)
     }
 }
 
@@ -173,6 +186,23 @@ mod tests {
         assert_eq!(palette.bg, "#0a141e");
         assert_eq!(palette.fg, "#c8d2dc");
         assert_eq!(palette.accent, "#ff8000");
+        assert!(!palette.is_dark);
+    }
+
+    #[test]
+    fn theme_palette_from_raw_with_dark_flag() {
+        let raw = RawPalette {
+            bg: RawColor::new(10, 20, 30),
+            fg: RawColor::new(200, 210, 220),
+            accent: RawColor::new(255, 128, 0),
+            panel_bg: RawColor::new(15, 25, 35),
+            input_bg: RawColor::new(20, 30, 40),
+            border: RawColor::new(50, 60, 70),
+            muted: RawColor::new(100, 110, 120),
+        };
+        let palette = ThemePalette::from_raw(raw, true);
+        assert!(palette.is_dark);
+        assert_eq!(palette.bg, "#0a141e");
     }
 
     #[test]

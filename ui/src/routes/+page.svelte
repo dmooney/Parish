@@ -13,7 +13,7 @@
 	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen } from '../stores/game';
 	import { debugVisible, debugSnapshot } from '../stores/debug';
 	import { savePickerVisible } from '../stores/save';
-	import { palette } from '../stores/theme';
+	import { palette, wipeActive, wipeBg } from '../stores/theme';
 	import {
 		getWorldSnapshot,
 		getMap,
@@ -205,6 +205,10 @@
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
+
+{#if $wipeActive}
+	<div class="theme-wipe" style="background: {$wipeBg}"></div>
+{/if}
 
 {#if $fullMapOpen}
 	<FullMapOverlay onclose={() => fullMapOpen.set(false)} />

@@ -3,3 +3,4 @@ hints_label = "Focail (Irish Words)"
 
 [theme]
 default_accent = "#c4a35a"
+default_theme = "parish-classic"

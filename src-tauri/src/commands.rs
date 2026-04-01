@@ -18,7 +18,8 @@ use parish_core::npc::parse_npc_stream_response;
 use parish_core::npc::ticks;
 use parish_core::world::description::{format_exits, render_description};
 use parish_core::world::movement::{self, MovementResult};
-use parish_core::world::palette::compute_palette;
+use parish_core::world::palette::compute_themed_palette;
+use parish_core::world::themes::is_dark_hour;
 use parish_core::world::transport::TransportMode;
 
 use crate::events::{
@@ -239,19 +240,25 @@ pub async fn get_npcs_here(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec
         .collect())
 }
 
-/// Returns the current time-of-day theme palette as CSS hex colours.
+/// Returns the current theme palette as CSS hex colours.
+///
+/// Selects the light or dark variant of the active color theme based on
+/// time of day, then applies season/weather tinting.
 #[tauri::command]
 pub async fn get_theme(state: tauri::State<'_, Arc<AppState>>) -> Result<ThemePalette, String> {
     use chrono::Timelike;
     let world = state.world.lock().await;
     let now = world.clock.now();
-    let raw = compute_palette(
-        now.hour(),
-        now.minute(),
+    let hour = now.hour();
+    let dark = is_dark_hour(hour);
+    let base = state.active_theme.palette_for_hour(hour);
+    let raw = compute_themed_palette(
+        base,
         world.clock.season(),
         world.weather,
+        &parish_core::config::PaletteConfig::default(),
     );
-    Ok(ThemePalette::from(raw))
+    Ok(ThemePalette::from_raw(raw, dark))
 }
 
 /// Returns a debug snapshot of all game state for the debug panel.

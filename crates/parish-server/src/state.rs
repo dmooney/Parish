@@ -8,6 +8,7 @@ use parish_core::inference::InferenceQueue;
 use parish_core::inference::openai_client::OpenAiClient;
 use parish_core::npc::manager::NpcManager;
 use parish_core::world::WorldState;
+use parish_core::world::themes::ColorTheme;
 use parish_core::world::transport::TransportConfig;
 
 /// UI configuration snapshot returned by the `/api/ui-config` endpoint.
@@ -44,6 +45,8 @@ pub struct AppState {
     pub transport: TransportConfig,
     /// UI configuration from the loaded game mod.
     pub ui_config: UiConfigSnapshot,
+    /// Active color theme for palette selection.
+    pub active_theme: ColorTheme,
 }
 
 /// Mutable runtime configuration for provider, model, and cloud settings.
@@ -144,6 +147,7 @@ impl EventBus {
 }
 
 /// Creates the shared [`AppState`] from game data.
+#[allow(clippy::too_many_arguments)] // builder pattern would be overkill here
 pub fn build_app_state(
     world: WorldState,
     npc_manager: NpcManager,
@@ -152,6 +156,7 @@ pub fn build_app_state(
     cloud_client: Option<OpenAiClient>,
     transport: TransportConfig,
     ui_config: UiConfigSnapshot,
+    active_theme: ColorTheme,
 ) -> Arc<AppState> {
     Arc::new(AppState {
         world: Mutex::new(world),
@@ -163,6 +168,7 @@ pub fn build_app_state(
         event_bus: EventBus::new(256),
         transport,
         ui_config,
+        active_theme,
     })
 }
 

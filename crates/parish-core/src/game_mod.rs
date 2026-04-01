@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use crate::error::ParishError;
 use crate::npc::LanguageHint;
+use crate::world::themes::ThemeSet;
 use crate::world::transport::TransportConfig;
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,9 @@ pub struct FileRefs {
     /// Transport modes TOML file (optional; defaults to walking only).
     #[serde(default)]
     pub transport: Option<String>,
+    /// Color themes JSON file (optional; defaults to built-in Parish Classic).
+    #[serde(default)]
+    pub themes: Option<String>,
 }
 
 /// Relative paths to prompt template text files.
@@ -183,6 +187,13 @@ pub struct ThemeConfig {
     /// Default accent colour (CSS hex string).
     #[serde(default = "default_accent")]
     pub default_accent: String,
+    /// Slug of the default color theme (e.g. "parish-classic").
+    #[serde(default = "default_theme_slug")]
+    pub default_theme: String,
+}
+
+fn default_theme_slug() -> String {
+    "parish-classic".to_string()
 }
 
 /// UI configuration loaded from `ui.toml`.
@@ -216,6 +227,7 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             default_accent: default_accent(),
+            default_theme: default_theme_slug(),
         }
     }
 }
@@ -305,6 +317,8 @@ pub struct GameMod {
     pub pronunciations: Vec<PronunciationEntry>,
     /// Transport modes configuration.
     pub transport: TransportConfig,
+    /// Available color themes.
+    pub themes: ThemeSet,
 }
 
 impl GameMod {
@@ -401,6 +415,13 @@ impl GameMod {
             TransportConfig::default()
         };
 
+        // -- themes (optional) ------------------------------------------------
+        let themes = if let Some(ref themes_file) = manifest.files.themes {
+            ThemeSet::load(&mod_dir.join(themes_file))?
+        } else {
+            ThemeSet::default()
+        };
+
         Ok(Self {
             manifest,
             mod_dir,
@@ -412,6 +433,7 @@ impl GameMod {
             ui,
             pronunciations,
             transport,
+            themes,
         })
     }
 

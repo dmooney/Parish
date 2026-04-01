@@ -48,6 +48,7 @@ export interface ThemePalette {
 	input_bg: string;
 	border: string;
 	muted: string;
+	is_dark: boolean;
 }
 
 export interface LanguageHint {

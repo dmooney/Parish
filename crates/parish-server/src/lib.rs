@@ -65,6 +65,8 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         splash_text,
     };
 
+    let active_theme = parish_core::world::themes::fallback_theme();
+
     let state = build_app_state(
         world,
         npc_manager,
@@ -73,6 +75,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         cloud_client,
         transport,
         ui_config,
+        active_theme,
     );
 
     // Initialize inference queue
@@ -142,7 +145,7 @@ fn spawn_background_ticks(state: Arc<AppState>) {
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let world = state_theme.world.lock().await;
-            let palette = parish_core::ipc::build_theme(&world);
+            let palette = parish_core::ipc::build_themed_palette(&world, &state_theme.active_theme);
             state_theme.event_bus.emit("theme-update", &palette);
         }
     });

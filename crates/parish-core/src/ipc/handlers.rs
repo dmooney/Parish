@@ -7,9 +7,11 @@ use std::collections::HashSet;
 
 use chrono::Timelike;
 
+use crate::config::PaletteConfig;
 use crate::npc::manager::NpcManager;
 use crate::world::description::{format_exits, render_description};
-use crate::world::palette::compute_palette;
+use crate::world::palette::{compute_palette, compute_themed_palette};
+use crate::world::themes::{ColorTheme, is_dark_hour};
 use crate::world::transport::TransportMode;
 use crate::world::{LocationId, WorldState};
 
@@ -115,6 +117,9 @@ pub fn build_npcs_here(world: &WorldState, npc_manager: &NpcManager) -> Vec<NpcI
 }
 
 /// Builds the current [`ThemePalette`] from the world clock and weather.
+///
+/// When no color theme is provided, falls back to the legacy keyframe
+/// interpolation system.
 pub fn build_theme(world: &WorldState) -> ThemePalette {
     let now = world.clock.now();
     let raw = compute_palette(
@@ -124,6 +129,23 @@ pub fn build_theme(world: &WorldState) -> ThemePalette {
         world.weather,
     );
     ThemePalette::from(raw)
+}
+
+/// Builds a [`ThemePalette`] from a named [`ColorTheme`], selecting the
+/// light or dark variant based on time of day and applying season/weather
+/// tinting on top.
+pub fn build_themed_palette(world: &WorldState, theme: &ColorTheme) -> ThemePalette {
+    let now = world.clock.now();
+    let hour = now.hour();
+    let dark = is_dark_hour(hour);
+    let base = theme.palette_for_hour(hour);
+    let raw = compute_themed_palette(
+        base,
+        world.clock.season(),
+        world.weather,
+        &PaletteConfig::default(),
+    );
+    ThemePalette::from_raw(raw, dark)
 }
 
 /// Capitalizes the first character of a string slice.
@@ -201,5 +223,25 @@ mod tests {
         assert!(theme.bg.starts_with('#'));
         assert_eq!(theme.bg.len(), 7);
         assert!(theme.fg.starts_with('#'));
+    }
+
+    #[test]
+    fn build_themed_palette_returns_hex_colors() {
+        let world = WorldState::new();
+        let color_theme = crate::world::themes::fallback_theme();
+        let palette = build_themed_palette(&world, &color_theme);
+        assert!(palette.bg.starts_with('#'));
+        assert_eq!(palette.bg.len(), 7);
+    }
+
+    #[test]
+    fn build_themed_palette_is_dark_matches_hour() {
+        use crate::world::themes::is_dark_hour;
+        let world = WorldState::new();
+        let now = world.clock.now();
+        let hour = now.hour();
+        let color_theme = crate::world::themes::fallback_theme();
+        let palette = build_themed_palette(&world, &color_theme);
+        assert_eq!(palette.is_dark, is_dark_hour(hour));
     }
 }
