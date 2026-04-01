@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { debugVisible, debugSnapshot, debugTab, selectedNpcId } from '../stores/debug';
 	import type { NpcDebug } from '$lib/types';
+	import DigitalRain from './DigitalRain.svelte';
 
-	const tabs = ['Overview', 'NPCs', 'World', 'Events', 'Inference'];
+	const tabs = ['Overview', 'NPCs', 'World', 'Events', 'Inference', 'Rain'];
 
 	function selectTab(index: number) {
 		debugTab.set(index);
@@ -300,6 +301,11 @@
 						{/if}
 					</div>
 				{/if}
+			{:else if tab === 5}
+				<!-- Digital Rain -->
+				<div class="rain-tab">
+					<DigitalRain snapshot={snap} />
+				</div>
 			{/if}
 		</div>
 	</div>
@@ -379,6 +385,7 @@
 		flex: 1;
 		overflow-y: auto;
 		padding: 0.5rem 0.75rem;
+		position: relative;
 	}
 
 	.section {
@@ -606,5 +613,11 @@
 		font-size: 0.65rem;
 		margin-top: 0.1rem;
 		word-break: break-word;
+	}
+
+	.rain-tab {
+		position: absolute;
+		inset: 0;
+		overflow: hidden;
 	}
 </style>
