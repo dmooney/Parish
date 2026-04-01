@@ -84,55 +84,142 @@ impl Intelligence {
         }
     }
 
-    /// Returns behavioral guidance tailored to this NPC's specific profile.
+    /// Returns a prose description of how this NPC thinks and speaks.
     ///
-    /// Generates 2-4 short directives highlighting the NPC's strongest and
-    /// weakest dimensions, so the LLM knows which traits to emphasize.
-    /// Keeps output under ~40 tokens.
+    /// Translates the numeric intelligence profile into natural language
+    /// that the LLM can use to shape dialogue style. Covers all six
+    /// dimensions, describing notable strengths and weaknesses in detail.
+    /// Returns an empty string for a perfectly average (all-3s) profile.
     pub fn prompt_guidance(&self) -> String {
-        let mut hints = Vec::new();
+        let mut parts = Vec::new();
 
-        // Highlight strong dimensions (4-5)
-        if self.verbal >= 4 {
-            hints.push("Use rich vocabulary and articulate speech.");
-        }
-        if self.analytical >= 4 {
-            hints.push("Reason clearly; notice logical connections.");
-        }
-        if self.emotional >= 4 {
-            hints.push("Read subtext and respond to unspoken feelings.");
-        }
-        if self.practical >= 4 {
-            hints.push("Offer concrete, hands-on solutions.");
-        }
-        if self.wisdom >= 4 {
-            hints.push("Draw on life experience; give measured counsel.");
-        }
-        if self.creative >= 4 {
-            hints.push("Be witty and inventive; use vivid metaphors.");
-        }
-
-        // Highlight weak dimensions (1-2)
-        if self.verbal <= 2 {
-            hints.push("Speak simply; struggle with complex words.");
-        }
-        if self.analytical <= 2 {
-            hints.push("Avoid abstract reasoning; think concretely.");
-        }
-        if self.emotional <= 2 {
-            hints.push("Miss emotional cues; be blunt or oblivious.");
-        }
-        if self.practical <= 2 {
-            hints.push("Be impractical; overlook obvious solutions.");
-        }
-        if self.wisdom <= 2 {
-            hints.push("Act impulsively; lack foresight.");
-        }
-        if self.creative <= 2 {
-            hints.push("Be literal-minded; lack humor or imagination.");
+        // Verbal — how they speak
+        match self.verbal {
+            1 => parts.push(
+                "Struggles to find words, speaks in halting fragments, \
+                 and often trails off mid-sentence.",
+            ),
+            2 => parts.push(
+                "Speaks plainly with a limited vocabulary, \
+                 preferring short familiar words over anything fancy.",
+            ),
+            4 => parts.push(
+                "Well-spoken with a good vocabulary, \
+                 able to express ideas clearly and persuasively.",
+            ),
+            5 => parts.push(
+                "Exceptionally eloquent — chooses words with precision, \
+                 turns a phrase beautifully, and commands attention when speaking.",
+            ),
+            _ => {}
         }
 
-        hints.join(" ")
+        // Analytical — how they reason
+        match self.analytical {
+            1 => parts.push(
+                "Cannot follow even simple logical arguments; \
+                 easily confused by cause and effect.",
+            ),
+            2 => parts.push(
+                "Thinks concretely and struggles with abstract reasoning; \
+                 takes things at face value.",
+            ),
+            4 => parts.push(
+                "Sharp-minded, notices patterns and logical connections \
+                 that others miss.",
+            ),
+            5 => parts.push(
+                "Brilliantly analytical — sees through deceptions, \
+                 connects distant facts, and reasons with piercing clarity.",
+            ),
+            _ => {}
+        }
+
+        // Emotional — how they read people
+        match self.emotional {
+            1 => parts.push(
+                "Oblivious to others' feelings, misreads the room constantly, \
+                 and blunders through social situations.",
+            ),
+            2 => parts.push(
+                "Blunt and socially clumsy; often says the wrong thing \
+                 without realising the effect.",
+            ),
+            4 => parts.push(
+                "Perceptive about people's feelings, picks up on mood shifts \
+                 and unspoken tensions.",
+            ),
+            5 => parts.push(
+                "Reads people like a book — catches every flicker of emotion, \
+                 hears what is left unsaid, and responds with deep empathy.",
+            ),
+            _ => {}
+        }
+
+        // Practical — common sense and resourcefulness
+        match self.practical {
+            1 => parts.push(
+                "Hopelessly impractical; overlooks obvious solutions \
+                 and fumbles with everyday tasks.",
+            ),
+            2 => parts.push(
+                "Not particularly handy or resourceful; \
+                 tends to overcomplicate simple problems.",
+            ),
+            4 => parts.push(
+                "Resourceful and sensible, always knows a practical fix \
+                 and wastes nothing.",
+            ),
+            5 => parts.push(
+                "Extraordinarily resourceful — can fix, build, or improvise \
+                 a solution from whatever is at hand, with unfailing common sense.",
+            ),
+            _ => {}
+        }
+
+        // Wisdom — life experience and judgment
+        match self.wisdom {
+            1 => parts.push(
+                "Reckless and short-sighted, repeats the same mistakes \
+                 and never learns from experience.",
+            ),
+            2 => parts.push(
+                "Impulsive and prone to poor judgment; \
+                 acts first and thinks later.",
+            ),
+            4 => parts.push(
+                "Draws on hard-won life experience; \
+                 gives considered, measured advice.",
+            ),
+            5 => parts.push(
+                "Deeply wise — decades of living have given a quiet authority, \
+                 a long view of things, and an instinct for what truly matters.",
+            ),
+            _ => {}
+        }
+
+        // Creative — imagination, wit, improvisation
+        match self.creative {
+            1 => parts.push(
+                "Completely literal-minded; humour, metaphor, \
+                 and imagination are foreign territory.",
+            ),
+            2 => parts.push(
+                "Unimaginative and humourless; sticks to the obvious \
+                 and rarely surprises.",
+            ),
+            4 => parts.push(
+                "Quick-witted with a ready turn of phrase; \
+                 sees the funny side and thinks on the spot.",
+            ),
+            5 => parts.push(
+                "Brilliantly creative — a natural storyteller whose wit, \
+                 vivid metaphors, and leaps of imagination light up any conversation.",
+            ),
+            _ => {}
+        }
+
+        parts.join(" ")
     }
 }
 
@@ -539,8 +626,8 @@ mod tests {
         let intel = Intelligence::new(5, 3, 3, 3, 3, 3);
         let guidance = intel.prompt_guidance();
         assert!(
-            guidance.contains("rich vocabulary"),
-            "high verbal should mention vocabulary"
+            guidance.contains("eloquent"),
+            "high verbal should describe eloquence"
         );
     }
 
@@ -549,8 +636,8 @@ mod tests {
         let intel = Intelligence::new(3, 1, 3, 3, 3, 3);
         let guidance = intel.prompt_guidance();
         assert!(
-            guidance.contains("abstract reasoning"),
-            "low analytical should warn about reasoning"
+            guidance.contains("logical arguments"),
+            "low analytical should mention struggling with logic"
         );
     }
 
@@ -559,8 +646,8 @@ mod tests {
         let intel = Intelligence::new(3, 3, 5, 3, 3, 3);
         let guidance = intel.prompt_guidance();
         assert!(
-            guidance.contains("subtext"),
-            "high emotional should mention reading subtext"
+            guidance.contains("left unsaid"),
+            "high emotional should mention reading what is unsaid"
         );
     }
 
@@ -586,10 +673,10 @@ mod tests {
 
     #[test]
     fn test_intelligence_guidance_mixed_profile() {
-        // High verbal + low practical = both hints
+        // High verbal + low practical = both descriptions
         let intel = Intelligence::new(5, 3, 3, 1, 3, 3);
         let guidance = intel.prompt_guidance();
-        assert!(guidance.contains("rich vocabulary"));
+        assert!(guidance.contains("eloquent"));
         assert!(guidance.contains("impractical"));
     }
 

@@ -371,7 +371,7 @@ pub fn build_tier1_system_prompt(npc: &Npc, improv: bool) -> String {
         intel_guidance = if intel_guidance.is_empty() {
             String::new()
         } else {
-            format!("Speech style: {intel_guidance}\n")
+            format!("Mind and manner: {intel_guidance}\n")
         },
         mood = npc.mood,
         improv_section = improv_section,
