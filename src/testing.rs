@@ -212,10 +212,11 @@ impl GameTestHarness {
                 tt.npc_name, direction, tt.old_tier, tt.new_tier,
             ));
         }
-        let schedule_events = self
-            .app
-            .npc_manager
-            .tick_schedules(&self.app.world.clock, &self.app.world.graph);
+        let schedule_events = self.app.npc_manager.tick_schedules(
+            &self.app.world.clock,
+            &self.app.world.graph,
+            self.app.world.weather,
+        );
         self.process_schedule_events(&schedule_events);
 
         result
@@ -310,10 +311,11 @@ impl GameTestHarness {
     /// Useful for testing NPC movement without player actions.
     pub fn advance_time(&mut self, minutes: i64) {
         self.app.world.clock.advance(minutes);
-        let events = self
-            .app
-            .npc_manager
-            .tick_schedules(&self.app.world.clock, &self.app.world.graph);
+        let events = self.app.npc_manager.tick_schedules(
+            &self.app.world.clock,
+            &self.app.world.graph,
+            self.app.world.weather,
+        );
         self.process_schedule_events(&events);
         self.app.npc_manager.assign_tiers(&self.app.world, &[]);
     }
@@ -876,10 +878,11 @@ impl GameTestHarness {
             }
             Command::Tick => {
                 self.app.npc_manager.assign_tiers(&self.app.world, &[]);
-                let events = self
-                    .app
-                    .npc_manager
-                    .tick_schedules(&self.app.world.clock, &self.app.world.graph);
+                let events = self.app.npc_manager.tick_schedules(
+                    &self.app.world.clock,
+                    &self.app.world.graph,
+                    self.app.world.weather,
+                );
                 let count = events.len();
                 self.process_schedule_events(&events);
                 let msg = if count == 0 {
