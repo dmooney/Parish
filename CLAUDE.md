@@ -51,18 +51,7 @@ Playwright auto-starts the axum server via `cargo run -- --web 3099`.
 
 ### Play-Test Verification
 
-After implementing any gameplay feature, you **must** prove the change works by play-testing with the script harness — do not rely solely on unit tests passing. Use `/play` or write a targeted test script and run it via `cargo run -- --script <script>`.
-
-1. **Write a script** that exercises the new feature from a player's perspective. Advance time with `/wait`, move between locations, use `/time`, `/status`, `/debug clock`, `/debug npcs`, `look`, and `/npcs` to observe the effects.
-2. **Read the JSON output** critically. Check that values change when expected, descriptions read naturally, NPC behavior responds correctly, and no fields are empty or nonsensical.
-3. **Fix what you find.** If the play-test reveals the feature doesn't actually work at runtime (e.g., the game loop never calls your new tick function, templates produce awkward prose, time jumps skip your logic), fix the bug and re-run until the output proves the feature is live.
-4. **Think like the player.** Would the text make sense to someone who doesn't know the code? Would a game creator accept this output quality?
-
-Common pitfalls to watch for:
-- New tick/update logic added to `parish-server` and `headless` but **not to the test harness** (`src/testing.rs`) — the script harness has its own game loop.
-- Large `/wait` jumps (e.g., 360 min) that only call your logic once at the final timestamp instead of at each intermediate step.
-- Template interpolation producing ungrammatical text when new enum variants have multi-word Display strings.
-- Features that silently no-op because a required field isn't wired up in a constructor.
+After implementing any gameplay feature, run `/prove <feature description>` to verify it works at runtime. Unit tests passing is not sufficient — you must see the feature working in actual game output.
 
 ## Architecture
 
@@ -243,4 +232,6 @@ Custom slash commands defined in `.claude/skills/`:
 | `/screenshot` | Regenerate GUI screenshots via Playwright (headless Chromium) |
 | `/fix-issue <N>` | End-to-end GitHub issue workflow |
 | `/chrome-test` | Live Chrome browser testing session via Claude-in-Chrome MCP |
+| `/play [scenario]` | Play-test the game via script harness |
+| `/prove <feature>` | Prove a gameplay feature works at runtime (required after implementing features) |
 
