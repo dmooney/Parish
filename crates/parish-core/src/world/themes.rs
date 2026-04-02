@@ -145,6 +145,11 @@ impl ThemeSet {
             .unwrap_or(&self.themes[0])
     }
 
+    /// Returns a theme by slug, or `None` if not found.
+    pub fn find(&self, slug: &str) -> Option<&ColorTheme> {
+        self.themes.iter().find(|t| t.slug == slug)
+    }
+
     /// Returns all available theme names and slugs.
     pub fn list(&self) -> Vec<(&str, &str)> {
         self.themes
@@ -267,5 +272,19 @@ mod tests {
         let list = set.list();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0], ("Parish Classic", "parish-classic"));
+    }
+
+    #[test]
+    fn theme_set_find_existing() {
+        let set = ThemeSet::default();
+        let found = set.find("parish-classic");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Parish Classic");
+    }
+
+    #[test]
+    fn theme_set_find_missing() {
+        let set = ThemeSet::default();
+        assert!(set.find("nonexistent").is_none());
     }
 }

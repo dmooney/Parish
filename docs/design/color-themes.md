@@ -129,7 +129,7 @@ The wipe is a CSS `clip-path: inset()` animation defined in `ui/src/app.css`.
 
 ### Theme Configuration
 
-The active theme is selected by slug in the mod's `ui.toml`:
+The default theme is selected by slug in the mod's `ui.toml`:
 
 ```toml
 [theme]
@@ -138,22 +138,44 @@ default_theme = "parish-classic"
 ```
 
 The theme file path is declared in `mod.toml` via `files.themes`. At startup,
-`GameMod::load()` reads `themes.json` and the Tauri/axum backends store the
-resolved `ColorTheme` in their shared `AppState`.
+`GameMod::load()` reads `themes.json` and both the Tauri and axum backends
+store:
+
+- `active_theme: Mutex<ColorTheme>` — the currently selected theme (mutable
+  at runtime via `/theme` command).
+- `theme_set: ThemeSet` — all available themes (immutable after load).
+
+### Runtime Theme Switching
+
+Players can change themes at runtime using the `/theme` command:
+
+| Command | Effect |
+|---------|--------|
+| `/theme` | Lists all available themes, marking the active one |
+| `/theme <slug>` | Switches to the named theme immediately |
+
+The command is parsed in `crates/parish-core/src/input/mod.rs` as
+`Command::ShowTheme` or `Command::SetTheme(slug)`, and handled in both
+`src-tauri/src/commands.rs` and `crates/parish-server/src/routes.rs`.
+
+When a theme is changed, the next 500ms theme tick picks up the new
+`ColorTheme` from the `Mutex` and broadcasts it. If the light/dark state
+differs from the previous tick, the frontend triggers the wipe transition.
 
 ### Theme Tick
 
 Both the Tauri desktop and axum web server emit a `theme-update` event every
-500ms containing the current `ThemePalette`. The backend calls
-`build_themed_palette(world, &active_theme)` which re-evaluates the hour and
+500ms containing the current `ThemePalette`. The backend locks `active_theme`,
+calls `build_themed_palette(world, &theme)` which re-evaluates the hour and
 weather each tick.
 
 ## Adding a New Theme
 
 1. Add a new entry to `mods/kilteevan-1820/themes.json` with `name`, `slug`,
    `light`, and `dark` palettes.
-2. Set `default_theme` in `ui.toml` to the new slug to make it the default.
+2. Optionally set `default_theme` in `ui.toml` to the new slug.
 3. Run `cargo test` to verify the theme loads and has valid palettes.
+4. Players can switch to the new theme at runtime with `/theme <slug>`.
 
 ## Backward Compatibility
 

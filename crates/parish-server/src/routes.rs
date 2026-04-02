@@ -57,10 +57,8 @@ pub async fn get_npcs_here(State(state): State<Arc<AppState>>) -> Json<Vec<NpcIn
 /// `GET /api/theme` — returns the current theme palette (light or dark variant).
 pub async fn get_theme(State(state): State<Arc<AppState>>) -> Json<ThemePalette> {
     let world = state.world.lock().await;
-    Json(parish_core::ipc::build_themed_palette(
-        &world,
-        &state.active_theme,
-    ))
+    let theme = state.active_theme.lock().await;
+    Json(parish_core::ipc::build_themed_palette(&world, &theme))
 }
 
 /// `GET /api/ui-config` — returns UI configuration (splash text, labels, accent).
@@ -424,6 +422,50 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
         }
         Command::Wait(_) | Command::NewGame | Command::Tick => {
             "This command is only available in CLI/headless mode.".to_string()
+        }
+        Command::ShowTheme => {
+            let theme = state.active_theme.lock().await;
+            let list: Vec<String> = state
+                .theme_set
+                .list()
+                .iter()
+                .map(|(name, slug)| {
+                    if slug == &theme.slug {
+                        format!("  {} ({}) ◀", name, slug)
+                    } else {
+                        format!("  {} ({})", name, slug)
+                    }
+                })
+                .collect();
+            format!(
+                "Current theme: {}\n\nAvailable themes:\n{}",
+                theme.name,
+                list.join("\n")
+            )
+        }
+        Command::SetTheme(slug) => {
+            let new_theme = state.theme_set.find(&slug);
+            match new_theme {
+                Some(t) => {
+                    let name = t.name.clone();
+                    let mut active = state.active_theme.lock().await;
+                    *active = t.clone();
+                    format!("Theme set to {}.", name)
+                }
+                None => {
+                    let available: Vec<String> = state
+                        .theme_set
+                        .list()
+                        .iter()
+                        .map(|(_, s)| s.to_string())
+                        .collect();
+                    format!(
+                        "Unknown theme '{}'. Available: {}",
+                        slug,
+                        available.join(", ")
+                    )
+                }
+            }
         }
     };
 

@@ -8,7 +8,7 @@ use parish_core::inference::InferenceQueue;
 use parish_core::inference::openai_client::OpenAiClient;
 use parish_core::npc::manager::NpcManager;
 use parish_core::world::WorldState;
-use parish_core::world::themes::ColorTheme;
+use parish_core::world::themes::{ColorTheme, ThemeSet};
 use parish_core::world::transport::TransportConfig;
 
 /// UI configuration snapshot returned by the `/api/ui-config` endpoint.
@@ -46,7 +46,9 @@ pub struct AppState {
     /// UI configuration from the loaded game mod.
     pub ui_config: UiConfigSnapshot,
     /// Active color theme for palette selection.
-    pub active_theme: ColorTheme,
+    pub active_theme: Mutex<ColorTheme>,
+    /// All available color themes (for runtime switching via `/theme`).
+    pub theme_set: ThemeSet,
 }
 
 /// Mutable runtime configuration for provider, model, and cloud settings.
@@ -157,6 +159,7 @@ pub fn build_app_state(
     transport: TransportConfig,
     ui_config: UiConfigSnapshot,
     active_theme: ColorTheme,
+    theme_set: ThemeSet,
 ) -> Arc<AppState> {
     Arc::new(AppState {
         world: Mutex::new(world),
@@ -168,7 +171,8 @@ pub fn build_app_state(
         event_bus: EventBus::new(256),
         transport,
         ui_config,
-        active_theme,
+        active_theme: Mutex::new(active_theme),
+        theme_set,
     })
 }
 

@@ -958,6 +958,9 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
                 println!("{} schedule event(s) processed.", count);
             }
         }
+        Command::ShowTheme | Command::SetTheme(_) => {
+            println!("Theme commands are only available in the GUI.");
+        }
     }
     (false, rebuild)
 }

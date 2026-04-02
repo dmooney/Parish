@@ -251,7 +251,8 @@ pub async fn get_theme(state: tauri::State<'_, Arc<AppState>>) -> Result<ThemePa
     let now = world.clock.now();
     let hour = now.hour();
     let dark = is_dark_hour(hour);
-    let base = state.active_theme.palette_for_hour(hour);
+    let theme = state.active_theme.lock().await;
+    let base = theme.palette_for_hour(hour);
     let raw = compute_themed_palette(
         base,
         world.clock.season(),
@@ -431,6 +432,7 @@ async fn handle_system_command(
             "  /save     — Save game",
             "  /speed    — Show or change game speed (slow/normal/fast/fastest/ludicrous)",
             "  /status   — Where am I?",
+            "  /theme    — Show or change color theme",
             "",
             "  <cat> = dialogue, simulation, or intent",
         ]
@@ -696,6 +698,52 @@ async fn handle_system_command(
         Command::Time => "Time info is shown in the status bar.".to_string(),
         Command::Wait(_) | Command::NewGame | Command::Tick => {
             "This command is only available in CLI/headless mode.".to_string()
+        }
+
+        // ── Theme switching ─────────────────────────────────────────────
+        Command::ShowTheme => {
+            let theme = state.active_theme.lock().await;
+            let list: Vec<String> = state
+                .theme_set
+                .list()
+                .iter()
+                .map(|(name, slug)| {
+                    if *slug == theme.slug {
+                        format!("  {} ({}) \u{25C0}", name, slug)
+                    } else {
+                        format!("  {} ({})", name, slug)
+                    }
+                })
+                .collect();
+            format!(
+                "Current theme: {}\n\nAvailable themes:\n{}",
+                theme.name,
+                list.join("\n")
+            )
+        }
+        Command::SetTheme(slug) => {
+            let new_theme = state.theme_set.find(&slug);
+            match new_theme {
+                Some(t) => {
+                    let name = t.name.clone();
+                    let mut active = state.active_theme.lock().await;
+                    *active = t.clone();
+                    format!("Theme set to {}.", name)
+                }
+                None => {
+                    let available: Vec<String> = state
+                        .theme_set
+                        .list()
+                        .iter()
+                        .map(|(_, s)| s.to_string())
+                        .collect();
+                    format!(
+                        "Unknown theme '{}'. Available: {}",
+                        slug,
+                        available.join(", ")
+                    )
+                }
+            }
         }
     };
 

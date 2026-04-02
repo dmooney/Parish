@@ -100,6 +100,10 @@ pub enum Command {
     NewGame,
     /// Manually tick NPC schedules without advancing time.
     Tick,
+    /// Show the current color theme name and list available themes.
+    ShowTheme,
+    /// Switch to a named color theme at runtime.
+    SetTheme(String),
 }
 
 /// The kind of player action parsed from natural language input.
@@ -290,6 +294,15 @@ pub fn parse_system_command(input: &str) -> Option<Command> {
             Some(Command::ShowCloudKey)
         } else {
             Some(Command::ShowCloud)
+        }
+    } else if lower == "/theme" {
+        Some(Command::ShowTheme)
+    } else if lower.starts_with("/theme ") {
+        let slug = trimmed[7..].trim().to_string();
+        if slug.is_empty() {
+            Some(Command::ShowTheme)
+        } else {
+            Some(Command::SetTheme(slug))
         }
     } else {
         None
@@ -1391,5 +1404,28 @@ mod tests {
         let result = extract_mention("hello @Padraig how are you").unwrap();
         assert_eq!(result.name, "Padraig");
         assert_eq!(result.remaining, "hello how are you");
+    }
+
+    #[test]
+    fn test_parse_theme_show() {
+        assert_eq!(parse_system_command("/theme"), Some(Command::ShowTheme));
+        assert_eq!(parse_system_command("/THEME"), Some(Command::ShowTheme));
+    }
+
+    #[test]
+    fn test_parse_theme_set() {
+        assert_eq!(
+            parse_system_command("/theme catppuccin"),
+            Some(Command::SetTheme("catppuccin".to_string()))
+        );
+        assert_eq!(
+            parse_system_command("/theme  gruvbox "),
+            Some(Command::SetTheme("gruvbox".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_parse_theme_empty_arg() {
+        assert_eq!(parse_system_command("/theme "), Some(Command::ShowTheme));
     }
 }

@@ -886,6 +886,11 @@ impl GameTestHarness {
                 self.app.world.log(msg.clone());
                 ActionResult::SystemCommand { response: msg }
             }
+            Command::ShowTheme | Command::SetTheme(_) => {
+                let msg = "Theme commands are only available in the GUI.".to_string();
+                self.app.world.log(msg.clone());
+                ActionResult::SystemCommand { response: msg }
+            }
         }
     }
 

@@ -65,7 +65,8 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         splash_text,
     };
 
-    let active_theme = parish_core::world::themes::fallback_theme();
+    let theme_set = parish_core::world::themes::ThemeSet::default();
+    let active_theme = theme_set.get("parish-classic").clone();
 
     let state = build_app_state(
         world,
@@ -76,6 +77,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         transport,
         ui_config,
         active_theme,
+        theme_set,
     );
 
     // Initialize inference queue
@@ -145,7 +147,8 @@ fn spawn_background_ticks(state: Arc<AppState>) {
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let world = state_theme.world.lock().await;
-            let palette = parish_core::ipc::build_themed_palette(&world, &state_theme.active_theme);
+            let theme = state_theme.active_theme.lock().await;
+            let palette = parish_core::ipc::build_themed_palette(&world, &theme);
             state_theme.event_bus.emit("theme-update", &palette);
         }
     });
