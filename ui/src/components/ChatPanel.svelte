@@ -1,9 +1,12 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { textLog, streamingActive, loadingPhrase, loadingColor } from '../stores/game';
+	import { textLog, streamingActive, loadingPhrase, loadingColor, addReaction } from '../stores/game';
 	import type { TextLogEntry } from '$lib/types';
+	import { REACTION_PALETTE } from '$lib/reactions';
+	import { reactToMessage } from '$lib/ipc';
 
 	let logEl: HTMLDivElement;
+	let hoveredMessageId: string | null = $state(null);
 
 	$effect(() => {
 		// Scroll to bottom when log changes
@@ -53,6 +56,17 @@
 		}
 		return segments;
 	}
+
+	function handleReaction(entry: TextLogEntry, emoji: string) {
+		if (!entry.id) return;
+		// Optimistic UI update
+		addReaction(entry.id, emoji, 'player');
+		// Send to backend
+		const snippet = entry.content.slice(0, 80);
+		reactToMessage(entry.source, snippet, emoji).catch(() => {});
+		// Close picker
+		hoveredMessageId = null;
+	}
 </script>
 
 <div class="chat-panel" data-testid="chat-panel" bind:this={logEl} role="log" aria-live="polite" aria-label="Game chat log">
@@ -68,7 +82,12 @@
 				{/if}
 			</div>
 		{:else}
-			<div class="bubble-row {entryType(entry)}">
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div
+				class="bubble-row {entryType(entry)}"
+				onmouseenter={() => { if (entryType(entry) === 'npc' && !entry.streaming && entry.id) hoveredMessageId = entry.id ?? null; }}
+				onmouseleave={() => { hoveredMessageId = null; }}
+			>
 				<div class="bubble-wrapper">
 					<span class="label">{displayLabel(entry)}</span>
 					<div class="bubble">
@@ -77,6 +96,35 @@
 							>{/if}</span
 						>
 					</div>
+
+					<!-- Reaction picker (on hover, NPC messages only) -->
+					{#if hoveredMessageId && hoveredMessageId === entry.id && entryType(entry) === 'npc'}
+						<div class="reaction-picker" role="toolbar" aria-label="React to message" data-testid="reaction-picker">
+							{#each REACTION_PALETTE as reaction}
+								<button
+									class="reaction-btn"
+									title={reaction.description}
+									onclick={() => handleReaction(entry, reaction.emoji)}
+								>
+									{reaction.emoji}
+								</button>
+							{/each}
+						</div>
+					{/if}
+
+					<!-- Existing reactions -->
+					{#if entry.reactions && entry.reactions.length > 0}
+						<div class="reaction-bar" data-testid="reaction-bar">
+							{#each entry.reactions as r}
+								<span class="reaction-badge" title={r.source}>
+									{r.emoji}
+									{#if r.source !== 'player'}
+										<span class="reaction-source">{r.source}</span>
+									{/if}
+								</span>
+							{/each}
+						</div>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -202,6 +250,59 @@
 		50% {
 			opacity: 0;
 		}
+	}
+
+	/* Reaction picker */
+	.reaction-picker {
+		display: flex;
+		gap: 0.15rem;
+		padding: 0.2rem 0.25rem;
+		background: var(--color-panel-bg);
+		border: 1px solid var(--color-border);
+		border-radius: 12px;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+		width: fit-content;
+		margin-top: 0.2rem;
+	}
+
+	.reaction-btn {
+		background: none;
+		border: none;
+		padding: 0.15rem 0.2rem;
+		font-size: 0.85rem;
+		cursor: pointer;
+		border-radius: 4px;
+		line-height: 1;
+		transition: transform 0.1s, background 0.1s;
+	}
+
+	.reaction-btn:hover {
+		transform: scale(1.3);
+		background: var(--color-input-bg);
+	}
+
+	/* Reaction bar (displayed reactions) */
+	.reaction-bar {
+		display: flex;
+		gap: 0.25rem;
+		margin-top: 0.2rem;
+		flex-wrap: wrap;
+	}
+
+	.reaction-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.15rem;
+		font-size: 0.75rem;
+		background: var(--color-input-bg);
+		border: 1px solid var(--color-border);
+		border-radius: 10px;
+		padding: 0.1rem 0.35rem;
+	}
+
+	.reaction-source {
+		font-size: 0.65rem;
+		color: var(--color-muted);
 	}
 
 	.loading-row {
