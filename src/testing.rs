@@ -198,6 +198,18 @@ impl GameTestHarness {
             return ActionResult::UnknownInput;
         }
 
+        // Handle test-harness-only /stub command: /stub NpcName: dialogue text
+        if let Some(rest) = trimmed.strip_prefix("/stub ")
+            && let Some((name, dialogue)) = rest.split_once(':')
+        {
+            let name = name.trim();
+            let dialogue = dialogue.trim();
+            self.add_canned_response(name, dialogue);
+            let msg = format!("Stubbed response for {}: \"{}\"", name, dialogue);
+            self.app.world.log(msg.clone());
+            return ActionResult::SystemCommand { response: msg };
+        }
+
         let result = match input::classify_input(trimmed) {
             InputResult::SystemCommand(cmd) => self.handle_system_command(cmd),
             InputResult::GameInput(text) => self.handle_game_input(&text),
@@ -338,6 +350,20 @@ impl GameTestHarness {
         );
         self.process_schedule_events(&events);
         self.app.npc_manager.assign_tiers(&self.app.world, &[]);
+
+        // Propagate gossip between co-located NPCs
+        if !self.app.world.gossip_network.is_empty() {
+            let groups = self.app.npc_manager.tier2_groups();
+            for npc_ids in groups.values() {
+                if npc_ids.len() >= 2 {
+                    crate::npc::ticks::propagate_gossip_at_location(
+                        npc_ids,
+                        &mut self.app.world.gossip_network,
+                        &mut rng,
+                    );
+                }
+            }
+        }
     }
 
     /// Returns the debug activity log entries.
@@ -1050,6 +1076,11 @@ impl GameTestHarness {
     /// not just the first one. This allows tests to target specific NPCs
     /// regardless of iteration order. Also runs anachronism detection on
     /// the player's input and includes any detected terms in the result.
+    ///
+    /// When a canned response is consumed, the interaction is processed
+    /// through the same memory pipeline as a real LLM response: the NPC's
+    /// mood is updated, a memory entry is recorded, and evicted memories
+    /// may be promoted to long-term storage.
     fn handle_npc_interaction(&mut self, text: &str) -> ActionResult {
         let npcs_here = self.app.npc_manager.npcs_at(self.app.world.player_location);
 
@@ -1070,7 +1101,29 @@ impl GameTestHarness {
             {
                 let dialogue = responses.remove(0);
                 let name = npc.name.clone();
+                let npc_id = npc.id;
                 self.app.world.log(format!("{}: {}", name, dialogue));
+
+                // Build a synthetic NPC response and run it through the memory pipeline
+                let response = crate::npc::NpcStreamResponse {
+                    dialogue: dialogue.clone(),
+                    metadata: Some(crate::npc::NpcMetadata {
+                        action: "responds".to_string(),
+                        mood: npc.mood.clone(),
+                        internal_thought: None,
+                        language_hints: Vec::new(),
+                    }),
+                };
+                let game_time = self.app.world.clock.now();
+                if let Some(npc_mut) = self.app.npc_manager.get_mut(npc_id) {
+                    let debug_events = crate::npc::ticks::apply_tier1_response(
+                        npc_mut, &response, text, game_time,
+                    );
+                    for event in debug_events {
+                        self.app.debug_event(event);
+                    }
+                }
+
                 return ActionResult::NpcResponse {
                     npc: name,
                     dialogue,
