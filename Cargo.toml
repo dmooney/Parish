@@ -38,6 +38,10 @@ path = "src/main.rs"
 name = "geo-tool"
 path = "src/bin/geo_tool/main.rs"
 
+[[bin]]
+name = "parish-npc"
+path = "src/bin/parish_npc/main.rs"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
