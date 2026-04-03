@@ -161,63 +161,16 @@ pub async fn get_world_snapshot(
 
 /// Returns the map data: visited locations with coordinates, edges, and player position.
 ///
-/// Applies fog-of-war filtering: only locations the player has visited are included.
+/// Includes visited locations (fully enriched) and the frontier — unvisited
+/// locations adjacent to any visited location — so the player can see where
+/// to explore next. Frontier locations are marked with `visited: false`.
 #[tauri::command]
 pub async fn get_map(state: tauri::State<'_, Arc<AppState>>) -> Result<MapData, String> {
     let world = state.world.lock().await;
-    let player_loc = world.player_location;
-    let visited = &world.visited_locations;
     let speed = state.transport.default_mode().speed_m_per_s;
+    let core_map = parish_core::ipc::build_map_data(&world, speed);
 
-    let hop_map = world.graph.hop_distances(player_loc);
-
-    let adjacent_ids: std::collections::HashSet<parish_core::world::LocationId> = world
-        .graph
-        .neighbors(player_loc)
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
-
-    let locations: Vec<MapLocation> = world
-        .graph
-        .location_ids()
-        .into_iter()
-        .filter(|id| visited.contains(id))
-        .filter_map(|id| world.graph.get(id).map(|data| (id, data)))
-        .map(|(id, data)| {
-            let travel_minutes = if id == player_loc {
-                None
-            } else {
-                world
-                    .graph
-                    .shortest_path(player_loc, id)
-                    .map(|path| world.graph.path_travel_time(&path, speed))
-            };
-            MapLocation {
-                id: id.0.to_string(),
-                name: data.name.clone(),
-                lat: data.lat,
-                lon: data.lon,
-                adjacent: adjacent_ids.contains(&id) || id == player_loc,
-                hops: *hop_map.get(&id).unwrap_or(&u32::MAX),
-                indoor: Some(data.indoor),
-                travel_minutes,
-            }
-        })
-        .collect();
-
-    let mut edges: Vec<(String, String)> = Vec::new();
-    for loc_id in world.graph.location_ids() {
-        if !visited.contains(&loc_id) {
-            continue;
-        }
-        for (neighbor_id, _conn) in world.graph.neighbors(loc_id) {
-            if loc_id.0 < neighbor_id.0 && visited.contains(&neighbor_id) {
-                edges.push((loc_id.0.to_string(), neighbor_id.0.to_string()));
-            }
-        }
-    }
-
+    let player_loc = world.player_location;
     let (player_lat, player_lon) = world
         .graph
         .get(player_loc)
@@ -225,9 +178,23 @@ pub async fn get_map(state: tauri::State<'_, Arc<AppState>>) -> Result<MapData, 
         .unwrap_or((0.0, 0.0));
 
     Ok(MapData {
-        locations,
-        edges,
-        player_location: player_loc.0.to_string(),
+        locations: core_map
+            .locations
+            .into_iter()
+            .map(|l| MapLocation {
+                id: l.id,
+                name: l.name,
+                lat: l.lat,
+                lon: l.lon,
+                adjacent: l.adjacent,
+                hops: l.hops,
+                indoor: l.indoor,
+                travel_minutes: l.travel_minutes,
+                visited: l.visited,
+            })
+            .collect(),
+        edges: core_map.edges,
+        player_location: core_map.player_location,
         player_lat,
         player_lon,
     })

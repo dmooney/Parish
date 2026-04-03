@@ -77,6 +77,8 @@ pub struct MapLocation {
     /// Estimated walking time from the player's current location, in minutes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub travel_minutes: Option<u16>,
+    /// Whether the player has visited this location (false = fog-of-war frontier).
+    pub visited: bool,
 }
 
 /// The full map graph sent to the frontend.

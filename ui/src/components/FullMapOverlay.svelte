@@ -34,6 +34,7 @@
 		name: string;
 		indoor?: boolean;
 		travel_minutes?: number;
+		visited?: boolean;
 	}
 
 	let tooltip: TooltipInfo | null = $state(null);
@@ -174,8 +175,11 @@
 				{#each $mapData?.edges ?? [] as [src, dst]}
 					{@const a = localProjected.find((p) => p.id === src)}
 					{@const b = localProjected.find((p) => p.id === dst)}
+					{@const srcLoc = ($mapData?.locations ?? []).find((l) => l.id === src)}
+					{@const dstLoc = ($mapData?.locations ?? []).find((l) => l.id === dst)}
+					{@const isFrontierEdge = srcLoc?.visited === false || dstLoc?.visited === false}
 					{#if a && b}
-						<line x1={a.x} y1={a.y} x2={b.x} y2={b.y} class="edge" />
+						<line x1={a.x} y1={a.y} x2={b.x} y2={b.y} class="edge" class:frontier-edge={isFrontierEdge} />
 					{/if}
 				{/each}
 
@@ -208,8 +212,9 @@
 						class="node"
 						class:player={isPlayer(loc)}
 						class:adjacent={loc.adjacent}
+						class:frontier={loc.visited === false}
 						onclick={() => handleClick(loc)}
-						onmouseenter={() => (tooltip = { name: loc.name, indoor: loc.indoor, travel_minutes: loc.travel_minutes })}
+						onmouseenter={() => (tooltip = { name: loc.name, indoor: loc.indoor, travel_minutes: loc.travel_minutes, visited: loc.visited })}
 						onmouseleave={() => (tooltip = null)}
 					>
 						{#if isPlayer(loc)}
@@ -239,11 +244,15 @@
 		{#if tooltip}
 			<div class="tooltip">
 				<div class="tooltip-name">{tooltip.name}</div>
-				{#if tooltip.indoor !== undefined}
-					<div class="tooltip-detail">{tooltip.indoor ? 'Indoor' : 'Outdoor'}</div>
-				{/if}
-				{#if tooltip.travel_minutes != null && tooltip.travel_minutes > 0}
-					<div class="tooltip-detail">{tooltip.travel_minutes} min walk</div>
+				{#if tooltip.visited === false}
+					<div class="tooltip-detail tooltip-unexplored">Unexplored</div>
+				{:else}
+					{#if tooltip.indoor !== undefined}
+						<div class="tooltip-detail">{tooltip.indoor ? 'Indoor' : 'Outdoor'}</div>
+					{/if}
+					{#if tooltip.travel_minutes != null && tooltip.travel_minutes > 0}
+						<div class="tooltip-detail">{tooltip.travel_minutes} min walk</div>
+					{/if}
 				{/if}
 			</div>
 		{/if}
@@ -334,6 +343,11 @@
 		stroke-width: 1.5;
 	}
 
+	.edge.frontier-edge {
+		stroke-dasharray: 4 3;
+		opacity: 0.4;
+	}
+
 	.leader {
 		stroke: var(--color-muted);
 		stroke-width: 0.4;
@@ -374,6 +388,24 @@
 	.node.player .node-label {
 		fill: var(--color-fg);
 		font-weight: 600;
+	}
+
+	.node.frontier .node-icon {
+		opacity: 0.4;
+	}
+
+	.node.frontier .node-label {
+		opacity: 0.5;
+		font-style: italic;
+	}
+
+	.node.frontier.adjacent .node-icon {
+		opacity: 0.6;
+		cursor: pointer;
+	}
+
+	.tooltip-unexplored {
+		font-style: italic;
 	}
 
 	.tooltip {
