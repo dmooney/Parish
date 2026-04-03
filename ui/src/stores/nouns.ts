@@ -21,7 +21,7 @@ export const knownNouns = derived(
 				nouns.push({
 					text: loc.name,
 					category: 'location',
-					priority: loc.adjacent ? 0 : 2
+					priority: loc.visited ? (loc.adjacent ? 0 : 2) : 3
 				});
 			}
 		}

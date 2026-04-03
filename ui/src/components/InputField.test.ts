@@ -483,9 +483,10 @@ describe('InputField', () => {
 	describe('tab-completion', () => {
 		const testMapData = {
 			locations: [
-				{ id: 'crossroads', name: 'The Crossroads', lat: 0, lon: 0, adjacent: true, hops: 1 },
-				{ id: 'pub', name: "Darcy's Pub", lat: 0.1, lon: 0.1, adjacent: true, hops: 1 },
-				{ id: 'church', name: 'The Church', lat: 0.2, lon: 0.2, adjacent: false, hops: 2 }
+				{ id: 'crossroads', name: 'The Crossroads', lat: 0, lon: 0, adjacent: true, hops: 1, visited: true },
+				{ id: 'pub', name: "Darcy's Pub", lat: 0.1, lon: 0.1, adjacent: true, hops: 1, visited: true },
+				{ id: 'church', name: 'The Church', lat: 0.2, lon: 0.2, adjacent: false, hops: 2, visited: true },
+				{ id: 'mill', name: 'The Mill', lat: 0.3, lon: 0.3, adjacent: false, hops: 3, visited: false }
 			],
 			edges: [
 				['crossroads', 'pub'],
@@ -547,12 +548,29 @@ describe('InputField', () => {
 			expect(editor.textContent).toBe('go to xyz');
 		});
 
-		it('Tab does nothing on empty input', async () => {
+		it('Tab cycles through all visited locations on empty input', async () => {
 			const { getByRole } = render(InputField);
 			const editor = getByRole('textbox');
 
 			await fireEvent.keyDown(editor, { key: 'Tab' });
-			expect(editor.textContent).toBe('');
+			const first = editor.textContent ?? '';
+			expect(first.length).toBeGreaterThan(0);
+
+			await fireEvent.keyDown(editor, { key: 'Tab' });
+			const second = editor.textContent ?? '';
+			expect(second).not.toBe(first);
+		});
+
+		it('Tab completes unvisited (frontier) locations with lower priority', async () => {
+			const { getByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, 'mill');
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Tab' });
+
+			// "The Mill" is unvisited but visible (frontier) — should complete
+			expect(editor.textContent).toContain('The Mill');
 		});
 
 		it('Tab cycles through multiple matches', async () => {

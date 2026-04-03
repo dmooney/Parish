@@ -46,9 +46,9 @@
 
 	// ── Adjacent locations for quick-travel ─────────────────────────────────
 	const adjacentLocations = $derived(
-		($mapData?.locations ?? []).filter(
-			(loc) => loc.adjacent && loc.id !== $mapData?.player_location
-		)
+		($mapData?.locations ?? [])
+			.filter((loc) => loc.adjacent && loc.id !== $mapData?.player_location)
+			.sort((a, b) => a.name.localeCompare(b.name))
 	);
 
 	// ── Tab-completion state ────────────────────────────────────────────────
@@ -116,7 +116,20 @@
 
 		const range = sel.getRangeAt(0);
 		const node = range.startContainer;
-		if (node.nodeType !== Node.TEXT_NODE) return;
+
+		// Empty editor — no text node yet, insert one
+		if (node.nodeType !== Node.TEXT_NODE) {
+			const textNode = document.createTextNode(match.text);
+			editorEl.innerHTML = '';
+			editorEl.appendChild(textNode);
+			completion.replacedLength = match.text.length;
+			const newRange = document.createRange();
+			newRange.setStart(textNode, match.text.length);
+			newRange.collapse(true);
+			sel.removeAllRanges();
+			sel.addRange(newRange);
+			return;
+		}
 
 		const text = node.textContent ?? '';
 		const replaceLen = completion.replacedLength > 0 ? completion.replacedLength : completion.prefix.length;
@@ -493,10 +506,30 @@
 			}
 
 			// Start new completion
-			const extracted = extractPrefix();
-			if (!extracted) return;
-
 			const nouns = get(knownNouns);
+			const extracted = extractPrefix();
+
+			if (!extracted) {
+				// No word typed yet — cycle through all explored locations
+				const locationNouns = nouns.filter((n) => n.category === 'location');
+				if (locationNouns.length === 0) return;
+				const sel2 = window.getSelection();
+				if (!sel2 || sel2.rangeCount === 0) return;
+				const range2 = sel2.getRangeAt(0);
+				const prefixStart =
+					range2.startContainer.nodeType === Node.TEXT_NODE ? range2.startOffset : 0;
+				completion = {
+					active: true,
+					prefix: '',
+					matches: locationNouns,
+					currentIndex: 0,
+					prefixStart,
+					replacedLength: 0
+				};
+				applyCompletion();
+				return;
+			}
+
 			const matches = findMatches(extracted.prefix, nouns);
 			if (matches.length === 0) return;
 
