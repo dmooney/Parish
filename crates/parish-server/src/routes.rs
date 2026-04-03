@@ -999,10 +999,10 @@ pub async fn load_branch(
 
     state.event_bus.emit(
         "text-log",
-        &TextLogPayload {
-            source: "system".to_string(),
-            content: format!("Loaded {} (branch: {}).", filename, branch_name),
-        },
+        &text_log(
+            "system",
+            format!("Loaded {} (branch: {}).", filename, branch_name),
+        ),
     );
 
     *state.save_path.lock().await = Some(path);
@@ -1167,10 +1167,7 @@ pub async fn new_game(
 
     state.event_bus.emit(
         "text-log",
-        &TextLogPayload {
-            source: "system".to_string(),
-            content: "A new chapter begins in the parish...".to_string(),
-        },
+        &text_log("system", "A new chapter begins in the parish..."),
     );
 
     *state.save_path.lock().await = Some(path);
