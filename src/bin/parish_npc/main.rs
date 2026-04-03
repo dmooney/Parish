@@ -1,9 +1,17 @@
+mod commands;
+mod db;
+mod generate;
+
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-/// Tool for managing and generating Parish NPCs
 #[derive(Parser, Debug)]
 #[command(name = "parish-npc", about = "CLI for managing scalable NPC data for Parish", version)]
 struct Cli {
+    /// Path to the world database
+    #[arg(long, global = true, default_value = "parish-world.db")]
+    db: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -96,63 +104,55 @@ enum Commands {
     },
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
+    let db = db::WorldDb::open(&cli.db)?;
+    let conn = db.get_conn();
 
     match &cli.command {
         Commands::GenerateWorld { counties } => {
-            println!("Generating world for counties: {:?}", counties);
+            generate::generate_world(conn, counties)?;
         }
         Commands::GenerateParish { parish, pop } => {
-            println!("Generating parish {} with population {}", parish, pop);
+            generate::generate_parish(conn, parish, *pop)?;
         }
         Commands::List { parish, occupation } => {
-            println!("Listing NPCs in parish: {}", parish);
-            if let Some(occ) = occupation {
-                println!("Filtering by occupation: {}", occ);
-            }
+            commands::list_npcs(conn, parish, occupation.as_ref())?;
         }
         Commands::Show { id } => {
-            println!("Showing NPC with ID: {}", id);
+            commands::show_npc(conn, *id)?;
         }
         Commands::Search { query } => {
-            println!("Searching for: {}", query);
+            commands::search_npc(conn, query)?;
         }
         Commands::Edit { id, mood } => {
-            println!("Editing NPC {}", id);
-            if let Some(m) = mood {
-                println!("Setting mood to: {}", m);
-            }
+            commands::edit_npc(conn, *id, mood.as_ref())?;
         }
         Commands::Promote { id } => {
-            println!("Promoting NPC {}", id);
+            commands::promote_npc(conn, *id)?;
         }
         Commands::Elaborate { parish, batch } => {
-            println!("Elaborating {} NPCs in parish {}", batch, parish);
+            commands::elaborate_parish(conn, parish, *batch)?;
         }
         Commands::Validate { parish, all } => {
-            if *all {
-                println!("Validating entire world consistency");
-            } else if let Some(p) = parish {
-                println!("Validating parish: {}", p);
-            } else {
-                println!("Must specify --parish or --all");
-            }
+            commands::validate_data(conn, parish.as_ref(), *all)?;
         }
         Commands::Stats => {
-            println!("Displaying stats");
+            commands::show_stats(conn)?;
         }
         Commands::Export { parish } => {
-            println!("Exporting data for parish: {}", parish);
+            commands::export_data(conn, parish)?;
         }
         Commands::Import => {
-            println!("Importing data");
+            commands::import_data(conn)?;
         }
         Commands::FamilyTree { id } => {
-            println!("Showing family tree for NPC {}", id);
+            commands::show_family_tree(conn, *id)?;
         }
         Commands::Relationships { id } => {
-            println!("Showing relationships for NPC {}", id);
+            commands::show_relationships(conn, *id)?;
         }
     }
+
+    Ok(())
 }
