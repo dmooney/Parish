@@ -122,6 +122,7 @@ impl NpcSnapshot {
             deflated_summary: None,
             reaction_log: crate::npc::reactions::ReactionLog::default(),
             last_activity: None,
+            is_ill: false,
         }
     }
 }
@@ -280,6 +281,7 @@ mod tests {
             deflated_summary: None,
             reaction_log: crate::npc::reactions::ReactionLog::default(),
             last_activity: None,
+            is_ill: false,
         }
     }
 
