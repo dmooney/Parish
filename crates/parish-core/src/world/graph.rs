@@ -374,6 +374,47 @@ impl WorldGraph {
         distances
     }
 
+    /// Single-pass BFS that computes both hop distances and accumulated travel
+    /// times (in game minutes) from a source to every reachable location.
+    ///
+    /// This replaces the pattern of calling `hop_distances` + per-destination
+    /// `shortest_path` + `path_travel_time`, collapsing O(V·(V+E)) work into a
+    /// single O(V+E) BFS traversal. Travel time is accumulated along BFS-tree
+    /// edges using haversine distance, matching the result of reconstructing the
+    /// full path and summing edge weights.
+    pub fn hop_distances_and_travel_times(
+        &self,
+        from: LocationId,
+        speed_m_per_s: f64,
+    ) -> (HashMap<LocationId, u32>, HashMap<LocationId, u16>) {
+        let mut hops: HashMap<LocationId, u32> = HashMap::new();
+        let mut times: HashMap<LocationId, u16> = HashMap::new();
+
+        if !self.locations.contains_key(&from) {
+            return (hops, times);
+        }
+
+        hops.insert(from, 0);
+        times.insert(from, 0);
+        let mut queue = VecDeque::new();
+        queue.push_back(from);
+
+        while let Some(current) = queue.pop_front() {
+            let current_depth = hops[&current];
+            let current_time = times[&current];
+            for (neighbor_id, _) in self.neighbors(current) {
+                if let std::collections::hash_map::Entry::Vacant(e) = hops.entry(neighbor_id) {
+                    e.insert(current_depth + 1);
+                    let edge_mins = self.edge_travel_minutes(current, neighbor_id, speed_m_per_s);
+                    times.insert(neighbor_id, current_time.saturating_add(edge_mins));
+                    queue.push_back(neighbor_id);
+                }
+            }
+        }
+
+        (hops, times)
+    }
+
     /// Returns the connection from one location to another, if they are neighbors.
     pub fn connection_between(&self, from: LocationId, to: LocationId) -> Option<&Connection> {
         self.locations

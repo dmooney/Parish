@@ -384,3 +384,33 @@ fn test_movement_go_to_coast() {
         other => panic!("expected Arrived at Lough Ree Shore, got {:?}", other),
     }
 }
+
+#[test]
+fn test_combined_bfs_matches_individual_pathfinding() {
+    let graph = load_parish_graph();
+    let speed = 1.25;
+    let from = LocationId(1);
+
+    // Single-pass BFS returning both hops and travel times
+    let (hops, times) = graph.hop_distances_and_travel_times(from, speed);
+    let hops_only = graph.hop_distances(from);
+
+    // Hop distances must match the standalone method exactly
+    assert_eq!(hops, hops_only);
+
+    // Travel times must match shortest_path + path_travel_time for every destination
+    for &dest in graph.location_ids().iter() {
+        let combined_time = times[&dest];
+        if dest == from {
+            assert_eq!(combined_time, 0);
+            continue;
+        }
+        let path = graph.shortest_path(from, dest).unwrap();
+        let individual_time = graph.path_travel_time(&path, speed);
+        assert_eq!(
+            combined_time, individual_time,
+            "travel time mismatch for {:?}: combined={}, individual={}",
+            dest, combined_time, individual_time
+        );
+    }
+}
