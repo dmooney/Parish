@@ -1780,4 +1780,119 @@ mod tests {
 
         assert_eq!(snap.context, "");
     }
+
+    // ── Witness memory tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_witness_memory_created_for_bystander() {
+        let mut npcs = HashMap::new();
+        let speaker = make_test_npc(1, "Padraig", 1);
+        let witness = make_test_npc(2, "Niamh", 1);
+        npcs.insert(NpcId(1), speaker);
+        npcs.insert(NpcId(2), witness);
+
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
+        let events = record_witness_memories(
+            &mut npcs,
+            NpcId(1),
+            "Padraig",
+            "Tell me about the weather",
+            "Ah, it's grand today",
+            game_time,
+            LocationId(1),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert!(events[0].contains("Niamh overheard"));
+
+        // Witness should have the memory
+        let witness = npcs.get(&NpcId(2)).unwrap();
+        assert_eq!(witness.memory.len(), 1);
+        let mem = witness.memory.recent(1);
+        assert!(mem[0].content.contains("Overheard"));
+        assert!(mem[0].content.contains("Padraig"));
+    }
+
+    #[test]
+    fn test_speaker_not_given_witness_memory() {
+        let mut npcs = HashMap::new();
+        let speaker = make_test_npc(1, "Padraig", 1);
+        let witness = make_test_npc(2, "Niamh", 1);
+        npcs.insert(NpcId(1), speaker);
+        npcs.insert(NpcId(2), witness);
+
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
+        record_witness_memories(
+            &mut npcs,
+            NpcId(1),
+            "Padraig",
+            "Hello",
+            "Dia dhuit!",
+            game_time,
+            LocationId(1),
+        );
+
+        // Speaker should NOT have a witness memory
+        let speaker = npcs.get(&NpcId(1)).unwrap();
+        assert!(speaker.memory.is_empty());
+    }
+
+    #[test]
+    fn test_witness_memory_only_for_present_npcs() {
+        let mut npcs = HashMap::new();
+        let speaker = make_test_npc(1, "Padraig", 1);
+        let witness_here = make_test_npc(2, "Niamh", 1);
+        let witness_away = make_test_npc(3, "Tommy", 2); // different location
+        npcs.insert(NpcId(1), speaker);
+        npcs.insert(NpcId(2), witness_here);
+        npcs.insert(NpcId(3), witness_away);
+
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
+        let events = record_witness_memories(
+            &mut npcs,
+            NpcId(1),
+            "Padraig",
+            "Hello",
+            "Dia dhuit!",
+            game_time,
+            LocationId(1),
+        );
+
+        assert_eq!(events.len(), 1); // only Niamh
+        assert!(events[0].contains("Niamh"));
+
+        // NPC at different location should NOT have memory
+        let away = npcs.get(&NpcId(3)).unwrap();
+        assert!(away.memory.is_empty());
+    }
+
+    #[test]
+    fn test_witness_memory_content_format() {
+        let mut npcs = HashMap::new();
+        let speaker = make_test_npc(1, "Padraig", 1);
+        let witness = make_test_npc(2, "Niamh", 1);
+        npcs.insert(NpcId(1), speaker);
+        npcs.insert(NpcId(2), witness);
+
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
+        record_witness_memories(
+            &mut npcs,
+            NpcId(1),
+            "Padraig",
+            "What do you know about the landlord?",
+            "That man is no friend of ours.",
+            game_time,
+            LocationId(1),
+        );
+
+        let witness = npcs.get(&NpcId(2)).unwrap();
+        let mem = witness.memory.recent(1);
+        assert!(mem[0].content.contains("landlord"));
+        assert!(mem[0].content.contains("Padraig"));
+        assert!(mem[0].content.contains("no friend"));
+        // Participants should include player, speaker, and witness
+        assert!(mem[0].participants.contains(&NpcId(0)));
+        assert!(mem[0].participants.contains(&NpcId(1)));
+        assert!(mem[0].participants.contains(&NpcId(2)));
+    }
 }
