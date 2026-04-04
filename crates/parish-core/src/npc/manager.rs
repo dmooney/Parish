@@ -236,6 +236,11 @@ impl NpcManager {
         self.npcs.values()
     }
 
+    /// Returns a mutable reference to the internal NPC map.
+    pub fn npcs_mut(&mut self) -> &mut HashMap<NpcId, Npc> {
+        &mut self.npcs
+    }
+
     /// Returns the number of NPCs managed.
     pub fn npc_count(&self) -> usize {
         self.npcs.len()

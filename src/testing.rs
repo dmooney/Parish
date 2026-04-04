@@ -958,6 +958,33 @@ impl GameTestHarness {
                     }
                 }
 
+                // Record conversation exchange for scene awareness
+                let location = self.app.world.player_location;
+                self.app.world.conversation_log.add(
+                    crate::npc::conversation::ConversationExchange {
+                        timestamp: game_time,
+                        speaker_id: npc_id,
+                        speaker_name: name.clone(),
+                        player_input: text.to_string(),
+                        npc_dialogue: dialogue.clone(),
+                        location,
+                    },
+                );
+
+                // Record witness memories for bystander NPCs
+                let witness_events = crate::npc::ticks::record_witness_memories(
+                    self.app.npc_manager.npcs_mut(),
+                    npc_id,
+                    &name,
+                    text,
+                    &dialogue,
+                    game_time,
+                    location,
+                );
+                for event in witness_events {
+                    self.app.debug_event(event);
+                }
+
                 return ActionResult::NpcResponse {
                     npc: name,
                     dialogue,
