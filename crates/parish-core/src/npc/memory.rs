@@ -203,18 +203,20 @@ impl LongTermMemory {
             return Vec::new();
         }
 
+        // Pre-lowercase query keywords once instead of per-entry.
+        // Avoids O(Q * E) String allocations where Q = query count, E = entry count.
+        let query_lower: Vec<String> = query_keywords.iter().map(|qk| qk.to_lowercase()).collect();
+
         let mut scored: Vec<(f32, &LongTermEntry)> = self
             .entries
             .iter()
             .filter_map(|entry| {
-                let keyword_matches = query_keywords
+                let keyword_matches = query_lower
                     .iter()
                     .filter(|qk| {
-                        let qk_lower = qk.to_lowercase();
-                        entry
-                            .keywords
-                            .iter()
-                            .any(|ek| ek.to_lowercase() == qk_lower)
+                        // Use eq_ignore_ascii_case to avoid allocating a new String
+                        // for each entry keyword on every comparison.
+                        entry.keywords.iter().any(|ek| ek.eq_ignore_ascii_case(qk))
                     })
                     .count();
 
@@ -251,8 +253,15 @@ impl LongTermMemory {
             return String::new();
         }
 
-        let lines: Vec<String> = recalled.iter().map(|entry| entry.content.clone()).collect();
-        format!("You recall: {}", lines.join(". "))
+        // Build the string directly instead of allocating a Vec<String> of cloned content.
+        let mut result = String::from("You recall: ");
+        for (i, entry) in recalled.iter().enumerate() {
+            if i > 0 {
+                result.push_str(". ");
+            }
+            result.push_str(&entry.content);
+        }
+        result
     }
 }
 
