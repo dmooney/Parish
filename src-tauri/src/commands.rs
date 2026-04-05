@@ -358,9 +358,14 @@ async fn handle_system_command(
                 });
                 extra_response = Some(format!("Showing spinner for {} seconds…", secs));
             }
-            CommandEffect::NewGame => {
-                extra_response = Some("New game is not yet available in the GUI.".to_string());
-            }
+            CommandEffect::NewGame => match do_new_game(&state, &app).await {
+                Ok(()) => {
+                    extra_response = Some("A new chapter begins in the parish...".to_string());
+                }
+                Err(e) => {
+                    extra_response = Some(format!("New game failed: {}", e));
+                }
+            },
         }
     }
 
@@ -1013,13 +1018,10 @@ pub async fn new_save_file(state: tauri::State<'_, Arc<AppState>>) -> Result<(),
     Ok(())
 }
 
-/// Starts a brand new game: reloads world and NPCs from data files,
-/// creates a new save file, and saves the fresh initial state.
-#[tauri::command]
-pub async fn new_game(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+/// Internal helper that reloads world/NPCs and creates a fresh save file.
+///
+/// Called both by the `new_game` Tauri command and the `CommandEffect::NewGame` handler.
+async fn do_new_game(state: &Arc<AppState>, app: &tauri::AppHandle) -> Result<(), String> {
     let data_dir = crate::find_data_dir();
 
     // Reload fresh world and NPCs from data files
@@ -1059,14 +1061,6 @@ pub async fn new_game(
     let mut ws = snapshot_from_world(&world, transport);
     ws.name_hints = compute_name_hints(&world, &npc_manager, &state.pronunciations);
     let _ = app.emit(EVENT_WORLD_UPDATE, ws);
-    let _ = app.emit(
-        EVENT_TEXT_LOG,
-        TextLogPayload {
-            id: String::new(),
-            source: "system".to_string(),
-            content: "A new chapter begins in the parish...".to_string(),
-        },
-    );
 
     drop(npc_manager);
     drop(world);
@@ -1075,6 +1069,25 @@ pub async fn new_game(
     *state.current_branch_id.lock().await = Some(branch.id);
     *state.current_branch_name.lock().await = Some("main".to_string());
 
+    Ok(())
+}
+
+/// Starts a brand new game: reloads world and NPCs from data files,
+/// creates a new save file, and saves the fresh initial state.
+#[tauri::command]
+pub async fn new_game(
+    state: tauri::State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    do_new_game(&state, &app).await?;
+    let _ = app.emit(
+        EVENT_TEXT_LOG,
+        TextLogPayload {
+            id: String::new(),
+            source: "system".to_string(),
+            content: "A new chapter begins in the parish...".to_string(),
+        },
+    );
     Ok(())
 }
 

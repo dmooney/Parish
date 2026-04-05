@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use parish_core::inference::openai_client::OpenAiClient;
 use parish_core::inference::{InferenceQueue, new_inference_log, spawn_inference_worker};
-use parish_core::input::{InputResult, classify_input, parse_intent_local};
+use parish_core::input::{InputResult, classify_input, extract_mention, parse_intent_local};
 use parish_core::ipc::{
     IDLE_MESSAGES, INFERENCE_FAILURE_MESSAGES, LoadingPayload, MapData, NpcInfo,
     NpcReactionPayload, ReactRequest, StreamEndPayload, StreamTokenPayload, ThemePalette,
@@ -247,14 +247,16 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
                     &text_log("system", "Debug commands are not available in web mode."),
                 );
             }
-            CommandEffect::ShowSpinner(_) => {
-                state.event_bus.emit(
-                    "text-log",
-                    &text_log(
-                        "system",
-                        "Spinner customization is not available in web mode.",
-                    ),
-                );
+            CommandEffect::ShowSpinner(secs) => {
+                let secs = *secs;
+                let cancel = tokio_util::sync::CancellationToken::new();
+                spawn_loading_animation(Arc::clone(state), cancel.clone());
+                let msg = format!("Showing spinner for {} seconds...", secs);
+                state.event_bus.emit("text-log", &text_log("system", msg));
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    cancel.cancel();
+                });
             }
             CommandEffect::NewGame => match do_new_game_inner(state).await {
                 Ok(()) => {
@@ -324,7 +326,13 @@ async fn handle_game_input(raw: String, state: &Arc<AppState>) {
         return;
     }
 
-    handle_npc_conversation(raw, state).await;
+    // Extract @mention for NPC targeting, if present
+    let (target_name, dialogue) = match extract_mention(&raw) {
+        Some(mention) => (Some(mention.name), mention.remaining),
+        None => (None, raw),
+    };
+
+    handle_npc_conversation(dialogue, target_name, state).await;
 }
 
 /// Resolves movement to a named location.
@@ -436,7 +444,7 @@ async fn handle_look(state: &Arc<AppState>) {
 }
 
 /// Routes input to the NPC at the player's location, or shows idle message.
-async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
+async fn handle_npc_conversation(raw: String, target_name: Option<String>, state: &Arc<AppState>) {
     let (setup, queue, npc_present) = {
         let world = state.world.lock().await;
         let mut npc_manager = state.npc_manager.lock().await;
@@ -448,7 +456,7 @@ async fn handle_npc_conversation(raw: String, state: &Arc<AppState>) {
             &world,
             &mut npc_manager,
             &raw,
-            None,
+            target_name.as_deref(),
             config.improv_enabled,
         );
         (setup, queue.clone(), npc_present)

@@ -303,9 +303,26 @@ streaming, and NPC conversation setup across backends.
 - **`config.rs`** — `GameConfig` struct holding mutable runtime configuration
   (provider, model, API key, cloud settings, per-category overrides).
 - **`handlers.rs`** — Pure functions: `snapshot_from_world`, `build_map_data`,
-  `build_theme`, `text_log`, `capitalize_first`, `prepare_npc_conversation`,
-  `mask_key`, `IDLE_MESSAGES`.
+  `build_theme`, `build_npcs_here`, `build_travel_start`, `text_log`,
+  `capitalize_first`, `prepare_npc_conversation` (includes anachronism checking),
+  `compute_name_hints`, `mask_key`. Shared constants: `IDLE_MESSAGES`,
+  `INFERENCE_FAILURE_MESSAGES` (Irish-themed canned fallbacks for inference errors).
 - **`streaming.rs`** — `stream_npc_tokens()` with separator holdback and
   callback-based token emission; `strip_trailing_json()` for weak models.
 - **`types.rs`** — Serializable IPC types: `WorldSnapshot`, `MapData`, `NpcInfo`,
-  `ThemePalette`, `TextLogPayload`, `StreamTokenPayload`, etc.
+  `ThemePalette`, `TextLogPayload`, `StreamTokenPayload`, `StreamEndPayload`,
+  `NpcReactionPayload`, `LoadingPayload` (with spinner/phrase/color animation),
+  `TravelStartPayload`, `ReactRequest`, etc.
+
+#### Backend parity
+
+All backends share these features through core:
+- NPC conversations with anachronism checking and pronunciation hints
+- System command handling via `CommandEffect` dispatch
+- Token streaming with separator holdback
+- Loading animation (Celtic cross spinner + Irish phrases)
+- Game clock pause/resume during inference
+- Weather ticking, NPC schedule ticking, tier assignment
+- Gossip propagation between co-located Tier 2 NPCs
+- Autosave (60-second periodic snapshots)
+- Save/load/branch persistence commands

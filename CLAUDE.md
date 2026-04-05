@@ -79,8 +79,10 @@ Parish/
 │       ├── game_mod.rs  #   GameMod loader (mod.toml manifest, data files, prompts, pronunciations)
 │       ├── loading.rs   #   LoadingAnimation (configurable from mod or defaults)
 │       ├── ipc/         #   Shared IPC types + handler functions (used by all backends)
-│       │   ├── types.rs #     WorldSnapshot, MapData, NpcInfo, ThemePalette, payloads
-│       │   ├── handlers.rs #  snapshot_from_world, build_map_data, text_log, capitalize_first, prepare_npc_conversation
+│       │   ├── types.rs #     WorldSnapshot, MapData, NpcInfo, ThemePalette, LoadingPayload, payloads
+│       │   ├── handlers.rs #  snapshot_from_world, build_map_data, build_theme, build_npcs_here,
+│       │   │                  text_log, capitalize_first, prepare_npc_conversation (with anachronism
+│       │   │                  checking), compute_name_hints; IDLE_MESSAGES, INFERENCE_FAILURE_MESSAGES
 │       │   ├── commands.rs #  handle_command, CommandEffect, CommandResult, render_look_text
 │       │   ├── config.rs #    GameConfig (runtime provider/model/cloud settings, per-category overrides)
 │       │   └── streaming.rs # stream_npc_tokens, strip_trailing_json

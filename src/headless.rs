@@ -8,7 +8,7 @@ use crate::app::App;
 use crate::config::{CategoryConfig, CloudConfig, InferenceCategory, ProviderConfig};
 use crate::inference::openai_client::OpenAiClient;
 use crate::inference::{self, InferenceClients, InferenceQueue};
-use crate::input::{Command, InputResult, classify_input, parse_intent};
+use crate::input::{Command, InputResult, classify_input, extract_mention, parse_intent};
 use crate::loading::LoadingAnimation;
 use crate::npc::manager::NpcManager;
 use crate::npc::parse_npc_stream_response;
@@ -684,12 +684,18 @@ async fn handle_headless_game_input(
             print_location_description(app);
         }
         _ => {
+            // Extract @mention for NPC targeting, if present
+            let (target_name, dialogue) = match extract_mention(text) {
+                Some(mention) => (Some(mention.name), mention.remaining),
+                None => (None, text.to_string()),
+            };
+
             // Route to NPC conversation if one is present
             if let Some(setup) = parish_core::ipc::prepare_npc_conversation(
                 &app.world,
                 &mut app.npc_manager,
-                text,
-                None,
+                &dialogue,
+                target_name.as_deref(),
                 app.improv_enabled,
             ) {
                 let _npc_id = setup.npc_id;
