@@ -19,8 +19,10 @@ use parish_core::ipc::{
     IDLE_MESSAGES, LoadingPayload, MapData, NpcInfo, NpcReactionPayload, ReactRequest,
     StreamEndPayload, StreamTokenPayload, ThemePalette, WorldSnapshot, capitalize_first, text_log,
 };
+use parish_core::npc::manager::NpcManager;
 use parish_core::npc::parse_npc_stream_response;
 use parish_core::npc::reactions;
+use parish_core::world::{LocationId, WorldState};
 
 use parish_core::debug_snapshot::{self, DebugSnapshot, InferenceDebug};
 use parish_core::persistence::Database;
@@ -205,15 +207,38 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
             CommandEffect::ToggleMap => {
                 state.event_bus.emit("toggle-full-map", &());
             }
-            CommandEffect::SaveGame
-            | CommandEffect::ForkBranch(_)
-            | CommandEffect::LoadBranch(_)
-            | CommandEffect::ListBranches
-            | CommandEffect::ShowLog => {
-                state.event_bus.emit(
-                    "text-log",
-                    &text_log("system", "Persistence is not yet available in web mode."),
-                );
+            CommandEffect::SaveGame => {
+                let msg = match do_save_game_inner(state).await {
+                    Ok(msg) => msg,
+                    Err(e) => format!("Save failed: {}", e),
+                };
+                state.event_bus.emit("text-log", &text_log("system", msg));
+            }
+            CommandEffect::ForkBranch(name) => {
+                let parent_id = state.current_branch_id.lock().await.unwrap_or(1);
+                let msg = match do_fork_branch_inner(state, name, parent_id).await {
+                    Ok(msg) => msg,
+                    Err(e) => format!("Fork failed: {}", e),
+                };
+                state.event_bus.emit("text-log", &text_log("system", msg));
+            }
+            CommandEffect::LoadBranch(_) => {
+                // Open the save picker in the frontend
+                state.event_bus.emit("save-picker", &());
+            }
+            CommandEffect::ListBranches => {
+                let msg = match do_list_branches_inner(state).await {
+                    Ok(text) => text,
+                    Err(e) => format!("Failed to list branches: {}", e),
+                };
+                state.event_bus.emit("text-log", &text_log("system", msg));
+            }
+            CommandEffect::ShowLog => {
+                let msg = match do_branch_log_inner(state).await {
+                    Ok(text) => text,
+                    Err(e) => format!("Failed to show log: {}", e),
+                };
+                state.event_bus.emit("text-log", &text_log("system", msg));
             }
             CommandEffect::Debug(_) => {
                 state.event_bus.emit(
@@ -230,12 +255,20 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
                     ),
                 );
             }
-            CommandEffect::NewGame => {
-                state.event_bus.emit(
-                    "text-log",
-                    &text_log("system", "New game is not yet available in web mode."),
-                );
-            }
+            CommandEffect::NewGame => match do_new_game_inner(state).await {
+                Ok(()) => {
+                    state.event_bus.emit(
+                        "text-log",
+                        &text_log("system", "A new chapter begins in the parish..."),
+                    );
+                }
+                Err(e) => {
+                    state.event_bus.emit(
+                        "text-log",
+                        &text_log("system", format!("New game failed: {}", e)),
+                    );
+                }
+            },
         }
     }
 
@@ -580,29 +613,10 @@ async fn emit_npc_reactions(player_msg_id: &str, player_input: &str, state: &Arc
     }
 }
 
-// ── Persistence endpoints ────────────────────────────────────────────────────
+// ── Persistence helpers (called by both REST handlers and CommandEffect) ─────
 
-/// `GET /api/discover-save-files` — returns all save files with branch metadata.
-pub async fn discover_save_files(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<SaveFileInfo>>, (StatusCode, String)> {
-    let graph = {
-        let world = state.world.lock().await;
-        world.graph.clone()
-    };
-    let saves_dir = state.saves_dir.clone();
-
-    let saves = tokio::task::spawn_blocking(move || discover_saves(&saves_dir, &graph))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(saves))
-}
-
-/// `GET /api/save-game` — saves the current game state to the active save file.
-pub async fn save_game(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<String>, (StatusCode, String)> {
+/// Saves the current game state. Returns a human-readable success message.
+async fn do_save_game_inner(state: &Arc<AppState>) -> Result<String, String> {
     let snapshot = {
         let world = state.world.lock().await;
         let npc_manager = state.npc_manager.lock().await;
@@ -632,8 +646,8 @@ pub async fn save_game(
             Ok(branch.map(|b| b.id).unwrap_or(1))
         })
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
 
         *branch_id_guard = Some(id);
         *branch_name_guard = Some("main".to_string());
@@ -648,8 +662,8 @@ pub async fn save_game(
         Ok(())
     })
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
 
     let filename = db_path
         .file_name()
@@ -657,10 +671,229 @@ pub async fn save_game(
         .unwrap_or_else(|| "save".to_string());
     let branch_name = branch_name_guard.as_deref().unwrap_or("main");
 
-    Ok(Json(format!(
+    Ok(format!(
         "Game saved to {} (branch: {}).",
         filename, branch_name
-    )))
+    ))
+}
+
+/// Creates a new branch forked from a parent. Returns a human-readable message.
+async fn do_fork_branch_inner(
+    state: &Arc<AppState>,
+    name: &str,
+    parent_branch_id: i64,
+) -> Result<String, String> {
+    let save_path_guard = state.save_path.lock().await;
+    let db_path = save_path_guard
+        .as_ref()
+        .ok_or_else(|| "No active save file. Use /save first.".to_string())?
+        .clone();
+    drop(save_path_guard);
+
+    let name_owned = name.to_string();
+    let db_path_clone = db_path.clone();
+
+    let new_id = tokio::task::spawn_blocking(move || -> Result<i64, String> {
+        let db = Database::open(&db_path_clone).map_err(|e| e.to_string())?;
+        db.create_branch(&name_owned, Some(parent_branch_id))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    let snapshot = {
+        let world = state.world.lock().await;
+        let npc_manager = state.npc_manager.lock().await;
+        GameSnapshot::capture(&world, &npc_manager)
+    };
+
+    let db_path_clone2 = db_path;
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let db = Database::open(&db_path_clone2).map_err(|e| e.to_string())?;
+        db.save_snapshot(new_id, &snapshot)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    *state.current_branch_id.lock().await = Some(new_id);
+    *state.current_branch_name.lock().await = Some(name.to_string());
+
+    Ok(format!("Created new branch '{}'.", name))
+}
+
+/// Lists all branches in the current save file.
+async fn do_list_branches_inner(state: &Arc<AppState>) -> Result<String, String> {
+    let save_path_guard = state.save_path.lock().await;
+    let db_path = save_path_guard
+        .as_ref()
+        .ok_or_else(|| "No active save file. Use /save first.".to_string())?
+        .clone();
+    drop(save_path_guard);
+
+    let current_branch_id = *state.current_branch_id.lock().await;
+
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+        let branches = db.list_branches().map_err(|e| e.to_string())?;
+        if branches.is_empty() {
+            return Ok("No branches found.".to_string());
+        }
+        let mut lines = vec!["Branches:".to_string()];
+        for b in &branches {
+            let marker = if Some(b.id) == current_branch_id {
+                " *"
+            } else {
+                ""
+            };
+            let parent = b
+                .parent_branch_id
+                .and_then(|pid| branches.iter().find(|bb| bb.id == pid))
+                .map(|bb| format!(" (from {})", bb.name))
+                .unwrap_or_default();
+            lines.push(format!("  {}{}{}", b.name, parent, marker));
+        }
+        Ok(lines.join("\n"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Shows the save log for the current branch.
+async fn do_branch_log_inner(state: &Arc<AppState>) -> Result<String, String> {
+    let save_path_guard = state.save_path.lock().await;
+    let db_path = save_path_guard
+        .as_ref()
+        .ok_or_else(|| "No active save file. Use /save first.".to_string())?
+        .clone();
+    drop(save_path_guard);
+
+    let branch_id = state
+        .current_branch_id
+        .lock()
+        .await
+        .ok_or_else(|| "No active branch.".to_string())?;
+
+    let branch_name = state.current_branch_name.lock().await.clone();
+    let name = branch_name.as_deref().unwrap_or("unknown").to_string();
+
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+        let log = db.branch_log(branch_id).map_err(|e| e.to_string())?;
+        if log.is_empty() {
+            return Ok("No snapshots yet on this branch.".to_string());
+        }
+        let mut lines = vec![format!("Save log for branch '{}':", name)];
+        for (i, info) in log.iter().enumerate() {
+            let time = parish_core::persistence::format_timestamp(&info.real_time);
+            lines.push(format!("  {}. {} (game: {})", i + 1, time, info.game_time));
+        }
+        Ok(lines.join("\n"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Starts a new game (resets world and NPCs from data dir).
+async fn do_new_game_inner(state: &Arc<AppState>) -> Result<(), String> {
+    let data_dir = state.data_dir.clone();
+    let saves_dir = state.saves_dir.clone();
+
+    // Load fresh world and NPCs
+    let world = WorldState::from_parish_file(&data_dir.join("parish.json"), LocationId(15))
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to load parish.json: {}. Using default world.", e);
+            WorldState::new()
+        });
+
+    let mut npc_manager =
+        NpcManager::load_from_file(&data_dir.join("npcs.json")).unwrap_or_else(|e| {
+            tracing::warn!("Failed to load npcs.json: {}. No NPCs.", e);
+            NpcManager::new()
+        });
+    npc_manager.assign_tiers(&world, &[]);
+
+    // Replace state
+    {
+        let mut w = state.world.lock().await;
+        *w = world;
+    }
+    {
+        let mut nm = state.npc_manager.lock().await;
+        *nm = npc_manager;
+    }
+
+    // Create a new save file
+    let path = new_save_path(&saves_dir);
+    let snapshot = {
+        let w = state.world.lock().await;
+        let nm = state.npc_manager.lock().await;
+        GameSnapshot::capture(&w, &nm)
+    };
+
+    let path_clone = path.clone();
+    let branch_id = tokio::task::spawn_blocking(move || -> Result<i64, String> {
+        let db = Database::open(&path_clone).map_err(|e| e.to_string())?;
+        let branch = db
+            .find_branch("main")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Failed to create main branch".to_string())?;
+        db.save_snapshot(branch.id, &snapshot)
+            .map_err(|e| e.to_string())?;
+        Ok(branch.id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    *state.save_path.lock().await = Some(path);
+    *state.current_branch_id.lock().await = Some(branch_id);
+    *state.current_branch_name.lock().await = Some("main".to_string());
+
+    // Emit updated world snapshot
+    {
+        let world = state.world.lock().await;
+        let npc_manager = state.npc_manager.lock().await;
+        let transport = state.transport.default_mode();
+        let mut ws = parish_core::ipc::snapshot_from_world(&world, transport);
+        ws.name_hints =
+            parish_core::ipc::compute_name_hints(&world, &npc_manager, &state.pronunciations);
+        state.event_bus.emit("world-update", &ws);
+    }
+
+    Ok(())
+}
+
+// ── Persistence endpoints ────────────────────────────────────────────────────
+
+/// `GET /api/discover-save-files` — returns all save files with branch metadata.
+pub async fn discover_save_files(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<SaveFileInfo>>, (StatusCode, String)> {
+    let graph = {
+        let world = state.world.lock().await;
+        world.graph.clone()
+    };
+    let saves_dir = state.saves_dir.clone();
+
+    let saves = tokio::task::spawn_blocking(move || discover_saves(&saves_dir, &graph))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(saves))
+}
+
+/// `GET /api/save-game` — saves the current game state to the active save file.
+pub async fn save_game(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<String>, (StatusCode, String)> {
+    let msg = do_save_game_inner(&state)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(msg))
 }
 
 /// Request body for `POST /api/load-branch`.
@@ -752,53 +985,10 @@ pub async fn create_branch(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBranchRequest>,
 ) -> Result<Json<String>, (StatusCode, String)> {
-    let save_path_guard = state.save_path.lock().await;
-    let db_path = save_path_guard
-        .as_ref()
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                "No active save file. Use /save first.".to_string(),
-            )
-        })?
-        .clone();
-    drop(save_path_guard);
-
-    let name = body.name.clone();
-    let parent_branch_id = body.parent_branch_id;
-    let db_path_clone = db_path.clone();
-    let name_clone = name.clone();
-
-    let new_id = tokio::task::spawn_blocking(move || -> Result<i64, String> {
-        let db = Database::open(&db_path_clone).map_err(|e| e.to_string())?;
-        db.create_branch(&name_clone, Some(parent_branch_id))
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    let snapshot = {
-        let world = state.world.lock().await;
-        let npc_manager = state.npc_manager.lock().await;
-        GameSnapshot::capture(&world, &npc_manager)
-    };
-
-    let db_path_clone2 = db_path.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let db = Database::open(&db_path_clone2).map_err(|e| e.to_string())?;
-        db.save_snapshot(new_id, &snapshot)
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    *state.current_branch_id.lock().await = Some(new_id);
-    *state.current_branch_name.lock().await = Some(name.clone());
-
-    Ok(Json(format!("Created new branch '{}'.", name)))
+    let msg = do_fork_branch_inner(&state, &body.name, body.parent_branch_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(msg))
 }
 
 /// `GET /api/new-save-file` — creates a new save file and saves current state.
@@ -840,67 +1030,14 @@ pub async fn new_save_file(
 pub async fn new_game(
     State(state): State<Arc<AppState>>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    use parish_core::npc::manager::NpcManager;
-    use parish_core::world::{LocationId, WorldState};
-
-    let data_dir = state.data_dir.clone();
-
-    let fresh_world = WorldState::from_parish_file(&data_dir.join("parish.json"), LocationId(15))
-        .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to load world: {}", e),
-        )
-    })?;
-
-    let fresh_npcs = NpcManager::load_from_file(&data_dir.join("npcs.json"))
-        .unwrap_or_else(|_| NpcManager::new());
-
-    let snapshot = {
-        let mut world = state.world.lock().await;
-        let mut npc_manager = state.npc_manager.lock().await;
-        *world = fresh_world;
-        *npc_manager = fresh_npcs;
-        npc_manager.assign_tiers(&world, &[]);
-        GameSnapshot::capture(&world, &npc_manager)
-    };
-
-    let saves_dir = state.saves_dir.clone();
-    let path = new_save_path(&saves_dir);
-    let path_clone = path.clone();
-
-    let branch_id = tokio::task::spawn_blocking(move || -> Result<i64, String> {
-        let db = Database::open(&path_clone).map_err(|e| e.to_string())?;
-        let branch = db
-            .find_branch("main")
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Failed to create main branch".to_string())?;
-        db.save_snapshot(branch.id, &snapshot)
-            .map_err(|e| e.to_string())?;
-        Ok(branch.id)
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    {
-        let world = state.world.lock().await;
-        let npc_manager = state.npc_manager.lock().await;
-        let transport = state.transport.default_mode();
-        let mut ws = parish_core::ipc::snapshot_from_world(&world, transport);
-        ws.name_hints =
-            parish_core::ipc::compute_name_hints(&world, &npc_manager, &state.pronunciations);
-        state.event_bus.emit("world-update", &ws);
-    }
+    do_new_game_inner(&state)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     state.event_bus.emit(
         "text-log",
         &text_log("system", "A new chapter begins in the parish..."),
     );
-
-    *state.save_path.lock().await = Some(path);
-    *state.current_branch_id.lock().await = Some(branch_id);
-    *state.current_branch_name.lock().await = Some("main".to_string());
 
     Ok(StatusCode::OK)
 }
