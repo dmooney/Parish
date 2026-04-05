@@ -289,3 +289,23 @@ Run `cargo run` for a plain stdin/stdout REPL. This is the default mode. Uses id
 - [`src/inference/`](../../src/inference/) — Client, queue, setup/bootstrap
 - [`src/persistence/`](../../src/persistence/)
 - [`src/input/`](../../src/input/)
+
+### Shared IPC Layer (`crates/parish-core/src/ipc/`)
+
+All four backends (Tauri, web server, headless CLI, test harness) delegate shared
+logic to the `parish_core::ipc` module. This avoids duplicating command handling,
+streaming, and NPC conversation setup across backends.
+
+- **`commands.rs`** — `handle_command()` processes ~30 system command variants,
+  returning `CommandResult` (response text + `CommandEffect` side effects).
+  Each backend dispatches effects through its own mechanism (Tauri events,
+  EventBus, stdout, test assertions).
+- **`config.rs`** — `GameConfig` struct holding mutable runtime configuration
+  (provider, model, API key, cloud settings, per-category overrides).
+- **`handlers.rs`** — Pure functions: `snapshot_from_world`, `build_map_data`,
+  `build_theme`, `text_log`, `capitalize_first`, `prepare_npc_conversation`,
+  `mask_key`, `IDLE_MESSAGES`.
+- **`streaming.rs`** — `stream_npc_tokens()` with separator holdback and
+  callback-based token emission; `strip_trailing_json()` for weak models.
+- **`types.rs`** — Serializable IPC types: `WorldSnapshot`, `MapData`, `NpcInfo`,
+  `ThemePalette`, `TextLogPayload`, `StreamTokenPayload`, etc.

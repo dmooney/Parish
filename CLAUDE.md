@@ -78,9 +78,12 @@ Parish/
 │       ├── debug_snapshot.rs # DebugSnapshot struct + builder (debug data for GUI)
 │       ├── game_mod.rs  #   GameMod loader (mod.toml manifest, data files, prompts, pronunciations)
 │       ├── loading.rs   #   LoadingAnimation (configurable from mod or defaults)
-│       ├── ipc/         #   Shared IPC types + handler functions (used by Tauri + web)
+│       ├── ipc/         #   Shared IPC types + handler functions (used by all backends)
 │       │   ├── types.rs #     WorldSnapshot, MapData, NpcInfo, ThemePalette, payloads
-│       │   └── handlers.rs #  snapshot_from_world, build_map_data, build_theme, etc.
+│       │   ├── handlers.rs #  snapshot_from_world, build_map_data, text_log, capitalize_first, prepare_npc_conversation
+│       │   ├── commands.rs #  handle_command, CommandEffect, CommandResult, render_look_text
+│       │   ├── config.rs #    GameConfig (runtime provider/model/cloud settings, per-category overrides)
+│       │   └── streaming.rs # stream_npc_tokens, strip_trailing_json
 │       ├── input/       #   Player input parsing, command detection
 │       ├── world/       #   World state, location graph, time, movement, encounters
 │       │   ├── graph.rs #     WorldGraph, BFS pathfinding, fuzzy name search
