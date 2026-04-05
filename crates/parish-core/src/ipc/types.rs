@@ -109,6 +109,8 @@ pub struct NpcInfo {
     pub mood: String,
     /// Whether the player has been introduced to this NPC.
     pub introduced: bool,
+    /// Emoji representation of the mood.
+    pub mood_emoji: String,
 }
 
 // ── Theme palette ───────────────────────────────────────────────────────────

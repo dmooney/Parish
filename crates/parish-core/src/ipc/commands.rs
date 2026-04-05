@@ -363,20 +363,30 @@ pub fn handle_command(
 
         // ── Mode-specific commands (delegated to backend) ───────────────
         Command::Quit => CommandResult::effect_only(CommandEffect::Quit),
-        Command::Help => {
-            // Each backend provides its own help text; this is a fallback.
-            CommandResult::text(
-                [
-                    "A few things ye might say:",
-                    "  /help     — Show this help",
-                    "  /pause    — Hold time still",
-                    "  /resume   — Let time flow again",
-                    "  /speed    — Show or change game speed",
-                    "  /status   — Where am I?",
-                ]
-                .join("\n"),
-            )
-        }
+        Command::Help => CommandResult::text(
+            [
+                "A few things ye might say:",
+                "  /help              — Show this help",
+                "  /about             — About this game",
+                "  /status            — Where am I?",
+                "  /time              — Time, weather, and season details",
+                "  /npcs              — Who is nearby?",
+                "  /wait [minutes]    — Wait in place (default: 15 min)",
+                "  /pause             — Hold time still",
+                "  /resume            — Let time flow again",
+                "  /speed [slow|normal|fast|fastest|ludicrous]  — Show or change game speed",
+                "  /irish             — Toggle Irish pronunciation sidebar",
+                "  /improv            — Toggle improv craft mode",
+                "  /map               — Toggle the full map",
+                "  /save              — Save the game",
+                "  /fork <name>       — Fork a new branch from here",
+                "  /load <name>       — Load a named branch",
+                "  /branches          — List save branches",
+                "  /log               — Show branch history",
+                "  /new-game          — Start a fresh game",
+            ]
+            .join("\n"),
+        ),
         Command::Save => CommandResult::effect_only(CommandEffect::SaveGame),
         Command::Fork(name) => CommandResult::effect_only(CommandEffect::ForkBranch(name)),
         Command::Load(name) => CommandResult::effect_only(CommandEffect::LoadBranch(name)),
@@ -429,6 +439,7 @@ pub fn render_look_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::InferenceCategory;
 
     fn default_state() -> (WorldState, NpcManager, GameConfig) {
         (WorldState::new(), NpcManager::new(), GameConfig::default())

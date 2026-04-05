@@ -22,7 +22,7 @@ use parish_core::inference::{
 };
 use parish_core::npc::manager::NpcManager;
 use parish_core::npc::reactions::ReactionTemplates;
-use parish_core::world::palette::{RawColor, RawPalette, compute_palette};
+use parish_core::world::palette::compute_palette;
 use parish_core::world::transport::TransportConfig;
 use parish_core::world::{LocationId, WorldState};
 
@@ -102,59 +102,8 @@ pub struct MapData {
     pub edge_traversals: Vec<(String, String, u32)>,
 }
 
-/// Minimal NPC info for the sidebar.
-#[derive(serde::Serialize, Clone)]
-pub struct NpcInfo {
-    /// Display name (full name if introduced, brief description otherwise).
-    pub name: String,
-    /// NPC's occupation.
-    pub occupation: String,
-    /// NPC's current mood.
-    pub mood: String,
-    /// Whether the player has been introduced to this NPC.
-    pub introduced: bool,
-    /// Emoji representation of the mood.
-    pub mood_emoji: String,
-}
-
-/// CSS hex-string theme palette derived from `RawPalette`.
-#[derive(serde::Serialize, Clone)]
-pub struct ThemePalette {
-    /// Main background colour (`"#rrggbb"`).
-    pub bg: String,
-    /// Foreground (text) colour.
-    pub fg: String,
-    /// Accent colour for highlights and the status bar.
-    pub accent: String,
-    /// Slightly offset panel background.
-    pub panel_bg: String,
-    /// Input field background.
-    pub input_bg: String,
-    /// Border/separator colour.
-    pub border: String,
-    /// Muted colour for secondary text.
-    pub muted: String,
-}
-
-impl From<RawPalette> for ThemePalette {
-    fn from(raw: RawPalette) -> Self {
-        let hex = |c: RawColor| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
-        ThemePalette {
-            bg: hex(raw.bg),
-            fg: hex(raw.fg),
-            accent: hex(raw.accent),
-            panel_bg: hex(raw.panel_bg),
-            input_bg: hex(raw.input_bg),
-            border: hex(raw.border),
-            muted: hex(raw.muted),
-        }
-    }
-}
-
-// ── Application state ────────────────────────────────────────────────────────
-
-// GameConfig is now shared across all backends via parish-core.
-pub use parish_core::ipc::GameConfig;
+// NpcInfo and ThemePalette are defined in parish-core and re-exported here.
+pub use parish_core::ipc::{GameConfig, NpcInfo, ThemePalette};
 
 /// Current save state for display in the StatusBar.
 #[derive(serde::Serialize, Clone)]

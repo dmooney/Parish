@@ -11,6 +11,7 @@ use chrono::{Datelike, Timelike};
 use crate::game_mod::PronunciationEntry;
 use crate::npc::anachronism;
 use crate::npc::manager::NpcManager;
+use crate::npc::mood::mood_emoji;
 use crate::npc::ticks;
 use crate::npc::{LanguageHint, Npc, NpcId};
 use crate::world::description::{format_exits, render_description};
@@ -215,6 +216,7 @@ pub fn build_npcs_here(world: &WorldState, npc_manager: &NpcManager) -> Vec<NpcI
             NpcInfo {
                 name: npc_manager.display_name(npc).to_string(),
                 occupation: npc.occupation.clone(),
+                mood_emoji: mood_emoji(&npc.mood).to_string(),
                 mood: npc.mood.clone(),
                 introduced,
             }
