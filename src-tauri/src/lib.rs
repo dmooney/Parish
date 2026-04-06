@@ -172,6 +172,8 @@ pub struct AppState {
     pub current_branch_name: Mutex<Option<String>>,
     /// Transport mode configuration from the loaded game mod.
     pub transport: TransportConfig,
+    /// JoinHandle for the active inference worker task (aborted on rebuild).
+    pub inference_worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 // ── Data path resolution ─────────────────────────────────────────────────────
@@ -466,6 +468,7 @@ pub fn run() {
             category_api_key: [None, None, None, None],
             category_base_url: [None, None, None, None],
         }),
+        inference_worker: Mutex::new(None),
     });
 
     tauri::Builder::default()
@@ -573,7 +576,7 @@ pub fn run() {
                     let client_guard = state_setup.client.lock().await;
                     if let Some(ref client) = *client_guard {
                         let (tx, rx) = tokio::sync::mpsc::channel(32);
-                        let _worker = spawn_inference_worker(
+                        let worker = spawn_inference_worker(
                             client.clone(),
                             rx,
                             state_setup.inference_log.clone(),
@@ -581,6 +584,8 @@ pub fn run() {
                         let queue = InferenceQueue::new(tx);
                         let mut iq = state_setup.inference_queue.lock().await;
                         *iq = Some(queue);
+                        drop(iq);
+                        *state_setup.inference_worker.lock().await = Some(worker);
                     }
                 }
 

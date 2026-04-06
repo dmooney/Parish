@@ -236,8 +236,10 @@ pub async fn submit_input(
 
 /// Rebuilds the inference pipeline after a provider/key/client change.
 ///
-/// Replaces the client and respawns the inference worker so subsequent
-/// NPC conversations use the new configuration.
+/// Aborts the previous inference worker (if any) before spawning a replacement,
+/// preventing orphaned tasks from accumulating on repeated `/provider` or `/key`
+/// changes. The new worker's [`JoinHandle`] is stored in `AppState` so the next
+/// call can abort it in turn.
 async fn rebuild_inference(state: &Arc<AppState>) {
     let config = state.config.lock().await;
     let new_client = OpenAiClient::new(&config.base_url, config.api_key.as_deref());
@@ -247,12 +249,22 @@ async fn rebuild_inference(state: &Arc<AppState>) {
     *client_guard = Some(new_client.clone());
     drop(client_guard);
 
+    // Abort the old worker before spawning the replacement to avoid leaking tasks.
+    {
+        let mut worker_guard = state.inference_worker.lock().await;
+        if let Some(old_handle) = worker_guard.take() {
+            old_handle.abort();
+        }
+    }
+
     // Respawn inference worker with the new client
     let (tx, rx) = tokio::sync::mpsc::channel(32);
-    let _worker = spawn_inference_worker(new_client, rx, state.inference_log.clone());
+    let worker = spawn_inference_worker(new_client, rx, state.inference_log.clone());
     let queue = InferenceQueue::new(tx);
     let mut iq = state.inference_queue.lock().await;
     *iq = Some(queue);
+    drop(iq);
+    *state.inference_worker.lock().await = Some(worker);
 }
 
 /// Handles `/command` inputs using the shared command handler.
