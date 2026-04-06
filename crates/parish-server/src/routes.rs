@@ -1279,16 +1279,17 @@ mod tests {
                 cloud_api_key: None,
                 cloud_base_url: None,
                 improv_enabled: false,
-                category_provider: [None, None, None],
-                category_model: [None, None, None],
-                category_api_key: [None, None, None],
-                category_base_url: [None, None, None],
+                category_provider: [None, None, None, None],
+                category_model: [None, None, None, None],
+                category_api_key: [None, None, None, None],
+                category_base_url: [None, None, None, None],
             },
             None,
             transport,
             ui_config,
             saves_dir,
             data_dir,
+            None,
         )
     }
 
