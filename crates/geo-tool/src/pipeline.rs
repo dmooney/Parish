@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use parish::world::LocationId;
-use parish::world::graph::{Connection, LocationData};
+use parish_core::world::LocationId;
+use parish_core::world::graph::{Connection, LocationData};
 
 use super::AdminLevel;
 use super::cache::ResponseCache;

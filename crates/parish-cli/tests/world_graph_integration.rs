@@ -15,8 +15,9 @@ use parish::world::time::TimeOfDay;
 use parish::world::transport::TransportMode;
 
 fn load_parish_graph() -> WorldGraph {
-    let path = Path::new("data/parish.json");
-    WorldGraph::load_from_file(path).expect("data/parish.json should load and validate")
+    let path = Path::new("../../mods/kilteevan-1820/world.json");
+    WorldGraph::load_from_file(path)
+        .expect("mods/kilteevan-1820/world.json should load and validate")
 }
 
 fn walking() -> TransportMode {

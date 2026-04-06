@@ -302,21 +302,21 @@ fn test_text_log_records_actions() {
 #[test]
 fn test_script_fixture_walkthrough() {
     // Verify the walkthrough fixture runs without error
-    let path = std::path::Path::new("tests/fixtures/test_walkthrough.txt");
+    let path = std::path::Path::new("../../testing/fixtures/test_walkthrough.txt");
     assert!(path.exists(), "test_walkthrough.txt fixture must exist");
     parish::testing::run_script_mode(path).unwrap();
 }
 
 #[test]
 fn test_script_fixture_movement_errors() {
-    let path = std::path::Path::new("tests/fixtures/test_movement_errors.txt");
+    let path = std::path::Path::new("../../testing/fixtures/test_movement_errors.txt");
     assert!(path.exists(), "test_movement_errors.txt fixture must exist");
     parish::testing::run_script_mode(path).unwrap();
 }
 
 #[test]
 fn test_script_fixture_commands() {
-    let path = std::path::Path::new("tests/fixtures/test_commands.txt");
+    let path = std::path::Path::new("../../testing/fixtures/test_commands.txt");
     assert!(path.exists(), "test_commands.txt fixture must exist");
     parish::testing::run_script_mode(path).unwrap();
 }

@@ -309,34 +309,38 @@ fn build_inference_clients(
     InferenceClients::new(base_client.clone(), base_model.to_string(), overrides)
 }
 
-/// Finds the `data/` directory by walking up from the cwd.
+/// Finds the active mod data directory (containing `world.json` + `npcs.json`).
 fn find_data_dir() -> PathBuf {
+    const MOD_REL: &str = "mods/kilteevan-1820";
     let mut p = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for _ in 0..4 {
-        if p.join("data/parish.json").exists() {
-            return p.join("data");
+        if p.join(MOD_REL).join("world.json").exists() {
+            return p.join(MOD_REL);
         }
         match p.parent() {
             Some(parent) => p = parent.to_path_buf(),
             None => break,
         }
     }
-    PathBuf::from("data")
+    PathBuf::from(MOD_REL)
 }
 
-/// Finds the `ui/dist/` directory for the Svelte frontend build.
+/// Finds the Svelte frontend build directory (`apps/ui/dist/`).
 fn find_ui_dist_dir() -> PathBuf {
+    let candidates = ["apps/ui/dist", "ui/dist"];
     let mut p = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for _ in 0..4 {
-        if p.join("ui/dist/index.html").exists() {
-            return p.join("ui/dist");
+        for c in &candidates {
+            if p.join(c).join("index.html").exists() {
+                return p.join(c);
+            }
         }
         match p.parent() {
             Some(parent) => p = parent.to_path_buf(),
             None => break,
         }
     }
-    PathBuf::from("ui/dist")
+    PathBuf::from("apps/ui/dist")
 }
 
 /// Builds per-category CLI overrides from the parsed CLI arguments.

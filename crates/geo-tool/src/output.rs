@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use parish::world::graph::LocationData;
+use parish_core::world::graph::LocationData;
 
 use super::descriptions::DescriptionSource;
 use super::merge::TrackedLocation;
@@ -122,7 +122,7 @@ pub fn validate_output(output_path: &Path) -> Result<()> {
         )
     })?;
 
-    parish::world::graph::WorldGraph::load_from_str(&json)
+    parish_core::world::graph::WorldGraph::load_from_str(&json)
         .context("generated parish data failed validation")?;
 
     info!("output validation passed");
@@ -168,8 +168,8 @@ pub fn print_summary(locations: &[TrackedLocation]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parish::world::LocationId;
-    use parish::world::graph::Connection;
+    use parish_core::world::LocationId;
+    use parish_core::world::graph::Connection;
 
     fn make_tracked_locations() -> Vec<TrackedLocation> {
         vec![

@@ -11,7 +11,7 @@ use std::path::Path;
 
 /// Helper: load a fixture and return captured results.
 fn fixture(name: &str) -> Vec<ScriptResult> {
-    let path = Path::new("tests/fixtures").join(name);
+    let path = Path::new("../../testing/fixtures").join(name);
     assert!(path.exists(), "Fixture {} must exist", name);
     parish::testing::run_script_captured(&path).expect("Script should execute without error")
 }

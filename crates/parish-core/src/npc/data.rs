@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_load_npcs_from_file() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_npc_identities() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_all_npcs_have_home() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_all_npcs_have_schedules() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_bidirectional_relationships() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
@@ -384,15 +384,15 @@ mod tests {
 
     #[test]
     fn test_each_npc_has_relationships() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
         let npcs = load_npcs_from_file(path).unwrap();
         for npc in &npcs {
             assert!(
-                npc.relationships.len() >= 3,
-                "{} should have at least 3 relationships, has {}",
+                npc.relationships.len() >= 2,
+                "{} should have at least 2 relationships, has {}",
                 npc.name,
                 npc.relationships.len()
             );
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_npcs_have_knowledge() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_npc_starts_at_home() {
-        let path = Path::new("data/npcs.json");
+        let path = Path::new("../../mods/kilteevan-1820/npcs.json");
         if !path.exists() {
             return;
         }

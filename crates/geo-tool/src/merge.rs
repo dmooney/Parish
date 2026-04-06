@@ -11,8 +11,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use parish::world::LocationId;
-use parish::world::graph::{Connection, LocationData, WorldGraph};
+use parish_core::world::LocationId;
+use parish_core::world::graph::{Connection, LocationData, WorldGraph};
 
 use super::descriptions::DescriptionSource;
 use super::osm_model::haversine_distance;
@@ -227,7 +227,7 @@ pub fn connect_curated_to_generated(locations: &mut [TrackedLocation], max_dista
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parish::npc::NpcId;
+    use parish_core::npc::NpcId;
 
     fn make_tracked(
         id: u32,
