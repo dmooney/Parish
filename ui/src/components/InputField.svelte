@@ -721,9 +721,13 @@
 			<span class="travel-label">Go To</span>
 			{#each adjacentLocations as loc}
 				<button
+					type="button"
 					class="travel-chip"
 					onclick={() => quickTravel(loc.name)}
 					disabled={$streamingActive}
+					aria-label={loc.travel_minutes !== undefined
+						? `Travel to ${loc.name}, about ${loc.travel_minutes} minutes`
+						: `Travel to ${loc.name}`}
 				>
 					{loc.name}
 					{#if loc.travel_minutes !== undefined}
@@ -851,6 +855,12 @@
 
 	.send-btn:hover:not(:disabled) {
 		opacity: 0.85;
+	}
+
+	.send-btn:focus-visible,
+	.travel-chip:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
 	}
 
 	.mention-dropdown {
