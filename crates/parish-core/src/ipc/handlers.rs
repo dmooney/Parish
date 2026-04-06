@@ -211,6 +211,7 @@ pub fn build_npcs_here(world: &WorldState, npc_manager: &NpcManager) -> Vec<NpcI
                 occupation: npc.occupation.clone(),
                 mood: npc.mood.clone(),
                 introduced,
+                is_ill: npc.is_ill,
             }
         })
         .collect()

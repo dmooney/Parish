@@ -115,6 +115,8 @@ pub struct NpcInfo {
     pub introduced: bool,
     /// Emoji representation of the mood.
     pub mood_emoji: String,
+    /// Whether this NPC is currently ill (set by the Tier 4 rules engine).
+    pub is_ill: bool,
 }
 
 /// CSS hex-string theme palette derived from `RawPalette`.
@@ -861,6 +863,44 @@ pub fn run() {
                                             tt.npc_name, direction, tt.old_tier, tt.new_tier,
                                         ),
                                     });
+                                }
+                            }
+
+                            // Phase 5E: Tier 4 rules engine — runs once per
+                            // in-game season. Surfaces life events as system
+                            // text-log entries so the player sees parish news.
+                            if npc_mgr.needs_tier4_tick(now) {
+                                let mut rng = rand::thread_rng();
+                                let life_events = npc_mgr.run_tier4_tick(season, now, &mut rng);
+                                if !life_events.is_empty() {
+                                    tracing::info!(
+                                        "Tier 4 tick produced {} life events",
+                                        life_events.len()
+                                    );
+                                }
+                                for event in &life_events {
+                                    let line = match event {
+                                        parish_core::world::events::GameEvent::LifeEvent {
+                                            description,
+                                            ..
+                                        } => Some(description.clone()),
+                                        parish_core::world::events::GameEvent::FestivalStarted {
+                                            name,
+                                            ..
+                                        } => Some(format!("✦ {name} begins in the parish.")),
+                                        _ => None,
+                                    };
+                                    if let Some(content) = line {
+                                        let _ = handle_tick.emit(
+                                            crate::events::EVENT_TEXT_LOG,
+                                            crate::events::TextLogPayload {
+                                                id: String::new(),
+                                                source: "system".to_string(),
+                                                content,
+                                            },
+                                        );
+                                    }
+                                    world.event_bus.publish(event.clone());
                                 }
                             }
                         }

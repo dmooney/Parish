@@ -59,6 +59,7 @@ export interface NpcInfo {
 	mood: string;
 	introduced: boolean;
 	mood_emoji: string;
+	is_ill: boolean;
 }
 
 export interface ThemePalette {

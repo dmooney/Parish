@@ -167,6 +167,36 @@ fn spawn_background_ticks(state: Arc<AppState>) {
                 if !events.is_empty() {
                     tracing::debug!("NPC schedule tick: {} events", events.len());
                 }
+
+                // Phase 5E: Tier 4 rules engine — runs once per in-game season.
+                // Produces life events (illness, recovery, death, birth, trade,
+                // seasonal shifts, festivals) for far-away NPCs without LLM calls.
+                if npc_mgr.needs_tier4_tick(now) {
+                    let season = world.clock.season();
+                    let mut rng = rand::thread_rng();
+                    let life_events = npc_mgr.run_tier4_tick(season, now, &mut rng);
+                    if !life_events.is_empty() {
+                        tracing::info!("Tier 4 tick produced {} life events", life_events.len());
+                    }
+                    for event in &life_events {
+                        let line = match event {
+                            parish_core::world::events::GameEvent::LifeEvent {
+                                description,
+                                ..
+                            } => Some(description.clone()),
+                            parish_core::world::events::GameEvent::FestivalStarted {
+                                name, ..
+                            } => Some(format!("✦ {name} begins in the parish.")),
+                            _ => None,
+                        };
+                        if let Some(content) = line {
+                            state_tick
+                                .event_bus
+                                .emit("text-log", &crate::routes::text_log("system", content));
+                        }
+                        world.event_bus.publish(event.clone());
+                    }
+                }
             }
         }
     });

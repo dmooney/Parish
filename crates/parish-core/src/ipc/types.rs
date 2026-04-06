@@ -104,6 +104,9 @@ pub struct NpcInfo {
     pub mood: String,
     /// Whether the player has been introduced to this NPC.
     pub introduced: bool,
+    /// Whether this NPC is currently ill (set by the Tier 4 rules engine).
+    #[serde(default)]
+    pub is_ill: bool,
 }
 
 // ── Theme palette ───────────────────────────────────────────────────────────
@@ -298,6 +301,7 @@ mod tests {
             occupation: "Farmer".to_string(),
             mood: "content".to_string(),
             introduced: true,
+            is_ill: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deser: NpcInfo = serde_json::from_str(&json).unwrap();

@@ -672,6 +672,44 @@ impl NpcManager {
         self.last_tier4_game_time = Some(time);
     }
 
+    /// Convenience: runs a full Tier 4 tick using the given RNG.
+    ///
+    /// Collects mutable references to all Tier 4 NPCs, runs `tick_tier4()`,
+    /// applies the resulting events, and records the tick time. Returns the
+    /// `GameEvent`s produced (suitable for publishing on the event bus or
+    /// surfacing as text-log entries to the UI).
+    pub fn run_tier4_tick(
+        &mut self,
+        season: crate::world::time::Season,
+        game_time: DateTime<Utc>,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<GameEvent> {
+        let tier4_ids = self.tier4_npcs();
+        if tier4_ids.is_empty() {
+            self.record_tier4_tick(game_time);
+            return Vec::new();
+        }
+
+        let events = {
+            let mut npc_refs: Vec<&mut Npc> = self
+                .npcs
+                .iter_mut()
+                .filter(|(id, _)| tier4_ids.contains(id))
+                .map(|(_, npc)| npc)
+                .collect();
+            crate::npc::tier4::tick_tier4(
+                npc_refs.as_mut_slice(),
+                season,
+                game_time.date_naive(),
+                rng,
+            )
+        };
+
+        let game_events = self.apply_tier4_events(&events, game_time);
+        self.record_tier4_tick(game_time);
+        game_events
+    }
+
     /// Applies the results of a Tier 4 tick to NPC state.
     ///
     /// Returns a list of `GameEvent`s to publish on the event bus.

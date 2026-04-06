@@ -9,10 +9,13 @@
 		{#if $npcsHere.length > 0}
 			<ul class="npc-list">
 				{#each $npcsHere as npc}
-					<li class="npc-item">
+					<li class="npc-item" class:ill={npc.is_ill}>
 						<div class="npc-name-row">
 							<span class="npc-mood"><MoodIcon mood={npc.mood} /></span>
 							<span class="npc-name">{npc.name}</span>
+							{#if npc.is_ill}
+								<span class="npc-ill" title="Currently unwell (Tier 4 illness event)">🤒 unwell</span>
+							{/if}
 						</div>
 						{#if npc.introduced}
 							<span class="npc-detail">{npc.occupation}</span>
@@ -130,6 +133,17 @@
 	.npc-detail {
 		color: var(--color-muted);
 		font-size: 0.75rem;
+	}
+
+	.npc-ill {
+		color: #c87f3a;
+		font-size: 0.7rem;
+		font-style: italic;
+		margin-left: 0.25rem;
+	}
+
+	.npc-item.ill .npc-name {
+		opacity: 0.75;
 	}
 
 	.npc-mood {

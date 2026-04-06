@@ -39,7 +39,7 @@ static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Creates a [`TextLogPayload`] with an auto-generated unique message ID.
-fn text_log(source: impl Into<String>, content: impl Into<String>) -> TextLogPayload {
+pub(crate) fn text_log(source: impl Into<String>, content: impl Into<String>) -> TextLogPayload {
     TextLogPayload {
         id: format!("msg-{}", MESSAGE_ID.fetch_add(1, Ordering::SeqCst)),
         source: source.into(),
