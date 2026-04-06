@@ -374,6 +374,43 @@ impl WorldGraph {
         distances
     }
 
+    /// Computes BFS travel times (in game minutes) from `from` to every reachable
+    /// location, in a single graph traversal.
+    ///
+    /// Performance: replaces the previous pattern of calling [`Self::shortest_path`]
+    /// once per destination (which ran a full BFS each time, O(V·(V+E))) with a
+    /// single BFS that accumulates `parent_time + edge_minutes(parent, neighbor)`
+    /// as it expands. For a map render with N visited locations this turns N BFS
+    /// passes into 1.
+    ///
+    /// The path chosen for each destination is the fewest-hops path (matching
+    /// the prior `shortest_path` semantics), and travel time is summed via
+    /// haversine distance per edge at the supplied `speed_m_per_s`.
+    pub fn travel_times_from(
+        &self,
+        from: LocationId,
+        speed_m_per_s: f64,
+    ) -> HashMap<LocationId, u16> {
+        let mut times: HashMap<LocationId, u16> = HashMap::new();
+        if !self.locations.contains_key(&from) {
+            return times;
+        }
+        times.insert(from, 0);
+        let mut queue = VecDeque::new();
+        queue.push_back(from);
+        while let Some(current) = queue.pop_front() {
+            let current_time = *times.get(&current).unwrap_or(&0);
+            for (neighbor_id, _) in self.neighbors(current) {
+                if let std::collections::hash_map::Entry::Vacant(e) = times.entry(neighbor_id) {
+                    let edge = self.edge_travel_minutes(current, neighbor_id, speed_m_per_s);
+                    e.insert(current_time.saturating_add(edge));
+                    queue.push_back(neighbor_id);
+                }
+            }
+        }
+        times
+    }
+
     /// Returns the connection from one location to another, if they are neighbors.
     pub fn connection_between(&self, from: LocationId, to: LocationId) -> Option<&Connection> {
         self.locations

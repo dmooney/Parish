@@ -85,6 +85,10 @@ pub fn build_map_data(world: &WorldState, transport: &TransportMode) -> MapData 
         .collect();
 
     let hop_map = world.graph.hop_distances(player_loc);
+    // Single BFS computes travel times to every reachable location, replacing
+    // a per-visited-location `shortest_path()` call (each of which ran its own
+    // full BFS). For N visited locations this is N× fewer BFS passes per render.
+    let travel_time_map = world.graph.travel_times_from(player_loc, speed_m_per_s);
 
     // Frontier: unvisited locations that neighbor at least one visited location
     let mut frontier: HashSet<LocationId> = HashSet::new();
@@ -107,10 +111,7 @@ pub fn build_map_data(world: &WorldState, transport: &TransportMode) -> MapData 
             let travel_minutes = if id == player_loc {
                 None
             } else {
-                world
-                    .graph
-                    .shortest_path(player_loc, id)
-                    .map(|path| world.graph.path_travel_time(&path, speed_m_per_s))
+                travel_time_map.get(&id).copied()
             };
 
             MapLocation {
