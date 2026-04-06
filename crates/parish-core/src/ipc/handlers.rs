@@ -320,14 +320,22 @@ pub fn prepare_npc_conversation(
         return None;
     }
 
-    // If an @mention was provided, try to find that NPC; otherwise first NPC
+    // If an @mention was provided, try to find that NPC by name.
+    // Otherwise default to the last NPC spoken to at this location (if still
+    // present), falling back to the first NPC in the list.
     let npc: Option<Npc> = if let Some(name) = target_name {
         npc_manager
             .find_by_name(name, world.player_location)
             .cloned()
             .or_else(|| npcs_here.first().cloned().cloned())
     } else {
-        npcs_here.first().cloned().cloned()
+        let last_spoken_to = world
+            .conversation_log
+            .last_speaker_at(world.player_location)
+            .and_then(|id| npc_manager.get(id))
+            .filter(|npc| npcs_here.iter().any(|n| n.id == npc.id))
+            .cloned();
+        last_spoken_to.or_else(|| npcs_here.first().cloned().cloned())
     };
 
     let npc = npc?;
@@ -482,8 +490,20 @@ mod tests {
                 );
             }
 
-            // Edges should connect start to each frontier neighbor
-            assert_eq!(map.edges.len(), neighbor_count);
+            // Edges must include start→frontier neighbors; may also include
+            // edges between frontier nodes that are connected to each other.
+            let start_str = start.0.to_string();
+            for f in &frontier {
+                let connected = map.edges.iter().any(|(a, b)| {
+                    (a == &start_str && b == &f.id) || (a == &f.id && b == &start_str)
+                });
+                assert!(
+                    connected,
+                    "start should be connected to frontier node {}",
+                    f.id
+                );
+            }
+            assert!(map.edges.len() >= neighbor_count);
         }
     }
 

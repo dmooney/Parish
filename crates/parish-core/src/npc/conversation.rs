@@ -23,9 +23,9 @@ pub struct ConversationExchange {
     pub speaker_id: NpcId,
     /// The NPC's display name.
     pub speaker_name: String,
-    /// What the player said or did (may be truncated).
+    /// What the player said or did.
     pub player_input: String,
-    /// What the NPC said back (truncated to ~100 chars).
+    /// What the NPC said back.
     pub npc_dialogue: String,
     /// Where this exchange took place.
     pub location: LocationId,
@@ -69,6 +69,15 @@ impl ConversationLog {
             .collect()
     }
 
+    /// Returns the NPC id of the most recent speaker at a location, if any.
+    pub fn last_speaker_at(&self, location: LocationId) -> Option<NpcId> {
+        self.exchanges
+            .iter()
+            .rev()
+            .find(|e| e.location == location)
+            .map(|e| e.speaker_id)
+    }
+
     /// Checks whether the given NPC was the speaker in any of the last `n`
     /// exchanges at this location.
     pub fn has_recent_exchange_with(
@@ -101,13 +110,9 @@ impl ConversationLog {
                 exchange.speaker_name.clone()
             };
 
-            // Truncate player input for context
-            let player_summary = truncate(exchange.player_input.as_str(), 80);
-            let npc_summary = truncate(exchange.npc_dialogue.as_str(), 80);
-
             lines.push(format!(
                 "- [{}] The traveller said: \"{}\". {} replied: \"{}\"",
-                time, player_summary, speaker, npc_summary,
+                time, exchange.player_input, speaker, exchange.npc_dialogue,
             ));
         }
         lines.join("\n")
@@ -121,20 +126,6 @@ impl ConversationLog {
     /// Returns true if there are no stored exchanges.
     pub fn is_empty(&self) -> bool {
         self.exchanges.is_empty()
-    }
-}
-
-/// Truncates a string to at most `max_len` characters, appending "..." if truncated.
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        // Find a char boundary near max_len
-        let mut end = max_len;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
     }
 }
 

@@ -12,7 +12,10 @@ use crate::inference::openai_client::OpenAiClient;
 use crate::npc::gossip::GossipNetwork;
 use crate::npc::memory::{MemoryEntry, try_promote};
 use crate::npc::types::{Tier2Event, Tier2Response, Tier3Response, Tier3Update};
-use crate::npc::{Npc, NpcId, NpcStreamResponse, build_tier1_context, build_tier1_system_prompt};
+use crate::npc::{
+    Npc, NpcId, NpcStreamResponse, build_action_line, build_tier1_context,
+    build_tier1_system_prompt,
+};
 use crate::world::graph::WorldGraph;
 use crate::world::{LocationId, WorldState};
 
@@ -131,7 +134,7 @@ pub fn build_enhanced_context_with_config(
     config: &NpcConfig,
     _npc_names: &std::collections::HashMap<NpcId, String>,
 ) -> String {
-    let mut context = build_tier1_context(world, player_input);
+    let mut context = build_tier1_context(world);
 
     // Add other NPCs present with relationship context
     if !other_npcs.is_empty() {
@@ -167,14 +170,10 @@ pub fn build_enhanced_context_with_config(
         .conversation_log
         .has_recent_exchange_with(world.player_location, npc.id, 2)
     {
-        context.push_str("\n\nYou are already in conversation with this traveller. Do not re-introduce yourself or greet them again.");
-    }
-
-    // Add recent memories
-    let memory_ctx = npc.memory.context_string(config.memory_context_count);
-    if !memory_ctx.is_empty() {
-        context.push_str("\n\nRecent memories:\n");
-        context.push_str(&memory_ctx);
+        context.push_str(
+            "\n\nYou are already in conversation with this traveller. \
+            Do not re-introduce yourself or greet them again.",
+        );
     }
 
     // Add recent player reactions (emoji feedback)
@@ -214,6 +213,10 @@ pub fn build_enhanced_context_with_config(
         context.push_str("\n\n");
         context.push_str(&gossip_ctx);
     }
+
+    // Player's current input last — everything above is context for this moment
+    context.push_str("\n\n");
+    context.push_str(&build_action_line(player_input));
 
     context
 }
@@ -266,7 +269,7 @@ pub fn apply_tier1_response_with_config(
 
     // Record memory of the interaction
     let content = format!(
-        "Spoke with a traveller who {}. Responded: {}",
+        "A traveller said: '{}'. Responded: {}",
         player_input,
         truncate_for_memory(&response.dialogue, config.memory_truncation_dialogue)
     );
@@ -328,12 +331,9 @@ pub fn record_witness_memories(
 ) -> Vec<String> {
     let mut debug_events = Vec::new();
 
-    let truncated_input = truncate_for_memory(player_input, 60);
-    let truncated_dialogue = truncate_for_memory(npc_dialogue, 60);
-
     let content = format!(
         "Overheard: a traveller said '{}' and {} replied '{}'",
-        truncated_input, speaker_name, truncated_dialogue,
+        player_input, speaker_name, npc_dialogue,
     );
 
     // Collect witness IDs first to avoid borrow issues
@@ -942,7 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn test_enhanced_context_with_memories() {
+    fn test_enhanced_context_short_term_memory_not_injected() {
+        // Short-term memories are no longer injected into the context prompt —
+        // the conversation log ("What's been said here") covers recent exchanges,
+        // and short-term memories are maintained only for long-term promotion.
         let mut npc = make_test_npc(1, "Padraig", 1);
         npc.memory.add(MemoryEntry {
             timestamp: Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap(),
@@ -954,8 +957,8 @@ mod tests {
 
         let npc_names: std::collections::HashMap<NpcId, String> = std::collections::HashMap::new();
         let context = build_enhanced_context(&npc, &world, "says hello", &[], &npc_names);
-        assert!(context.contains("Recent memories:"));
-        assert!(context.contains("Saw a stranger at the crossroads"));
+        assert!(!context.contains("Recent memories:"));
+        assert!(!context.contains("Saw a stranger at the crossroads"));
     }
 
     #[test]
@@ -1156,29 +1159,18 @@ mod tests {
     }
 
     #[test]
-    fn test_build_enhanced_context_with_config_memory_count() {
-        let mut npc = make_test_npc(1, "Padraig", 1);
-        for i in 0..10 {
-            npc.memory.add(MemoryEntry {
-                timestamp: Utc.with_ymd_and_hms(1820, 3, 20, 8 + i, 0, 0).unwrap(),
-                content: format!("Memory {}", i),
-                participants: vec![NpcId(1)],
-                location: LocationId(1),
-            });
-        }
+    fn test_build_enhanced_context_action_line_at_end() {
+        let npc = make_test_npc(1, "Padraig", 1);
         let world = WorldState::new();
-
-        // With memory_context_count = 2, should only include last 2 memories
-        let config = NpcConfig {
-            memory_context_count: 2,
-            ..NpcConfig::default()
-        };
         let npc_names: std::collections::HashMap<NpcId, String> = std::collections::HashMap::new();
-        let context =
-            build_enhanced_context_with_config(&npc, &world, "hello", &[], &config, &npc_names);
-        assert!(context.contains("Memory 9"));
-        assert!(context.contains("Memory 8"));
-        assert!(!context.contains("Memory 7"));
+        let context = build_enhanced_context(&npc, &world, "hello there", &[], &npc_names);
+        // The traveller's current input must be the last meaningful content
+        let action_line = "The traveller says: \"hello there\"";
+        assert!(context.contains(action_line));
+        assert!(
+            context.rfind(action_line) > context.rfind("Your Location:"),
+            "action line should come after location context"
+        );
     }
 
     #[test]

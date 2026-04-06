@@ -201,22 +201,27 @@ impl NpcManager {
         let npcs = self.npcs_at(location);
         let lower = name.to_lowercase();
 
-        // Exact match on display name
-        if let Some(npc) = npcs
-            .iter()
-            .find(|n| self.display_name(n).to_lowercase() == lower)
-        {
+        // Exact match on real name (always) or display name (if introduced)
+        if let Some(npc) = npcs.iter().find(|n| {
+            n.name.to_lowercase() == lower || self.display_name(n).to_lowercase() == lower
+        }) {
             return Some(npc);
         }
 
-        // First-name prefix match
+        // First-name prefix match against real name or display name
         npcs.iter()
             .find(|n| {
-                let display = self.display_name(n).to_lowercase();
-                display
+                n.name
+                    .to_lowercase()
                     .split_whitespace()
                     .next()
                     .is_some_and(|first| first == lower)
+                    || self
+                        .display_name(n)
+                        .to_lowercase()
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|first| first == lower)
             })
             .copied()
     }
