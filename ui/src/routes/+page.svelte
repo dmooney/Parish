@@ -245,7 +245,7 @@
 			class="mobile-btn"
 			class:active={mobilePanel === 'sidebar'}
 			onclick={() => mobilePanel = mobilePanel === 'sidebar' ? 'none' : 'sidebar'}
-		>NPCs &amp; Hints</button>
+		>Hints</button>
 	</div>
 
 	<div class="main-area">
