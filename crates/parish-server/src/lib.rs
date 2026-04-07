@@ -65,10 +65,17 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .as_ref()
         .and_then(|gm| gm.manifest.meta.title.clone())
         .unwrap_or_else(|| "Parish".to_string());
+    // Railway injects RAILWAY_GIT_COMMIT_SHA at runtime; also accept a
+    // generic PARISH_COMMIT_SHA override. Short-hash for display.
+    let commit_sha = std::env::var("RAILWAY_GIT_COMMIT_SHA")
+        .or_else(|_| std::env::var("PARISH_COMMIT_SHA"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    let short_sha: String = commit_sha.chars().take(7).collect();
     let splash_text = format!(
-        "{}\nCopyright \u{00A9} 2026 David Mooney. All rights reserved.\nweb-server - {}",
+        "{}\nCopyright \u{00A9} 2026 David Mooney. All rights reserved.\nweb-server - {} - build {}",
         game_title,
         chrono::Local::now().format("%Y-%m-%d %H:%M"),
+        short_sha,
     );
     let ui_config = UiConfigSnapshot {
         hints_label: "Language Hints".to_string(),
