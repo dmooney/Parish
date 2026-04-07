@@ -70,18 +70,21 @@
 	// is cheap (the snapshot is just JSON over HTTP) and only runs while
 	// the panel is actually visible.
 	let debugPollHandle: ReturnType<typeof setInterval> | null = null;
-	$: {
-		if ($debugVisible && debugPollHandle === null) {
+	$effect(() => {
+		if ($debugVisible) {
 			debugPollHandle = setInterval(() => {
 				getDebugSnapshot()
 					.then((s) => debugSnapshot.set(s))
 					.catch(() => {});
 			}, 1000);
-		} else if (!$debugVisible && debugPollHandle !== null) {
-			clearInterval(debugPollHandle);
-			debugPollHandle = null;
+			return () => {
+				if (debugPollHandle !== null) {
+					clearInterval(debugPollHandle);
+					debugPollHandle = null;
+				}
+			};
 		}
-	}
+	});
 
 	onMount(async () => {
 		// Initial data fetch (theme first to avoid color flash)
