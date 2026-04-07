@@ -19,7 +19,6 @@ use parish_core::ipc::capitalize_first;
 use parish_core::world::transport::TransportMode;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc};
 
@@ -60,23 +59,12 @@ pub async fn run_headless(
     let _worker = inference::spawn_inference_worker(dial_client.clone(), rx, inference_log.clone());
     let queue = InferenceQueue::new(tx);
 
-    // Initialize app state — prefer mod data, fall back to legacy parish.json
+    // Initialize app state — load world from active mod
     let mut app = App::new();
     if let Some(ref gm) = game_mod {
         match crate::world::WorldState::from_mod(gm) {
             Ok(world) => app.world = world,
             Err(e) => eprintln!("Warning: Failed to load world from mod: {}", e),
-        }
-    } else {
-        let parish_path = Path::new("data/parish.json");
-        if parish_path.exists() {
-            match crate::world::WorldState::from_parish_file(
-                parish_path,
-                crate::world::LocationId(15),
-            ) {
-                Ok(world) => app.world = world,
-                Err(e) => eprintln!("Warning: Failed to load parish data: {}", e),
-            }
         }
     }
     app.game_mod = game_mod;
@@ -135,16 +123,14 @@ pub async fn run_headless(
         app.cloud_base_url = Some(cc.base_url.clone());
     }
 
-    // Load NPCs — prefer mod data, fall back to legacy data/ directory
-    let npcs_path = if let Some(ref gm) = app.game_mod {
-        gm.npcs_path()
-    } else {
-        std::path::PathBuf::from("data/npcs.json")
-    };
-    if npcs_path.exists() {
-        match NpcManager::load_from_file(&npcs_path) {
-            Ok(mgr) => app.npc_manager = mgr,
-            Err(e) => eprintln!("Warning: Failed to load NPC data: {}", e),
+    // Load NPCs from the active mod
+    if let Some(ref gm) = app.game_mod {
+        let npcs_path = gm.npcs_path();
+        if npcs_path.exists() {
+            match NpcManager::load_from_file(&npcs_path) {
+                Ok(mgr) => app.npc_manager = mgr,
+                Err(e) => eprintln!("Warning: Failed to load NPC data: {}", e),
+            }
         }
     }
 
@@ -554,20 +540,16 @@ async fn handle_headless_load(app: &mut App, name: &str) {
                     crate::persistence::GameSnapshot::capture(&app.world, &app.npc_manager);
                 let _ = db.save_snapshot(app.active_branch_id, &snapshot).await;
             }
-            let parish_path = Path::new("data/parish.json");
-            if parish_path.exists()
-                && let Ok(world) = crate::world::WorldState::from_parish_file(
-                    parish_path,
-                    crate::world::LocationId(15),
-                )
-            {
-                app.world = world;
-            }
-            let npcs_path = Path::new("data/npcs.json");
-            if npcs_path.exists()
-                && let Ok(mgr) = NpcManager::load_from_file(npcs_path)
-            {
-                app.npc_manager = mgr;
+            if let Some(ref gm) = app.game_mod {
+                if let Ok(world) = crate::world::WorldState::from_mod(gm) {
+                    app.world = world;
+                }
+                let npcs_path = gm.npcs_path();
+                if npcs_path.exists()
+                    && let Ok(mgr) = NpcManager::load_from_file(&npcs_path)
+                {
+                    app.npc_manager = mgr;
+                }
             }
             match crate::persistence::Database::open(&new_path) {
                 Ok(new_db) => {
@@ -633,30 +615,12 @@ async fn handle_headless_new_game(app: &mut App) {
                 return;
             }
         }
-    } else {
-        let parish_path = Path::new("data/parish.json");
-        if parish_path.exists() {
-            match crate::world::WorldState::from_parish_file(
-                parish_path,
-                crate::world::LocationId(15),
-            ) {
-                Ok(world) => app.world = world,
-                Err(e) => {
-                    eprintln!("Failed to reset world: {}", e);
-                    return;
-                }
+        let npcs_path = gm.npcs_path();
+        if npcs_path.exists() {
+            match NpcManager::load_from_file(&npcs_path) {
+                Ok(mgr) => app.npc_manager = mgr,
+                Err(e) => eprintln!("Warning: Failed to reload NPCs: {}", e),
             }
-        }
-    }
-    let npcs_path = if let Some(ref gm) = app.game_mod {
-        gm.npcs_path()
-    } else {
-        std::path::PathBuf::from("data/npcs.json")
-    };
-    if npcs_path.exists() {
-        match NpcManager::load_from_file(&npcs_path) {
-            Ok(mgr) => app.npc_manager = mgr,
-            Err(e) => eprintln!("Warning: Failed to reload NPCs: {}", e),
         }
     }
     app.npc_manager.assign_tiers(&app.world, &[]);

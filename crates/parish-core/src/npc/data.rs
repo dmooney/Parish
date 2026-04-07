@@ -391,8 +391,8 @@ mod tests {
         let npcs = load_npcs_from_file(path).unwrap();
         for npc in &npcs {
             assert!(
-                npc.relationships.len() >= 2,
-                "{} should have at least 2 relationships, has {}",
+                npc.relationships.len() >= 3,
+                "{} should have at least 3 relationships, has {}",
                 npc.name,
                 npc.relationships.len()
             );

@@ -108,43 +108,27 @@ pub struct GameTestHarness {
 }
 
 impl GameTestHarness {
-    /// Creates a new harness with the full parish world loaded.
-    ///
-    /// Prefers mod data from `mods/kilteevan-1820/` if available, otherwise
-    /// falls back to `data/parish.json`. Adds NPCs from the mod or data directory.
+    /// Creates a new harness with the full parish world loaded from the active mod.
     pub fn new() -> Self {
         let mut app = App::new();
 
-        // Try to load game mod
         let game_mod = parish_core::game_mod::find_default_mod()
             .and_then(|dir| parish_core::game_mod::GameMod::load(&dir).ok());
 
-        // Load world — prefer mod, fall back to legacy data/parish.json
         if let Some(ref gm) = game_mod {
             match crate::world::WorldState::from_mod(gm) {
                 Ok(world) => app.world = world,
                 Err(e) => eprintln!("Warning: Failed to load world from mod: {}", e),
             }
-        } else {
-            let parish_path = Path::new("data/parish.json");
-            if parish_path.exists() {
-                match crate::world::WorldState::from_parish_file(parish_path, LocationId(15)) {
-                    Ok(world) => app.world = world,
-                    Err(e) => eprintln!("Warning: Failed to load parish data: {}", e),
-                }
-            }
-        }
 
-        // Load NPCs — prefer mod, fall back to legacy data/npcs.json, then test NPC
-        let npcs_path = if let Some(ref gm) = game_mod {
-            gm.npcs_path()
-        } else {
-            std::path::PathBuf::from("data/npcs.json")
-        };
-        if npcs_path.exists() {
-            match NpcManager::load_from_file(&npcs_path) {
-                Ok(mgr) => app.npc_manager = mgr,
-                Err(_) => app.npc_manager.add_npc(Npc::new_test_npc()),
+            let npcs_path = gm.npcs_path();
+            if npcs_path.exists() {
+                match NpcManager::load_from_file(&npcs_path) {
+                    Ok(mgr) => app.npc_manager = mgr,
+                    Err(_) => app.npc_manager.add_npc(Npc::new_test_npc()),
+                }
+            } else {
+                app.npc_manager.add_npc(Npc::new_test_npc());
             }
         } else {
             app.npc_manager.add_npc(Npc::new_test_npc());
@@ -766,29 +750,16 @@ impl GameTestHarness {
         let game_mod = parish_core::game_mod::find_default_mod()
             .and_then(|dir| parish_core::game_mod::GameMod::load(&dir).ok());
 
-        if let Some(ref gm) = game_mod
-            && let Ok(world) = crate::world::WorldState::from_mod(gm)
-        {
-            self.app.world = world;
-        } else {
-            let parish_path = Path::new("data/parish.json");
-            if parish_path.exists()
-                && let Ok(world) =
-                    crate::world::WorldState::from_parish_file(parish_path, LocationId(15))
-            {
+        if let Some(ref gm) = game_mod {
+            if let Ok(world) = crate::world::WorldState::from_mod(gm) {
                 self.app.world = world;
             }
-        }
-
-        let npcs_path = if let Some(ref gm) = game_mod {
-            gm.npcs_path()
-        } else {
-            std::path::PathBuf::from("data/npcs.json")
-        };
-        if npcs_path.exists()
-            && let Ok(mgr) = NpcManager::load_from_file(&npcs_path)
-        {
-            self.app.npc_manager = mgr;
+            let npcs_path = gm.npcs_path();
+            if npcs_path.exists()
+                && let Ok(mgr) = NpcManager::load_from_file(&npcs_path)
+            {
+                self.app.npc_manager = mgr;
+            }
         }
         self.app.game_mod = game_mod;
         self.app.npc_manager.assign_tiers(&self.app.world, &[]);
