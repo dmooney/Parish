@@ -18,7 +18,7 @@ use tower_http::services::ServeDir;
 
 use parish_core::game_mod::{GameMod, find_default_mod};
 use parish_core::inference::openai_client::OpenAiClient;
-use parish_core::inference::{InferenceQueue, new_inference_log, spawn_inference_worker};
+use parish_core::inference::{InferenceQueue, spawn_inference_worker};
 use parish_core::npc::manager::NpcManager;
 use parish_core::world::transport::TransportConfig;
 use parish_core::world::{LocationId, WorldState};
@@ -93,7 +93,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     // Initialize inference queue
     if let Some(ref client) = client {
         let (tx, rx) = tokio::sync::mpsc::channel(32);
-        let _worker = spawn_inference_worker(client.clone(), rx, new_inference_log());
+        let _worker = spawn_inference_worker(client.clone(), rx, state.inference_log.clone());
         let queue = InferenceQueue::new(tx);
         let mut iq = state.inference_queue.lock().await;
         *iq = Some(queue);
