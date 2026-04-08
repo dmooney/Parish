@@ -39,9 +39,12 @@
 		submitInput
 	} from '$lib/ipc';
 	import { createAutoPauseTracker } from '$lib/auto-pause';
+	import type { LanguageHint } from '$lib/types';
 
 	const AUTO_PAUSE_MS = 60_000;
 	const MOUSEMOVE_THROTTLE_MS = 1000;
+	const STREAM_PACE_CHARS_PER_SECOND = 18;
+	const STREAM_PACE_TICK_MS = 90;
 
 	// F5 toggle for save picker, F12 toggle for debug panel, M toggle for map
 	function handleKeydown(e: KeyboardEvent) {
@@ -90,6 +93,37 @@
 			};
 		}
 	});
+
+	function appendStreamToken(token: string) {
+		textLog.update((log) => {
+			if (log.length > 0 && log[log.length - 1].streaming) {
+				const last = log[log.length - 1];
+				return [
+					...log.slice(0, -1),
+					{ ...last, content: last.content + token }
+				];
+			}
+			// Merge with the empty NPC name placeholder emitted by Rust
+			const last = log.length > 0 ? log[log.length - 1] : null;
+			if (
+				last &&
+				last.content === '' &&
+				last.source !== 'player' &&
+				last.source !== 'system'
+			) {
+				return [
+					...log.slice(0, -1),
+					{ ...last, content: token, streaming: true }
+				];
+			}
+			// Use the most recent NPC source name if available, otherwise fall back
+			const npcSource =
+				last && last.source !== 'player' && last.source !== 'system'
+					? last.source
+					: 'NPC';
+			return trimTextLog([...log, { source: npcSource, content: token, streaming: true }]);
+		});
+	}
 
 	onMount(async () => {
 		// Frontend auto-pause tracker — fires /pause after 60s of true UI
@@ -154,6 +188,49 @@
 			debugSnapshot.set(debugSnap);
 		} catch (_) {}
 
+		let streamBuffer = '';
+		let streamPumpHandle: ReturnType<typeof setInterval> | null = null;
+		let pendingStreamEndHints: LanguageHint[] | null = null;
+		let pacedCharBudget = 0;
+
+		const finishNpcStream = () => {
+			textLog.update((log) => {
+				if (log.length > 0 && log[log.length - 1].streaming) {
+					const last = log[log.length - 1];
+					return [...log.slice(0, -1), { ...last, streaming: false }];
+				}
+				return log;
+			});
+			languageHints.set(pendingStreamEndHints ?? []);
+			pendingStreamEndHints = null;
+			streamingActive.set(false);
+		};
+
+		const stopStreamPump = () => {
+			if (streamPumpHandle !== null) {
+				clearInterval(streamPumpHandle);
+				streamPumpHandle = null;
+			}
+		};
+
+		const startStreamPumpIfNeeded = () => {
+			if (streamPumpHandle !== null) return;
+			streamPumpHandle = setInterval(() => {
+				if (streamBuffer.length === 0) {
+					stopStreamPump();
+					if (pendingStreamEndHints !== null) finishNpcStream();
+					return;
+				}
+
+				pacedCharBudget += (STREAM_PACE_CHARS_PER_SECOND * STREAM_PACE_TICK_MS) / 1000;
+				const charsToEmit = Math.max(1, Math.floor(pacedCharBudget));
+				pacedCharBudget -= charsToEmit;
+				const token = streamBuffer.slice(0, charsToEmit);
+				streamBuffer = streamBuffer.slice(charsToEmit);
+				appendStreamToken(token);
+			}, STREAM_PACE_TICK_MS);
+		};
+
 		const listeners: Array<() => void> = [];
 		try {
 			listeners.push(await onWorldUpdate(async (snap) => {
@@ -181,47 +258,15 @@
 			}));
 
 			listeners.push(await onStreamToken((payload) => {
-				textLog.update((log) => {
-					if (log.length > 0 && log[log.length - 1].streaming) {
-						const last = log[log.length - 1];
-						return [
-							...log.slice(0, -1),
-							{ ...last, content: last.content + payload.token }
-						];
-					}
-					// Merge with the empty NPC name placeholder emitted by Rust
-					const last = log.length > 0 ? log[log.length - 1] : null;
-					if (
-						last &&
-						last.content === '' &&
-						last.source !== 'player' &&
-						last.source !== 'system'
-					) {
-						return [
-							...log.slice(0, -1),
-							{ ...last, content: payload.token, streaming: true }
-						];
-					}
-					// Use the most recent NPC source name if available, otherwise fall back
-					const npcSource =
-						last && last.source !== 'player' && last.source !== 'system'
-							? last.source
-							: 'NPC';
-					return trimTextLog([...log, { source: npcSource, content: payload.token, streaming: true }]);
-				});
+				streamBuffer += payload.token;
+				startStreamPumpIfNeeded();
 			}));
 
 			listeners.push(await onStreamEnd((payload) => {
-				// Finalize the streaming entry
-				textLog.update((log) => {
-					if (log.length > 0 && log[log.length - 1].streaming) {
-						const last = log[log.length - 1];
-						return [...log.slice(0, -1), { ...last, streaming: false }];
-					}
-					return log;
-				});
-				languageHints.set(payload.hints);
-				streamingActive.set(false);
+				pendingStreamEndHints = payload.hints;
+				if (streamBuffer.length === 0 && streamPumpHandle === null) {
+					finishNpcStream();
+				}
 			}));
 
 			listeners.push(await onLoading((payload) => {
@@ -275,6 +320,7 @@
 			window.removeEventListener('touchstart', onTrackerTouch);
 			window.removeEventListener('mousemove', onTrackerMousemove);
 			tracker.dispose();
+			stopStreamPump();
 			listeners.forEach((fn) => fn());
 		};
 	});
