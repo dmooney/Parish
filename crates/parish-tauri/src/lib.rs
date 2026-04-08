@@ -593,11 +593,11 @@ pub fn run() {
                     use parish_core::persistence::snapshot::GameSnapshot;
 
                     let saves_dir = {
-                        // Resolve saves dir relative to data dir
+                        // Anchor saves dir at the project root (where mods/ lives).
                         let mut p = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                         let mut found = None;
                         for _ in 0..4 {
-                            if p.join("data/parish.json").exists() {
+                            if p.join("mods/kilteevan-1820/world.json").exists() {
                                 let sd = p.join("saves");
                                 std::fs::create_dir_all(&sd).ok();
                                 found = Some(sd);

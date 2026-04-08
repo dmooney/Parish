@@ -1,9 +1,10 @@
 use std::process::Command;
 
 fn main() {
-    // Always rerun so branch/timestamp stay fresh
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    println!("cargo:rerun-if-changed=../.git/refs/heads");
+    // Rerun when the workspace's git HEAD changes so branch/timestamp stay fresh.
+    // The crate now lives at crates/parish-tauri/, so .git is two levels up.
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/refs/heads");
 
     // Embed git branch name at compile time
     let branch = Command::new("git")

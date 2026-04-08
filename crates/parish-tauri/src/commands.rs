@@ -839,11 +839,11 @@ use parish_core::persistence::picker::{
 };
 use parish_core::persistence::snapshot::GameSnapshot;
 
-/// Resolves the saves directory relative to the data directory.
+/// Resolves the saves directory at the project root (where `mods/` lives).
 fn saves_dir() -> std::path::PathBuf {
     let mut p = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     for _ in 0..4 {
-        if p.join("data/parish.json").exists() {
+        if p.join("mods/kilteevan-1820/world.json").exists() {
             let sd = p.join("saves");
             std::fs::create_dir_all(&sd).ok();
             return sd;
