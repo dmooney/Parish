@@ -172,6 +172,12 @@ pub struct AppState {
     pub current_branch_name: Mutex<Option<String>>,
     /// Transport mode configuration from the loaded game mod.
     pub transport: TransportConfig,
+    /// Wall-clock instant of the last player input. Drives the spontaneous
+    /// speech background tick.
+    pub last_player_input_at: Mutex<std::time::Instant>,
+    /// Wall-clock instant of the last spontaneous NPC speech turn. Used to
+    /// rate-limit spontaneous speech so it doesn't fire on every tick.
+    pub last_spontaneous_speech_at: Mutex<std::time::Instant>,
 }
 
 // ── Data path resolution ─────────────────────────────────────────────────────
@@ -466,6 +472,8 @@ pub fn run() {
             category_api_key: [None, None, None, None],
             category_base_url: [None, None, None, None],
         }),
+        last_player_input_at: Mutex::new(std::time::Instant::now()),
+        last_spontaneous_speech_at: Mutex::new(std::time::Instant::now()),
     });
 
     tauri::Builder::default()

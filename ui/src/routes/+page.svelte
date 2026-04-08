@@ -35,8 +35,17 @@
 		onSavePicker,
 		onToggleFullMap,
 		onNpcReaction,
-		onTravelStart
+		onTravelStart,
+		submitInput
 	} from '$lib/ipc';
+	import { createAutoPauseTracker } from '$lib/auto-pause';
+
+	/** Wall-clock ms before auto-pausing on player inactivity. */
+	const AUTO_PAUSE_MS = 60_000;
+	/** Throttle window for mousemove events feeding the auto-pause tracker. */
+	const MOUSEMOVE_THROTTLE_MS = 1000;
+
+	let autoPauseTracker: ReturnType<typeof createAutoPauseTracker> | null = null;
 
 	// F5 toggle for save picker, F12 toggle for debug panel, M toggle for map
 	function handleKeydown(e: KeyboardEvent) {
@@ -62,6 +71,26 @@
 	}
 
 	onMount(async () => {
+		// Auto-pause idle tracker. Listens for mouse/keyboard activity and
+		// issues /pause after AUTO_PAUSE_MS of inactivity. Auto-resumes on
+		// next activity if WE were the ones who paused. Manual pauses (via
+		// /pause slash command) are sticky.
+		autoPauseTracker = createAutoPauseTracker({
+			idleMs: AUTO_PAUSE_MS,
+			mousemoveThrottleMs: MOUSEMOVE_THROTTLE_MS,
+			submitInput: (text: string) => submitInput(text),
+			isWorldPaused: () => get(worldState)?.paused ?? false
+		});
+
+		const onKey = () => autoPauseTracker?.recordActivity();
+		const onMouseDown = () => autoPauseTracker?.recordActivity();
+		const onMouseMove = () => autoPauseTracker?.recordMousemove();
+		const onTouch = () => autoPauseTracker?.recordActivity();
+		window.addEventListener('keydown', onKey, { passive: true });
+		window.addEventListener('mousedown', onMouseDown, { passive: true });
+		window.addEventListener('mousemove', onMouseMove, { passive: true });
+		window.addEventListener('touchstart', onTouch, { passive: true });
+
 		// Initial data fetch (theme first to avoid color flash)
 		try {
 			const [snap, map, npcs, theme] = await Promise.all([
@@ -110,6 +139,7 @@
 			listeners.push(await onWorldUpdate(async (snap) => {
 				worldState.set(snap);
 				if (snap.name_hints) nameHints.set(snap.name_hints);
+				autoPauseTracker?.onWorldStateChange(snap.paused);
 				try {
 					const [map, npcs] = await Promise.all([getMap(), getNpcsHere()]);
 					mapData.set(map);
@@ -221,6 +251,12 @@
 
 		return () => {
 			listeners.forEach((fn) => fn());
+			window.removeEventListener('keydown', onKey);
+			window.removeEventListener('mousedown', onMouseDown);
+			window.removeEventListener('mousemove', onMouseMove);
+			window.removeEventListener('touchstart', onTouch);
+			autoPauseTracker?.dispose();
+			autoPauseTracker = null;
 		};
 	});
 </script>
@@ -245,7 +281,7 @@
 			class="mobile-btn"
 			class:active={mobilePanel === 'sidebar'}
 			onclick={() => mobilePanel = mobilePanel === 'sidebar' ? 'none' : 'sidebar'}
-		>NPCs &amp; Hints</button>
+		>Hints</button>
 	</div>
 
 	<div class="main-area">

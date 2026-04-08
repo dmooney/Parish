@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{Mutex, broadcast};
 
@@ -71,6 +72,13 @@ pub struct AppState {
     pub game_mod: Option<parish_core::game_mod::GameMod>,
     /// Name pronunciation entries from the game mod.
     pub pronunciations: Vec<PronunciationEntry>,
+    /// Wall-clock instant of the last player input. Used by the background
+    /// tick loop to decide whether to trigger spontaneous NPC speech.
+    /// Updated at the start of every `submit_input` call.
+    pub last_player_input_at: Mutex<Instant>,
+    /// Wall-clock instant of the last spontaneous NPC speech turn. Used to
+    /// rate-limit spontaneous speech so it doesn't fire on every tick.
+    pub last_spontaneous_speech_at: Mutex<Instant>,
 }
 
 // GameConfig is now shared across all backends via parish-core.
@@ -152,6 +160,7 @@ pub fn build_app_state(
         .as_ref()
         .map(|gm| gm.pronunciations.clone())
         .unwrap_or_default();
+    let now = Instant::now();
     Arc::new(AppState {
         world: Mutex::new(world),
         npc_manager: Mutex::new(npc_manager),
@@ -169,6 +178,8 @@ pub fn build_app_state(
         current_branch_name: Mutex::new(None),
         game_mod,
         pronunciations,
+        last_player_input_at: Mutex::new(now),
+        last_spontaneous_speech_at: Mutex::new(now),
     })
 }
 

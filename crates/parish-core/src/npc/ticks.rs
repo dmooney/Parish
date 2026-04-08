@@ -214,9 +214,36 @@ pub fn build_enhanced_context_with_config(
         context.push_str(&gossip_ctx);
     }
 
-    // Player's current input last — everything above is context for this moment
+    // Cue line: either the player's input (normal turn) or an "overhear"
+    // prompt (autonomous chain / spontaneous speech, where player_input is
+    // empty). Both come last so the LLM responds to the most recent thing.
     context.push_str("\n\n");
-    context.push_str(&build_action_line(player_input));
+    if player_input.is_empty() {
+        // Autonomous turn — try to find what was just said at this location
+        // by another NPC and frame this as overhearing them.
+        let recent = world.conversation_log.recent_at(world.player_location, 1);
+        let cue = if let Some(last) = recent.last() {
+            if last.speaker_id != npc.id {
+                format!(
+                    "You overhear {} just said: \"{}\". \
+                     You may speak up if you have something to say, \
+                     or stay silent.",
+                    last.speaker_name, last.npc_dialogue
+                )
+            } else {
+                "A quiet moment passes. You may speak up if you have \
+                 something to say, or stay silent."
+                    .to_string()
+            }
+        } else {
+            "A quiet moment passes. You may speak up if you have \
+             something to say, or stay silent."
+                .to_string()
+        };
+        context.push_str(&cue);
+    } else {
+        context.push_str(&build_action_line(player_input));
+    }
 
     context
 }

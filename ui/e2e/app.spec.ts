@@ -37,9 +37,10 @@ test.describe('App layout', () => {
 		await expect(circles).toHaveCount(MAP_DATA.locations.length);
 	});
 
-	test('sidebar shows NPCs at current location', async ({ page }) => {
+	test('NPC chip row shows NPCs at current location', async ({ page }) => {
 		for (const npc of NPCS) {
-			await expect(page.getByText(npc.name)).toBeVisible();
+			const chip = page.locator('.npc-chip', { hasText: npc.name });
+			await expect(chip).toBeVisible();
 		}
 	});
 

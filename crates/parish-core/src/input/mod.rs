@@ -566,6 +566,26 @@ pub fn parse_intent_local(raw_input: &str) -> Option<PlayerIntent> {
         });
     }
 
+    // Talk patterns — only patterns where everything after the prefix is the
+    // target name (no dialogue). This is the fast-path for chip-driven
+    // dispatch which always submits "talk to <real_name>". More ambiguous
+    // forms like `tell Mary hello` (target + dialogue) are left to the LLM
+    // intent parser which can disambiguate.
+    let talk_phrases = ["talk to ", "speak to "];
+    for prefix in &talk_phrases {
+        if let Some(target) = lower.strip_prefix(prefix) {
+            let target = target.trim();
+            if !target.is_empty() {
+                return Some(PlayerIntent {
+                    intent: IntentKind::Talk,
+                    target: Some(target.to_string()),
+                    dialogue: None,
+                    raw: raw_input.to_string(),
+                });
+            }
+        }
+    }
+
     None
 }
 
@@ -657,6 +677,36 @@ pub fn extract_mention(raw: &str) -> Option<MentionExtraction> {
     }
 
     Some(MentionExtraction { name, remaining })
+}
+
+/// Extracts all `@mention` tokens from the input, in the order they appear.
+///
+/// Repeatedly calls [`extract_mention`] on the remaining text, accumulating
+/// mentioned names. Returns the list of names plus the input text with all
+/// mentions stripped — so the remaining string is what the player actually
+/// said (minus the @mention tokens).
+///
+/// # Examples
+///
+/// ```
+/// use parish_core::input::extract_mentions;
+///
+/// let (names, rest) = extract_mentions("@Aine @Padraig hello both");
+/// assert_eq!(names, vec!["Aine".to_string(), "Padraig".to_string()]);
+/// assert_eq!(rest, "hello both");
+///
+/// let (names, rest) = extract_mentions("no mentions here");
+/// assert!(names.is_empty());
+/// assert_eq!(rest, "no mentions here");
+/// ```
+pub fn extract_mentions(raw: &str) -> (Vec<String>, String) {
+    let mut names = Vec::new();
+    let mut remaining = raw.to_string();
+    while let Some(extraction) = extract_mention(&remaining) {
+        names.push(extraction.name);
+        remaining = extraction.remaining;
+    }
+    (names, remaining)
 }
 
 /// Parses natural language input into a structured `PlayerIntent`.
@@ -1126,6 +1176,94 @@ mod tests {
         assert!(parse_intent_local("amble").is_none());
         assert!(parse_intent_local("run").is_none());
         assert!(parse_intent_local("dash").is_none());
+    }
+
+    #[test]
+    fn test_local_parse_talk_to_single_word() {
+        let intent = parse_intent_local("talk to Padraig").unwrap();
+        assert_eq!(intent.intent, IntentKind::Talk);
+        assert_eq!(intent.target, Some("padraig".to_string()));
+    }
+
+    #[test]
+    fn test_local_parse_talk_to_multi_word() {
+        let intent = parse_intent_local("talk to Padraig Darcy").unwrap();
+        assert_eq!(intent.intent, IntentKind::Talk);
+        assert_eq!(intent.target, Some("padraig darcy".to_string()));
+    }
+
+    #[test]
+    fn test_local_parse_talk_to_case_insensitive() {
+        let intent = parse_intent_local("TALK TO PADRAIG").unwrap();
+        assert_eq!(intent.intent, IntentKind::Talk);
+        assert_eq!(intent.target, Some("padraig".to_string()));
+    }
+
+    #[test]
+    fn test_local_parse_speak_to() {
+        let intent = parse_intent_local("speak to the priest").unwrap();
+        assert_eq!(intent.intent, IntentKind::Talk);
+        assert_eq!(intent.target, Some("the priest".to_string()));
+    }
+
+    #[test]
+    fn test_local_parse_talk_no_target_no_match() {
+        // Bare "talk" with no target should not match.
+        assert!(parse_intent_local("talk").is_none());
+        // "talk to " with empty target should not match either.
+        assert!(parse_intent_local("talk to ").is_none());
+    }
+
+    #[test]
+    fn test_local_parse_tell_still_unhandled() {
+        // `tell Mary hello` has dialogue baked in, so it should remain
+        // LLM-handled (the local parser must not eat it).
+        assert!(parse_intent_local("tell Mary hello").is_none());
+    }
+
+    #[test]
+    fn test_extract_mentions_zero() {
+        let (names, rest) = extract_mentions("hello there");
+        assert!(names.is_empty());
+        assert_eq!(rest, "hello there");
+    }
+
+    #[test]
+    fn test_extract_mentions_one() {
+        let (names, rest) = extract_mentions("@Padraig hello");
+        assert_eq!(names, vec!["Padraig".to_string()]);
+        assert_eq!(rest, "hello");
+    }
+
+    #[test]
+    fn test_extract_mentions_two_at_start() {
+        let (names, rest) = extract_mentions("@Aine @Padraig hello both");
+        assert_eq!(names, vec!["Aine".to_string(), "Padraig".to_string()]);
+        assert_eq!(rest, "hello both");
+    }
+
+    #[test]
+    fn test_extract_mentions_multi_word_name() {
+        let (names, rest) = extract_mentions("@Padraig Darcy how are you");
+        assert_eq!(names, vec!["Padraig Darcy".to_string()]);
+        assert_eq!(rest, "how are you");
+    }
+
+    #[test]
+    fn test_extract_mentions_interleaved() {
+        let (names, rest) = extract_mentions("hello @Aine and @Padraig");
+        assert_eq!(names, vec!["Aine".to_string(), "Padraig".to_string()]);
+        // Both mentions stripped; the surrounding text remains.
+        assert!(rest.contains("hello"));
+        assert!(rest.contains("and"));
+        assert!(!rest.contains('@'));
+    }
+
+    #[test]
+    fn test_extract_mentions_empty_string() {
+        let (names, rest) = extract_mentions("");
+        assert!(names.is_empty());
+        assert_eq!(rest, "");
     }
 
     #[test]

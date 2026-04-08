@@ -95,6 +95,10 @@ impl ConversationLog {
     ///
     /// `current_npc_id` is the NPC being prompted — their own lines are
     /// phrased as "You said..." while others' lines use "{Name} said...".
+    ///
+    /// Exchanges with an empty `player_input` (NPC-to-NPC spontaneous turns
+    /// or autonomous chain responses) are formatted without the "traveller
+    /// said" prefix, since no human spoke.
     pub fn context_string(&self, location: LocationId, current_npc_id: NpcId, n: usize) -> String {
         let recent = self.recent_at(location, n);
         if recent.is_empty() {
@@ -110,10 +114,18 @@ impl ConversationLog {
                 exchange.speaker_name.clone()
             };
 
-            lines.push(format!(
-                "- [{}] The traveller said: \"{}\". {} replied: \"{}\"",
-                time, exchange.player_input, speaker, exchange.npc_dialogue,
-            ));
+            if exchange.player_input.is_empty() {
+                // Autonomous / NPC-to-NPC turn — no human input.
+                lines.push(format!(
+                    "- [{}] {} said: \"{}\"",
+                    time, speaker, exchange.npc_dialogue,
+                ));
+            } else {
+                lines.push(format!(
+                    "- [{}] The traveller said: \"{}\". {} replied: \"{}\"",
+                    time, exchange.player_input, speaker, exchange.npc_dialogue,
+                ));
+            }
         }
         lines.join("\n")
     }
@@ -233,6 +245,41 @@ mod tests {
     fn test_context_string_empty() {
         let log = ConversationLog::new();
         assert_eq!(log.context_string(LocationId(1), NpcId(1), 5), "");
+    }
+
+    #[test]
+    fn test_context_string_npc_to_npc_format() {
+        let mut log = ConversationLog::new();
+        // Player exchange first
+        log.add(make_exchange(
+            8,
+            1,
+            "Padraig",
+            "What's news?",
+            "Quiet day",
+            1,
+        ));
+        // NPC-to-NPC: empty player_input
+        log.add(make_exchange(
+            9,
+            2,
+            "Niamh",
+            "",
+            "Did ye hear about the cow?",
+            1,
+        ));
+
+        let ctx = log.context_string(LocationId(1), NpcId(3), 5);
+        // Player exchange uses the traveller-said format
+        assert!(ctx.contains("The traveller said:"));
+        assert!(ctx.contains("Padraig replied"));
+        // NPC-to-NPC exchange uses the simpler "X said:" format
+        assert!(ctx.contains("Niamh said:"));
+        assert!(ctx.contains("Did ye hear about the cow?"));
+        // Should NOT contain a misleading "traveller said" for the NPC turn
+        let lines: Vec<&str> = ctx.lines().collect();
+        let niamh_line = lines.iter().find(|l| l.contains("Niamh")).unwrap();
+        assert!(!niamh_line.contains("traveller"));
     }
 
     #[test]

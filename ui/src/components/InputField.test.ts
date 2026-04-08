@@ -52,9 +52,9 @@ describe('InputField', () => {
 
 	describe('NPC mention autocomplete', () => {
 		const testNpcs = [
-			{ name: 'Padraig Darcy', occupation: 'Publican', mood: 'content', introduced: true, mood_emoji: '😌' },
-			{ name: 'Siobhan Murphy', occupation: 'Farmer', mood: 'determined', introduced: true, mood_emoji: '😤' },
-			{ name: 'Father Callahan', occupation: 'Priest', mood: 'serene', introduced: false, mood_emoji: '😌' }
+			{ name: 'Padraig Darcy', real_name: 'Padraig Darcy', occupation: 'Publican', mood: 'content', introduced: true, mood_emoji: '😌' },
+			{ name: 'Siobhan Murphy', real_name: 'Siobhan Murphy', occupation: 'Farmer', mood: 'determined', introduced: true, mood_emoji: '😤' },
+			{ name: 'Father Callahan', real_name: 'Father Callahan', occupation: 'Priest', mood: 'serene', introduced: false, mood_emoji: '😌' }
 		];
 
 		beforeEach(() => {
@@ -155,6 +155,161 @@ describe('InputField', () => {
 			expect(chip).toBeTruthy();
 			expect(chip?.textContent).toBe('@Padraig Darcy');
 			expect((chip as HTMLElement)?.dataset.npc).toBe('Padraig Darcy');
+		});
+	});
+
+	// ── NPC chip row (selectable, multi-select) ─────────────────────────
+	describe('NPC chip row', () => {
+		const chipNpcs = [
+			{
+				name: 'Padraig Darcy',
+				real_name: 'Padraig Darcy',
+				occupation: 'Publican',
+				mood: 'content',
+				introduced: true,
+				mood_emoji: '😌'
+			},
+			{
+				name: 'Siobhan Murphy',
+				real_name: 'Siobhan Murphy',
+				occupation: 'Farmer',
+				mood: 'determined',
+				introduced: true,
+				mood_emoji: '😤'
+			},
+			{
+				// un-introduced — display name is a placeholder, real_name is canonical
+				name: 'a stern priest',
+				real_name: 'Father Callahan',
+				occupation: 'Priest',
+				mood: 'serene',
+				introduced: false,
+				mood_emoji: '😌'
+			}
+		];
+
+		beforeEach(() => {
+			npcsHere.set(chipNpcs);
+		});
+
+		it('renders a chip for each NPC at the location', () => {
+			const { container } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			expect(chips.length).toBe(3);
+		});
+
+		it('hides the chip row while streaming', () => {
+			streamingActive.set(true);
+			const { container } = render(InputField);
+			expect(container.querySelector('[data-testid="npc-chips"]')).toBeNull();
+		});
+
+		it('hides the chip row when no NPCs are present', () => {
+			npcsHere.set([]);
+			const { container } = render(InputField);
+			expect(container.querySelector('[data-testid="npc-chips"]')).toBeNull();
+		});
+
+		it('toggles aria-pressed on click', async () => {
+			const { container } = render(InputField);
+			const chip = container.querySelector('.npc-chip') as HTMLButtonElement;
+			expect(chip.getAttribute('aria-pressed')).toBe('false');
+			await fireEvent.click(chip);
+			expect(chip.getAttribute('aria-pressed')).toBe('true');
+			expect(chip.classList.contains('selected')).toBe(true);
+			await fireEvent.click(chip);
+			expect(chip.getAttribute('aria-pressed')).toBe('false');
+			expect(chip.classList.contains('selected')).toBe(false);
+		});
+
+		it('allows multiple chips to be selected at once', async () => {
+			const { container } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			await fireEvent.click(chips[0]);
+			await fireEvent.click(chips[1]);
+			expect(chips[0].getAttribute('aria-pressed')).toBe('true');
+			expect(chips[1].getAttribute('aria-pressed')).toBe('true');
+		});
+
+		it('applies the .stranger class to un-introduced NPCs', () => {
+			const { container } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			// chips[0] = Padraig (introduced), chips[2] = Father Callahan (not)
+			expect(chips[0].classList.contains('stranger')).toBe(false);
+			expect(chips[2].classList.contains('stranger')).toBe(true);
+		});
+
+		it('renders the mood emoji inside each chip', () => {
+			const { container } = render(InputField);
+			const emojis = container.querySelectorAll('.npc-chip .npc-mood-emoji');
+			expect(emojis.length).toBe(3);
+			expect(emojis[0].textContent).toBe('😌');
+			expect(emojis[1].textContent).toBe('😤');
+		});
+
+		it('submits selected real_names alongside text', async () => {
+			const { container, getByRole } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			await fireEvent.click(chips[0]); // Padraig
+			await fireEvent.click(chips[1]); // Siobhan
+
+			const editor = getByRole('textbox');
+			editor.textContent = 'what do you both think';
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Enter' });
+
+			expect(mockSubmitInput).toHaveBeenCalledWith('what do you both think', [
+				'Padraig Darcy',
+				'Siobhan Murphy'
+			]);
+		});
+
+		it('submits real_name (not display name) for un-introduced chips', async () => {
+			const { container, getByRole } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			// chips[2] = un-introduced, name="a stern priest", real_name="Father Callahan"
+			await fireEvent.click(chips[2]);
+
+			const editor = getByRole('textbox');
+			editor.textContent = 'bless me father';
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Enter' });
+
+			expect(mockSubmitInput).toHaveBeenCalledWith('bless me father', ['Father Callahan']);
+		});
+
+		it('clears selection after submit', async () => {
+			const { container, getByRole } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			await fireEvent.click(chips[0]);
+
+			const editor = getByRole('textbox');
+			editor.textContent = 'hi';
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Enter' });
+
+			// After submit, the same chip should no longer be marked selected.
+			const refreshed = container.querySelectorAll('.npc-chip');
+			expect(refreshed[0].getAttribute('aria-pressed')).toBe('false');
+		});
+
+		it('allows submit when only chips are selected (no text)', async () => {
+			const { container } = render(InputField);
+			const chips = container.querySelectorAll('.npc-chip');
+			await fireEvent.click(chips[0]);
+
+			const sendBtn = container.querySelector('.send-btn') as HTMLButtonElement;
+			expect(sendBtn.disabled).toBe(false);
+			await fireEvent.click(sendBtn);
+
+			expect(mockSubmitInput).toHaveBeenCalledWith('', ['Padraig Darcy']);
+		});
+
+		it('disables Send when neither chips nor text are present', () => {
+			npcsHere.set([]);
+			const { container } = render(InputField);
+			const sendBtn = container.querySelector('.send-btn') as HTMLButtonElement;
+			expect(sendBtn.disabled).toBe(true);
 		});
 	});
 
@@ -371,7 +526,7 @@ describe('InputField', () => {
 			await fireEvent.input(editor);
 			await fireEvent.keyDown(editor, { key: 'Enter' });
 
-			expect(mockSubmitInput).toHaveBeenCalledWith('submit me');
+			expect(mockSubmitInput).toHaveBeenCalledWith('submit me', []);
 		});
 	});
 
@@ -500,6 +655,7 @@ describe('InputField', () => {
 		const testNpcs = [
 			{
 				name: 'Padraig Darcy',
+				real_name: 'Padraig Darcy',
 				occupation: 'Publican',
 				mood: 'content',
 				introduced: true,
@@ -614,6 +770,7 @@ describe('InputField', () => {
 			npcsHere.set([
 				{
 					name: 'Padraig Darcy',
+					real_name: 'Padraig Darcy',
 					occupation: 'Publican',
 					mood: 'content',
 					introduced: true,

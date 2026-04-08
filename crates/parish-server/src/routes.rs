@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use parish_core::config::InferenceCategory;
 use parish_core::inference::openai_client::OpenAiClient;
 use parish_core::inference::{InferenceQueue, new_inference_log, spawn_inference_worker};
-use parish_core::input::{InputResult, classify_input, extract_mention, parse_intent};
+use parish_core::input::{InputResult, classify_input, extract_mentions, parse_intent};
 use parish_core::ipc::{
     IDLE_MESSAGES, INFERENCE_FAILURE_MESSAGES, LoadingPayload, MapData, NpcInfo,
     NpcReactionPayload, ReactRequest, StreamEndPayload, StreamTokenPayload, ThemePalette,
@@ -104,9 +104,15 @@ pub async fn get_debug_snapshot(State(state): State<Arc<AppState>>) -> Json<Debu
 
 /// Request body for `POST /api/submit-input`.
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmitInputRequest {
     /// The player's input text.
     pub text: String,
+    /// Optional list of NPC `real_name` values selected via the chip row.
+    /// Combined with any `@mentions` in `text` (union, dedupe) to produce
+    /// the recipient list. Empty for free-form input or non-chip submits.
+    #[serde(default)]
+    pub addressed_to: Vec<String>,
 }
 
 /// `POST /api/submit-input` — processes player text input.
@@ -115,11 +121,21 @@ pub async fn submit_input(
     Json(body): Json<SubmitInputRequest>,
 ) -> impl IntoResponse {
     let text = body.text.trim().to_string();
-    if text.is_empty() {
+    let addressed_to = body.addressed_to;
+    if text.is_empty() && addressed_to.is_empty() {
         return StatusCode::OK;
     }
     if text.len() > 2000 {
         return StatusCode::BAD_REQUEST;
+    }
+
+    // Record real-time activity timestamp for the spontaneous-speech and
+    // auto-pause idle trackers. The frontend has its own activity listeners
+    // for auto-pause; this server-side timestamp drives spontaneous speech
+    // from the background tick loop.
+    {
+        let mut last_input = state.last_player_input_at.lock().await;
+        *last_input = std::time::Instant::now();
     }
 
     match classify_input(&text) {
@@ -127,12 +143,19 @@ pub async fn submit_input(
             handle_system_command(cmd, &state).await;
         }
         InputResult::GameInput(raw) => {
-            // Emit the player's own text as a dialogue bubble only for actual dialogue
-            let player_msg = text_log("player", format!("> {}", raw));
+            // Build the player's visible chat bubble. For chip-only submits
+            // with empty text, render a "(addressing X, Y)" line so the chat
+            // shows what the player did.
+            let display_text = if raw.is_empty() && !addressed_to.is_empty() {
+                format!("(addressing {})", addressed_to.join(", "))
+            } else {
+                raw.clone()
+            };
+            let player_msg = text_log("player", format!("> {}", display_text));
             let player_msg_id = player_msg.id.clone();
             state.event_bus.emit("text-log", &player_msg);
             let raw_for_reactions = raw.clone();
-            handle_game_input(raw, &state).await;
+            handle_game_input(raw, addressed_to, &state).await;
             // Generate rule-based NPC reactions to the player's message
             emit_npc_reactions(&player_msg_id, &raw_for_reactions, &state).await;
         }
@@ -291,7 +314,30 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
 }
 
 /// Handles free-form game input: parses intent (with LLM fallback) then dispatches.
-async fn handle_game_input(raw: String, state: &Arc<AppState>) {
+///
+/// `addressed_to` is the list of NPC `real_name` values selected via the chip
+/// row. Combined with any `@mentions` in the text (union, dedupe) to form the
+/// recipient set for NPC dispatch.
+async fn handle_game_input(raw: String, addressed_to: Vec<String>, state: &Arc<AppState>) {
+    // If the player addressed NPCs via chips, skip the LLM intent classifier
+    // entirely and dispatch directly. This is the fast path for chip clicks.
+    if !addressed_to.is_empty() {
+        // Strip any @mentions from the text and union them with the chip
+        // selection (chip-first ordering, dedupe by name).
+        let (mention_names, stripped_text) = extract_mentions(&raw);
+        let mut combined: Vec<String> =
+            Vec::with_capacity(addressed_to.len() + mention_names.len());
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for name in addressed_to.into_iter().chain(mention_names.into_iter()) {
+            let key = name.to_lowercase();
+            if seen.insert(key) {
+                combined.push(name);
+            }
+        }
+        handle_npc_conversation(stripped_text, combined, state).await;
+        return;
+    }
+
     // Resolve the intent client and model (Intent category override, or base).
     let (client, model) = {
         let config = state.config.lock().await;
@@ -322,9 +368,17 @@ async fn handle_game_input(raw: String, state: &Arc<AppState>) {
         .as_ref()
         .map(|i| matches!(i.intent, parish_core::input::IntentKind::Look))
         .unwrap_or(false);
+    let is_talk = intent
+        .as_ref()
+        .map(|i| matches!(i.intent, parish_core::input::IntentKind::Talk))
+        .unwrap_or(false);
     let move_target = intent
         .as_ref()
         .filter(|_i| is_move)
+        .and_then(|i| i.target.clone());
+    let talk_target = intent
+        .as_ref()
+        .filter(|_i| is_talk)
         .and_then(|i| i.target.clone());
 
     if is_move {
@@ -344,13 +398,19 @@ async fn handle_game_input(raw: String, state: &Arc<AppState>) {
         return;
     }
 
-    // Extract @mention for NPC targeting, if present
-    let (target_name, dialogue) = match extract_mention(&raw) {
-        Some(mention) => (Some(mention.name), mention.remaining),
-        None => (None, raw),
-    };
+    // For Talk intents recognised by `parse_intent_local`, the entire input
+    // after `talk to ` is the target — there's no separate dialogue. Pass it
+    // through as the addressed list with an empty body so the NPC opens.
+    if is_talk && let Some(target) = talk_target {
+        handle_npc_conversation(String::new(), vec![target], state).await;
+        return;
+    }
 
-    handle_npc_conversation(dialogue, target_name, state).await;
+    // Extract all @mentions for NPC targeting (plural). Each becomes a
+    // separate addressee in the dispatch loop, with the surrounding text
+    // (mentions stripped) as the shared dialogue.
+    let (mention_names, dialogue) = extract_mentions(&raw);
+    handle_npc_conversation(dialogue, mention_names, state).await;
 }
 
 /// Resolves movement to a named location.
@@ -473,29 +533,59 @@ async fn handle_look(state: &Arc<AppState>) {
     state.event_bus.emit("text-log", &text_log("system", text));
 }
 
-/// Routes input to the NPC at the player's location, or shows idle message.
-async fn handle_npc_conversation(raw: String, target_name: Option<String>, state: &Arc<AppState>) {
-    let (setup, queue, npc_present) = {
+/// Routes input to the NPCs at the player's location.
+///
+/// `targets` is the ordered, deduped list of NPC names addressed by the
+/// player (chip selection ∪ `@mentions`). When non-empty, each named NPC
+/// responds in turn, with each subsequent NPC seeing prior responses via
+/// the conversation log (eavesdropping for free).
+///
+/// When `targets` is empty, falls back to the historical single-target
+/// behaviour: speak to the most recent speaker, or the first NPC at the
+/// location.
+async fn handle_npc_conversation(raw: String, targets: Vec<String>, state: &Arc<AppState>) {
+    // Resolve the effective recipient list. If `targets` is empty, fall back
+    // to the historical single-target behaviour (last speaker → first NPC).
+    // If `targets` has names, use them in order. We do this BEFORE the loop
+    // so we know how many turns to run and can short-circuit on no NPCs.
+    let (effective_targets, queue, npc_present) = {
         let world = state.world.lock().await;
         let mut npc_manager = state.npc_manager.lock().await;
         let queue = state.inference_queue.lock().await;
         let config = state.config.lock().await;
 
         let npc_present = !npc_manager.npcs_at(world.player_location).is_empty();
-        let setup = parish_core::ipc::prepare_npc_conversation(
-            &world,
-            &mut npc_manager,
-            &raw,
-            target_name.as_deref(),
-            config.improv_enabled,
-        );
-        (setup, queue.clone(), npc_present)
+
+        // Build the resolved list of NPC names. For the explicit-targets path
+        // we use the user-provided names directly. For the fallback path we
+        // call `prepare_npc_conversations` once just to discover the implicit
+        // target (last speaker / first present), then capture its real name.
+        let effective_targets: Vec<String> = if !targets.is_empty() {
+            targets.clone()
+        } else {
+            let setups = parish_core::ipc::prepare_npc_conversations(
+                &world,
+                &mut npc_manager,
+                &raw,
+                &[],
+                /* fallback_to_last_speaker */ true,
+                config.improv_enabled,
+            );
+            setups
+                .into_iter()
+                .filter_map(|s| npc_manager.get(s.npc_id).map(|n| n.name.clone()))
+                .collect()
+        };
+
+        (effective_targets, queue.clone(), npc_present)
     };
 
-    let (Some(setup), Some(queue)) = (setup, queue) else {
-        let content = if npc_present {
+    if effective_targets.is_empty() || queue.is_none() {
+        let content = if npc_present && queue.is_none() {
             "There's someone here, but the LLM is not configured — set a provider with /provider."
                 .to_string()
+        } else if npc_present {
+            "No one here by that name.".to_string()
         } else {
             let idx = REQUEST_ID.fetch_add(1, Ordering::SeqCst) as usize % IDLE_MESSAGES.len();
             IDLE_MESSAGES[idx].to_string()
@@ -504,32 +594,13 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
             .event_bus
             .emit("text-log", &text_log("system", content));
         return;
-    };
+    }
 
-    let npc_id = setup.npc_id;
-    let npc_name = setup.display_name;
-    let system_prompt = setup.system_prompt;
-    let context = setup.context;
+    let queue = queue.unwrap();
 
-    let model = {
-        let config = state.config.lock().await;
-        config.model_name.clone()
-    };
-    let req_id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
-
-    // Spawn animated loading indicator (fun Irish phrases)
-    let loading_cancel = tokio_util::sync::CancellationToken::new();
-    spawn_loading_animation(Arc::clone(state), loading_cancel.clone());
-
-    let (token_tx, token_rx) = mpsc::unbounded_channel::<String>();
-
-    let display_label = capitalize_first(&npc_name);
-    state
-        .event_bus
-        .emit("text-log", &text_log(display_label, String::new()));
-
-    // Pause the game clock while waiting for the inference response
-    // and immediately notify the frontend so it stops interpolating.
+    // Pause the game clock once at the start of the whole turn (addressed
+    // NPCs + autonomous chain) so the world doesn't lurch forward between
+    // streams. Resume once at the end.
     {
         let mut world = state.world.lock().await;
         world.clock.inference_pause();
@@ -541,7 +612,188 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
         state.event_bus.emit("world-update", &ws);
     }
 
-    match queue
+    // Loop through addressed NPCs in order. Each NPC's setup is built JUST
+    // before its turn, so its prompt context includes any prior exchanges
+    // from this same turn (recorded in the conversation log by the previous
+    // NPC's `run_single_npc_turn`). This is how eavesdropping falls out for
+    // free — no extra plumbing required.
+    let mut combined_hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+
+    for target_name in &effective_targets {
+        let setup = {
+            let world = state.world.lock().await;
+            let mut npc_manager = state.npc_manager.lock().await;
+            let config = state.config.lock().await;
+            parish_core::ipc::prepare_npc_conversations(
+                &world,
+                &mut npc_manager,
+                &raw,
+                std::slice::from_ref(target_name),
+                /* fallback_to_last_speaker */ false,
+                config.improv_enabled,
+            )
+            .into_iter()
+            .next()
+        };
+        if let Some(setup) = setup {
+            let hints = run_single_npc_turn(state, &queue, setup, &raw).await;
+            combined_hints.extend(hints);
+        }
+    }
+
+    // ── Autonomous chain ────────────────────────────────────────────────
+    // After the addressed NPCs have all responded, give other NPCs at the
+    // location a couple of turns to react to each other before yielding
+    // back to the player. The chain bails out early if no NPC scores above
+    // the speak-up threshold.
+    let chain_hints = run_autonomous_chain(state, &queue).await;
+    combined_hints.extend(chain_hints);
+
+    // Resume the game clock and notify frontend of updated time.
+    {
+        let mut world = state.world.lock().await;
+        world.clock.inference_resume();
+        let npc_manager = state.npc_manager.lock().await;
+        let transport = state.transport.default_mode();
+        let mut ws = parish_core::ipc::snapshot_from_world(&world, transport);
+        ws.name_hints =
+            parish_core::ipc::compute_name_hints(&world, &npc_manager, &state.pronunciations);
+        state.event_bus.emit("world-update", &ws);
+    }
+
+    // Emit the single stream-end event after the entire turn is complete.
+    // The frontend uses this to re-enable input.
+    state.event_bus.emit(
+        "stream-end",
+        &StreamEndPayload {
+            hints: combined_hints,
+        },
+    );
+}
+
+/// Runs the autonomous NPC-to-NPC chain after addressed NPCs have finished.
+///
+/// Loops up to `MAX_CHAIN_TURNS` times. On each iteration, picks the next
+/// most-likely-to-speak NPC at the player's location via
+/// [`parish_core::npc::autonomous::pick_next_speaker`], runs their turn,
+/// and records the exchange. Bails out as soon as no candidate scores
+/// above the speak-up threshold.
+///
+/// Used both for autonomous chains after a player turn and for spontaneous
+/// speech from the background tick loop (with a `max_turns` of 1).
+async fn run_autonomous_chain(
+    state: &Arc<AppState>,
+    queue: &InferenceQueue,
+) -> Vec<parish_core::npc::IrishWordHint> {
+    use parish_core::npc::autonomous::MAX_CHAIN_TURNS;
+
+    run_autonomous_chain_with_limit(state, queue, MAX_CHAIN_TURNS, &[]).await
+}
+
+/// Same as [`run_autonomous_chain`] but with a configurable turn cap and
+/// optional list of "addressed this turn" NPC ids (used by the player-turn
+/// path to bias the heuristic toward NPCs the player just spoke to). The
+/// background tick loop calls this with `max_turns = 1` for spontaneous
+/// one-shot speech.
+pub(crate) async fn run_autonomous_chain_with_limit(
+    state: &Arc<AppState>,
+    queue: &InferenceQueue,
+    max_turns: usize,
+    addressed_this_turn: &[parish_core::npc::NpcId],
+) -> Vec<parish_core::npc::IrishWordHint> {
+    use parish_core::npc::autonomous::pick_next_speaker;
+
+    let mut combined_hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+    let mut spoken_this_chain: Vec<parish_core::npc::NpcId> = Vec::new();
+
+    for _ in 0..max_turns {
+        // Pick the next speaker inside a single lock scope. The picked
+        // NPC's name is captured so we can re-resolve a fresh setup
+        // outside the lock (since `run_single_npc_turn` needs to take
+        // its own locks).
+        let (speaker_name, speaker_id) = {
+            let world = state.world.lock().await;
+            let npc_manager = state.npc_manager.lock().await;
+            let location = world.player_location;
+            let last_speaker = world.conversation_log.last_speaker_at(location);
+            let candidates = npc_manager.npcs_at(location);
+            match pick_next_speaker(
+                &candidates,
+                last_speaker,
+                &spoken_this_chain,
+                addressed_this_turn,
+            ) {
+                Some(npc) => (npc.name.clone(), npc.id),
+                None => break, // no one wants to speak — exit chain
+            }
+        };
+
+        // Build a setup for the picked NPC. Pass empty input so the
+        // prompt builder uses the "you overhear …" cue line.
+        let setup = {
+            let world = state.world.lock().await;
+            let mut npc_manager = state.npc_manager.lock().await;
+            let config = state.config.lock().await;
+            parish_core::ipc::prepare_npc_conversations(
+                &world,
+                &mut npc_manager,
+                /* raw */ "",
+                std::slice::from_ref(&speaker_name),
+                /* fallback_to_last_speaker */ false,
+                config.improv_enabled,
+            )
+            .into_iter()
+            .next()
+        };
+
+        if let Some(setup) = setup {
+            let hints = run_single_npc_turn(state, queue, setup, "").await;
+            combined_hints.extend(hints);
+            spoken_this_chain.push(speaker_id);
+        } else {
+            break;
+        }
+    }
+
+    combined_hints
+}
+
+/// Runs one NPC's response turn: streams tokens, records the exchange, and
+/// updates witness memories. Used by both the multi-target dispatch loop and
+/// (in Section D) the autonomous chain.
+///
+/// Does NOT pause/resume the inference clock — that's the caller's job for
+/// the entire turn. Does NOT emit `stream-end` — the caller emits one at the
+/// end of the whole multi-turn sequence so the input field stays disabled.
+async fn run_single_npc_turn(
+    state: &Arc<AppState>,
+    queue: &InferenceQueue,
+    setup: parish_core::ipc::NpcConversationSetup,
+    raw: &str,
+) -> Vec<parish_core::npc::IrishWordHint> {
+    let npc_id = setup.npc_id;
+    let npc_name = setup.display_name;
+    let system_prompt = setup.system_prompt;
+    let context = setup.context;
+
+    let model = {
+        let config = state.config.lock().await;
+        config.model_name.clone()
+    };
+    let req_id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
+
+    // Spawn animated loading indicator (fun Irish phrases) for this NPC.
+    let loading_cancel = tokio_util::sync::CancellationToken::new();
+    spawn_loading_animation(Arc::clone(state), loading_cancel.clone());
+
+    let (token_tx, token_rx) = mpsc::unbounded_channel::<String>();
+
+    let display_label = capitalize_first(&npc_name);
+    state
+        .event_bus
+        .emit("text-log", &text_log(display_label, String::new()));
+
+    let send_result = queue
         .send(
             req_id,
             model,
@@ -550,8 +802,11 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
             Some(token_tx),
             None,
         )
-        .await
-    {
+        .await;
+
+    let mut hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+
+    match send_result {
         Ok(mut response_rx) => {
             let stream_handle = tokio::spawn({
                 let state_clone = Arc::clone(state);
@@ -586,7 +841,7 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
                 }
             };
 
-            let (hints, parsed_response) = if let Some(resp) = full_response {
+            let parsed_response = if let Some(resp) = full_response {
                 if resp.error.is_some() {
                     tracing::warn!("Inference error: {:?}", resp.error);
 
@@ -597,18 +852,16 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
                         &text_log("system", INFERENCE_FAILURE_MESSAGES[idx]),
                     );
 
-                    (vec![], None)
+                    None
                 } else {
                     let parsed = parse_npc_stream_response(&resp.text);
-                    let hints = parsed
-                        .metadata
-                        .as_ref()
-                        .map(|m| m.language_hints.clone())
-                        .unwrap_or_default();
-                    (hints, Some(parsed))
+                    if let Some(metadata) = &parsed.metadata {
+                        hints.extend(metadata.language_hints.iter().cloned());
+                    }
+                    Some(parsed)
                 }
             } else {
-                (vec![], None)
+                None
             };
 
             // Apply response effects and record conversation exchange
@@ -621,21 +874,23 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
                 // Update NPC mood and record speaker's own memory
                 if let Some(npc_mut) = npc_manager.get_mut(npc_id) {
                     let debug_events = parish_core::npc::ticks::apply_tier1_response(
-                        npc_mut, parsed, &raw, game_time,
+                        npc_mut, parsed, raw, game_time,
                     );
                     for event in &debug_events {
                         tracing::debug!("{}", event);
                     }
                 }
 
-                // Record conversation exchange for scene awareness
+                // Record conversation exchange for scene awareness. The next
+                // addressed NPC's prompt will see this via context_string,
+                // giving them awareness of what this NPC just said.
                 world
                     .conversation_log
                     .add(parish_core::npc::conversation::ConversationExchange {
                         timestamp: game_time,
                         speaker_id: npc_id,
                         speaker_name: npc_name.clone(),
-                        player_input: raw.clone(),
+                        player_input: raw.to_string(),
                         npc_dialogue: parsed.dialogue.clone(),
                         location,
                     });
@@ -645,7 +900,7 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
                     npc_manager.npcs_mut(),
                     npc_id,
                     &npc_name,
-                    &raw,
+                    raw,
                     &parsed.dialogue,
                     game_time,
                     location,
@@ -654,10 +909,6 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
                     tracing::debug!("{}", event);
                 }
             }
-
-            state
-                .event_bus
-                .emit("stream-end", &StreamEndPayload { hints });
         }
         Err(e) => {
             tracing::error!("Failed to submit inference request: {}", e);
@@ -671,20 +922,10 @@ async fn handle_npc_conversation(raw: String, target_name: Option<String>, state
         }
     }
 
-    // Resume the game clock and notify frontend of updated time.
-    {
-        let mut world = state.world.lock().await;
-        world.clock.inference_resume();
-        let npc_manager = state.npc_manager.lock().await;
-        let transport = state.transport.default_mode();
-        let mut ws = parish_core::ipc::snapshot_from_world(&world, transport);
-        ws.name_hints =
-            parish_core::ipc::compute_name_hints(&world, &npc_manager, &state.pronunciations);
-        state.event_bus.emit("world-update", &ws);
-    }
-
     // Cancel loading animation (emits final active: false)
     loading_cancel.cancel();
+
+    hints
 }
 
 /// Spawns a background task that emits rich [`LoadingPayload`] events with

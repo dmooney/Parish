@@ -246,6 +246,111 @@ fn spawn_background_ticks(state: Arc<AppState>) {
             }
         }
     });
+
+    // Spontaneous-speech tick: every 5 wall-clock seconds, check whether the
+    // player has been idle long enough for an NPC at their location to speak
+    // unprompted. Bails out fast when the game is paused, no NPCs are at the
+    // location, no inference queue is configured, or recent speech happened.
+    let state_spontaneous = Arc::clone(&state);
+    tokio::spawn(async move {
+        // Idle threshold: real-time seconds with no player input before
+        // spontaneous speech may fire. Slightly less than the 60s auto-pause
+        // threshold so it has a window to trigger.
+        const IDLE_SPEECH_THRESHOLD: Duration = Duration::from_secs(25);
+        // Minimum gap between spontaneous turns to avoid spamming the chat.
+        const MIN_SPONTANEOUS_GAP: Duration = Duration::from_secs(15);
+        // Don't trigger after the auto-pause threshold (we'd just collide
+        // with /pause flipping the clock).
+        const AUTO_PAUSE_THRESHOLD: Duration = Duration::from_secs(60);
+
+        tracing::debug!("Spontaneous speech tick task started");
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // Cheap pre-check: paused → skip.
+            {
+                let world = state_spontaneous.world.lock().await;
+                if world.clock.is_paused() || world.clock.is_inference_paused() {
+                    continue;
+                }
+            }
+
+            // Check idle threshold and rate limit.
+            let now = std::time::Instant::now();
+            let idle_for = {
+                let last_input = state_spontaneous.last_player_input_at.lock().await;
+                now.duration_since(*last_input)
+            };
+            if idle_for < IDLE_SPEECH_THRESHOLD || idle_for >= AUTO_PAUSE_THRESHOLD {
+                continue;
+            }
+            let since_last_spontaneous = {
+                let last_spont = state_spontaneous.last_spontaneous_speech_at.lock().await;
+                now.duration_since(*last_spont)
+            };
+            if since_last_spontaneous < MIN_SPONTANEOUS_GAP {
+                continue;
+            }
+
+            // Make sure there's an inference queue configured AND at least
+            // one NPC at the player's location with another NPC nearby (or
+            // a non-recent speaker), otherwise the chain has nothing to do.
+            let queue_present = state_spontaneous.inference_queue.lock().await.is_some();
+            if !queue_present {
+                continue;
+            }
+            let has_npcs = {
+                let world = state_spontaneous.world.lock().await;
+                let npc_manager = state_spontaneous.npc_manager.lock().await;
+                !npc_manager.npcs_at(world.player_location).is_empty()
+            };
+            if !has_npcs {
+                continue;
+            }
+
+            // Trigger one spontaneous turn via the same chain machinery the
+            // player turn uses. Cap at 1 turn so it never runs away.
+            tracing::debug!(
+                idle_secs = idle_for.as_secs(),
+                "Triggering spontaneous NPC speech"
+            );
+            let queue_clone = {
+                let q = state_spontaneous.inference_queue.lock().await;
+                q.clone()
+            };
+            if let Some(queue) = queue_clone {
+                // Pause the inference clock for the spontaneous turn so the
+                // game world doesn't lurch while we await the LLM.
+                {
+                    let mut world = state_spontaneous.world.lock().await;
+                    world.clock.inference_pause();
+                }
+
+                let _ = crate::routes::run_autonomous_chain_with_limit(
+                    &state_spontaneous,
+                    &queue,
+                    1,
+                    &[],
+                )
+                .await;
+
+                {
+                    let mut world = state_spontaneous.world.lock().await;
+                    world.clock.inference_resume();
+                }
+
+                // Emit a stream-end so the frontend re-enables input
+                // (in case it was waiting on a streaming bubble).
+                state_spontaneous.event_bus.emit(
+                    "stream-end",
+                    &parish_core::ipc::StreamEndPayload { hints: vec![] },
+                );
+
+                let mut last_spont = state_spontaneous.last_spontaneous_speech_at.lock().await;
+                *last_spont = std::time::Instant::now();
+            }
+        }
+    });
 }
 
 /// Builds the local LLM client and config from environment variables.

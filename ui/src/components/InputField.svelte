@@ -51,6 +51,30 @@
 			.sort((a, b) => a.name.localeCompare(b.name))
 	);
 
+	// ── NPC chip selection state ────────────────────────────────────────────
+	// Set of NpcInfo.real_name values that the player has selected via the
+	// chip row. Persists across re-renders until the player submits, at which
+	// point it is cleared. Reassigned (not mutated) so Svelte 5 reactivity
+	// picks up the change.
+	let selectedNpcs = $state<Set<string>>(new Set());
+
+	function toggleNpcSelection(realName: string) {
+		if ($streamingActive) return;
+		const next = new Set(selectedNpcs);
+		if (next.has(realName)) {
+			next.delete(realName);
+		} else {
+			next.add(realName);
+		}
+		selectedNpcs = next;
+	}
+
+	function clearNpcSelection() {
+		if (selectedNpcs.size > 0) {
+			selectedNpcs = new Set();
+		}
+	}
+
 	// ── Tab-completion state ────────────────────────────────────────────────
 	interface CompletionState {
 		active: boolean;
@@ -456,18 +480,23 @@
 			return;
 		}
 		const trimmed = getPlainText().trim();
-		if (!trimmed || $streamingActive) return;
+		// Allow submit when EITHER text is non-empty OR at least one NPC chip
+		// is selected (so the player can address NPCs without typing anything).
+		if ((!trimmed && selectedNpcs.size === 0) || $streamingActive) return;
+		const addressed = [...selectedNpcs];
 		clearEditor();
+		clearNpcSelection();
 		dropdownMode = null;
 
-		// Push to history (skip consecutive dupes)
-		if (history.length === 0 || history[history.length - 1] !== trimmed) {
+		// Push to history (skip consecutive dupes). Only push when there's
+		// real text — chip-only submits are not history-worthy.
+		if (trimmed && (history.length === 0 || history[history.length - 1] !== trimmed)) {
 			history = [...history.slice(-(HISTORY_MAX - 1)), trimmed];
 			saveHistory(history);
 		}
 		historyIndex = -1;
 
-		await submitInput(trimmed);
+		await submitInput(trimmed, addressed);
 	}
 
 	// ── Keyboard handling ───────────────────────────────────────────────────
@@ -716,9 +745,29 @@
 			{/each}
 		</ul>
 	{/if}
+	{#if $npcsHere.length > 0 && !$streamingActive}
+		<div class="npc-chips" data-testid="npc-chips">
+			<span class="chip-label">Talk To</span>
+			{#each $npcsHere as npc (npc.real_name)}
+				<button
+					type="button"
+					class="npc-chip"
+					class:selected={selectedNpcs.has(npc.real_name)}
+					class:stranger={!npc.introduced}
+					onclick={() => toggleNpcSelection(npc.real_name)}
+					disabled={$streamingActive}
+					title={npc.mood}
+					aria-pressed={selectedNpcs.has(npc.real_name)}
+				>
+					<span class="npc-mood-emoji" aria-hidden="true">{npc.mood_emoji}</span>
+					{npc.name}
+				</button>
+			{/each}
+		</div>
+	{/if}
 	{#if adjacentLocations.length > 0 && !$streamingActive}
 		<div class="travel-chips">
-			<span class="travel-label">Go To</span>
+			<span class="chip-label">Go To</span>
 			{#each adjacentLocations as loc}
 				<button
 					class="travel-chip"
@@ -756,7 +805,12 @@
 				data-placeholder={$streamingActive ? 'Waiting…' : 'What do you do? (@ to mention NPC)'}
 			></div>
 		</div>
-		<button type="button" onclick={handleSubmit} disabled={$streamingActive || isEditorEmpty()} class="send-btn">
+		<button
+			type="button"
+			onclick={handleSubmit}
+			disabled={$streamingActive || (isEditorEmpty() && selectedNpcs.size === 0)}
+			class="send-btn"
+		>
 			Send
 		</button>
 	</div>
@@ -910,7 +964,7 @@
 		border-top: 1px solid var(--color-border);
 	}
 
-	.travel-label {
+	.chip-label {
 		color: var(--color-muted);
 		font-size: 0.6rem;
 		font-family: var(--font-display);
@@ -961,5 +1015,65 @@
 		height: 0.75rem;
 		fill: currentColor;
 		vertical-align: middle;
+	}
+
+	/* ── NPC chips ──────────────────────────────────────────────────────────── */
+
+	.npc-chips {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.45rem 0.75rem;
+		background: var(--color-panel-bg);
+		border-top: 1px solid var(--color-border);
+	}
+
+	.npc-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		background: var(--color-input-bg);
+		color: var(--color-fg);
+		border: 1px solid var(--color-accent);
+		border-radius: 999px;
+		padding: 0.22rem 0.7rem 0.22rem 0.5rem;
+		font-size: 0.78rem;
+		font-family: var(--font-body);
+		font-style: italic;
+		letter-spacing: 0.01em;
+		cursor: pointer;
+		transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
+	}
+
+	.npc-chip:hover:not(:disabled):not(.selected) {
+		background: var(--color-accent);
+		color: var(--color-bg);
+		border-color: var(--color-accent);
+	}
+
+	.npc-chip.selected {
+		background: var(--color-accent);
+		color: var(--color-bg);
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 2px var(--color-panel-bg), 0 0 0 3px var(--color-accent);
+	}
+
+	.npc-chip:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	.npc-chip.stranger {
+		border-style: dashed;
+	}
+
+	.npc-chip.stranger:not(.selected) {
+		opacity: 0.78;
+	}
+
+	.npc-mood-emoji {
+		font-size: 0.95rem;
+		line-height: 1;
 	}
 </style>

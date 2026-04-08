@@ -59,6 +59,7 @@ export interface TravelStartPayload {
 
 export interface NpcInfo {
 	name: string;
+	real_name: string;
 	occupation: string;
 	mood: string;
 	introduced: boolean;

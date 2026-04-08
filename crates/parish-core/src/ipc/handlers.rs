@@ -211,6 +211,7 @@ pub fn build_npcs_here(world: &WorldState, npc_manager: &NpcManager) -> Vec<NpcI
             let introduced = npc_manager.is_introduced(npc.id);
             NpcInfo {
                 name: npc_manager.display_name(npc).to_string(),
+                real_name: npc.name.clone(),
                 occupation: npc.occupation.clone(),
                 mood_emoji: mood_emoji(&npc.mood).to_string(),
                 mood: npc.mood.clone(),
@@ -339,16 +340,101 @@ pub fn prepare_npc_conversation(
     };
 
     let npc = npc?;
-    let display_name = npc_manager.display_name(&npc).to_string();
+    Some(build_setup_for_npc(
+        world,
+        npc_manager,
+        &npc,
+        raw,
+        improv_enabled,
+    ))
+}
+
+/// Prepares one or more NPC conversations from a list of target names.
+///
+/// Resolves each name to an NPC at the player's location via
+/// [`NpcManager::find_by_name`], deduplicates by NPC id while preserving the
+/// caller's order, and builds a [`NpcConversationSetup`] for each. NPCs that
+/// can't be resolved (not present, name doesn't match) are skipped.
+///
+/// If `targets` is empty and `fallback_to_last_speaker` is true, falls back
+/// to the most recent speaker at the player's location, then to the first
+/// NPC there — matching the historical single-target behaviour.
+///
+/// Returns an empty `Vec` if no NPCs are present at the player's location.
+pub fn prepare_npc_conversations(
+    world: &WorldState,
+    npc_manager: &mut NpcManager,
+    raw: &str,
+    targets: &[String],
+    fallback_to_last_speaker: bool,
+    improv_enabled: bool,
+) -> Vec<NpcConversationSetup> {
+    let npcs_here = npc_manager.npcs_at(world.player_location);
+    if npcs_here.is_empty() {
+        return Vec::new();
+    }
+
+    // Resolve each target name to an NPC, dedupe by id, preserve order.
+    let mut resolved: Vec<Npc> = Vec::with_capacity(targets.len().max(1));
+    let mut seen: std::collections::HashSet<NpcId> = std::collections::HashSet::new();
+
+    for name in targets {
+        if let Some(npc) = npc_manager.find_by_name(name, world.player_location)
+            && seen.insert(npc.id)
+        {
+            resolved.push(npc.clone());
+        }
+    }
+
+    // Empty resolution → optionally fall back to historical behaviour
+    // (last speaker → first NPC in the list).
+    if resolved.is_empty() && fallback_to_last_speaker {
+        let last = world
+            .conversation_log
+            .last_speaker_at(world.player_location)
+            .and_then(|id| npc_manager.get(id))
+            .filter(|npc| npcs_here.iter().any(|n| n.id == npc.id))
+            .cloned();
+        if let Some(npc) = last {
+            seen.insert(npc.id);
+            resolved.push(npc);
+        } else if let Some(first) = npcs_here.first() {
+            seen.insert(first.id);
+            resolved.push((*first).clone());
+        }
+    }
+
+    resolved
+        .into_iter()
+        .map(|npc| build_setup_for_npc(world, npc_manager, &npc, raw, improv_enabled))
+        .collect()
+}
+
+/// Builds a single [`NpcConversationSetup`] for a known NPC, marking them as
+/// introduced. Shared by [`prepare_npc_conversation`] and
+/// [`prepare_npc_conversations`].
+fn build_setup_for_npc(
+    world: &WorldState,
+    npc_manager: &mut NpcManager,
+    npc: &Npc,
+    raw: &str,
+    improv_enabled: bool,
+) -> NpcConversationSetup {
+    let display_name = npc_manager.display_name(npc).to_string();
     let npc_id = npc.id;
 
+    let npcs_here = npc_manager.npcs_at(world.player_location);
     let npc_names: std::collections::HashMap<NpcId, String> = npc_manager
         .all_npcs()
         .map(|n| (n.id, n.name.clone()))
         .collect();
-    let other_npcs: Vec<&Npc> = npcs_here.into_iter().filter(|n| n.id != npc.id).collect();
-    let system_prompt = ticks::build_enhanced_system_prompt(&npc, improv_enabled, &npc_names);
-    let mut context = ticks::build_enhanced_context(&npc, world, raw, &other_npcs, &npc_names);
+    let other_npcs: Vec<&Npc> = npcs_here
+        .iter()
+        .filter(|n| n.id != npc.id)
+        .copied()
+        .collect();
+    let system_prompt = ticks::build_enhanced_system_prompt(npc, improv_enabled, &npc_names);
+    let mut context = ticks::build_enhanced_context(npc, world, raw, &other_npcs, &npc_names);
 
     // Check for anachronisms in player input and inject alert into context
     let anachronisms = anachronism::check_input(raw);
@@ -359,12 +445,12 @@ pub fn prepare_npc_conversation(
     // Mark NPC as introduced on first conversation
     npc_manager.mark_introduced(npc_id);
 
-    Some(NpcConversationSetup {
+    NpcConversationSetup {
         display_name,
         npc_id,
         system_prompt,
         context,
-    })
+    }
 }
 
 // ── Pronunciation hints ────────────────────────────────────────────────────
@@ -548,6 +634,114 @@ mod tests {
         let npc_mgr = NpcManager::new();
         let npcs = build_npcs_here(&world, &npc_mgr);
         assert!(npcs.is_empty());
+    }
+
+    #[test]
+    fn prepare_npc_conversations_empty_when_no_targets_and_no_npcs() {
+        let world = WorldState::new();
+        let mut npc_mgr = NpcManager::new();
+        let setups = prepare_npc_conversations(&world, &mut npc_mgr, "hello", &[], true, false);
+        assert!(
+            setups.is_empty(),
+            "no NPCs at the player location → no setups"
+        );
+    }
+
+    #[test]
+    fn prepare_npc_conversations_resolves_named_targets_in_order() {
+        use crate::game_mod::{GameMod, find_default_mod};
+        let Some(mod_dir) = find_default_mod() else {
+            return; // skip when default mod isn't on disk (e.g. CI sandboxes)
+        };
+        let game_mod = GameMod::load(&mod_dir).expect("should load default mod");
+        let world = WorldState::from_mod(&game_mod).expect("world from mod");
+        let mut npc_mgr = NpcManager::load_from_file(&game_mod.npcs_path()).expect("npc manager");
+
+        // Get the names of NPCs at the player's start location.
+        let names_here: Vec<String> = npc_mgr
+            .npcs_at(world.player_location)
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        if names_here.len() < 2 {
+            return; // skip when start location has < 2 NPCs
+        }
+
+        // Address them in reverse order; setups should preserve that order.
+        let targets: Vec<String> = names_here.iter().rev().cloned().collect();
+        let setups =
+            prepare_npc_conversations(&world, &mut npc_mgr, "hello", &targets, false, false);
+        assert_eq!(setups.len(), targets.len(), "every target should resolve");
+
+        // Verify display_name order matches the requested target order.
+        for (i, target) in targets.iter().enumerate() {
+            // The setup display_name might be the brief description (first
+            // call marks them introduced, but the setups were built before
+            // that took effect). We compare against the real npc name via
+            // npc_id lookup instead.
+            let npc = npc_mgr
+                .get(setups[i].npc_id)
+                .expect("setup NPC must still exist");
+            assert_eq!(&npc.name, target, "setups should preserve target order");
+        }
+    }
+
+    #[test]
+    fn prepare_npc_conversations_dedupes_by_npc_id() {
+        use crate::game_mod::{GameMod, find_default_mod};
+        let Some(mod_dir) = find_default_mod() else {
+            return;
+        };
+        let game_mod = GameMod::load(&mod_dir).expect("should load default mod");
+        let world = WorldState::from_mod(&game_mod).expect("world from mod");
+        let mut npc_mgr = NpcManager::load_from_file(&game_mod.npcs_path()).expect("npc manager");
+
+        let first_name = npc_mgr
+            .npcs_at(world.player_location)
+            .first()
+            .map(|n| n.name.clone());
+        let Some(name) = first_name else {
+            return;
+        };
+
+        // Address the same NPC three times → expect one setup.
+        let targets = vec![name.clone(), name.clone(), name.clone()];
+        let setups =
+            prepare_npc_conversations(&world, &mut npc_mgr, "hello", &targets, false, false);
+        assert_eq!(
+            setups.len(),
+            1,
+            "duplicate names should dedupe to one setup"
+        );
+    }
+
+    #[test]
+    fn prepare_npc_conversations_falls_back_when_targets_empty() {
+        use crate::game_mod::{GameMod, find_default_mod};
+        let Some(mod_dir) = find_default_mod() else {
+            return;
+        };
+        let game_mod = GameMod::load(&mod_dir).expect("should load default mod");
+        let world = WorldState::from_mod(&game_mod).expect("world from mod");
+        let mut npc_mgr = NpcManager::load_from_file(&game_mod.npcs_path()).expect("npc manager");
+
+        if npc_mgr.npcs_at(world.player_location).is_empty() {
+            return;
+        }
+
+        // No targets but fallback enabled → should produce one setup
+        // (the first present NPC, since no one has spoken yet).
+        let setups = prepare_npc_conversations(&world, &mut npc_mgr, "hello", &[], true, false);
+        assert_eq!(setups.len(), 1, "fallback should resolve to a single NPC");
+
+        // No targets and fallback DISABLED → empty.
+        let mut npc_mgr2 = NpcManager::load_from_file(&game_mod.npcs_path()).expect("npc manager");
+        let setups_no_fallback =
+            prepare_npc_conversations(&world, &mut npc_mgr2, "hello", &[], false, false);
+        assert!(
+            setups_no_fallback.is_empty(),
+            "no targets and no fallback → empty"
+        );
     }
 
     #[test]

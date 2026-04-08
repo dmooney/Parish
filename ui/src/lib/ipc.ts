@@ -59,7 +59,14 @@ export const getNpcsHere = () => command<NpcInfo[]>('get_npcs_here');
 
 export const getTheme = () => command<ThemePalette>('get_theme');
 
-export const submitInput = (text: string) => command<void>('submit_input', { text });
+/**
+ * Submit player input. `addressedTo` is an optional list of NPC `real_name`
+ * values that the player has selected via the chip row — these become the
+ * recipients of the message in addition to any `@mentions` in the text. The
+ * union (deduped, order-preserving) is the final recipient list.
+ */
+export const submitInput = (text: string, addressedTo: string[] = []) =>
+	command<void>('submit_input', { text, addressedTo });
 
 export const getDebugSnapshot = () => command<DebugSnapshot>('get_debug_snapshot');
 
