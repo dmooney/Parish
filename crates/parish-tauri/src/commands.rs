@@ -630,6 +630,7 @@ async fn handle_look(state: &Arc<AppState>, app: &tauri::AppHandle) {
 /// is selected. Otherwise falls back to the first NPC at the location.
 struct TurnOutcome {
     line: Option<ConversationLine>,
+    hints: Vec<parish_core::npc::IrishWordHint>,
 }
 
 async fn run_npc_turn(
@@ -722,7 +723,6 @@ async fn run_npc_turn(
                 content: "The storyteller has wandered off mid-tale.".to_string(),
             },
         );
-        let _ = app.emit(EVENT_STREAM_END, StreamEndPayload { hints: vec![] });
         return None;
     };
 
@@ -746,7 +746,6 @@ async fn run_npc_turn(
                 content: INFERENCE_FAILURE_MESSAGES[idx].to_string(),
             },
         );
-        let _ = app.emit(EVENT_STREAM_END, StreamEndPayload { hints: vec![] });
         return None;
     }
 
@@ -766,8 +765,6 @@ async fn run_npc_turn(
         }
     }
 
-    let _ = app.emit(EVENT_STREAM_END, StreamEndPayload { hints });
-
     let line = if parsed.dialogue.trim().is_empty() {
         None
     } else {
@@ -777,7 +774,7 @@ async fn run_npc_turn(
         })
     };
 
-    Some(TurnOutcome { line })
+    Some(TurnOutcome { line, hints })
 }
 
 async fn set_conversation_running(state: &Arc<AppState>, running: bool) {
@@ -877,6 +874,8 @@ async fn handle_npc_conversation(
     }
     emit_world_update(&state, &app).await;
 
+    let mut combined_hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+
     for (speaker_id, follow_up) in build_turn_order(&targets, max_follow_up_turns) {
         let prompt = if follow_up {
             "listens while the nearby conversation continues"
@@ -897,6 +896,7 @@ async fn handle_npc_conversation(
             break;
         };
 
+        combined_hints.extend(outcome.hints);
         if let Some(line) = outcome.line {
             transcript.push(line.clone());
             let mut conversation = state.conversation.lock().await;
@@ -911,6 +911,15 @@ async fn handle_npc_conversation(
     }
     set_conversation_running(&state, false).await;
     emit_world_update(&state, &app).await;
+
+    // Single stream-end after the entire turn so input stays disabled
+    // through every NPC's response (matches the user spec).
+    let _ = app.emit(
+        EVENT_STREAM_END,
+        StreamEndPayload {
+            hints: combined_hints,
+        },
+    );
 }
 
 async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
@@ -953,6 +962,8 @@ async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
     }
     emit_world_update(state, app).await;
 
+    let mut combined_hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+
     for (speaker_id, follow_up) in build_turn_order(&speakers, max_follow_up_turns) {
         let prompt = if follow_up {
             "answers the nearby remark and keeps the local chatter going"
@@ -965,6 +976,7 @@ async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
             break;
         };
 
+        combined_hints.extend(outcome.hints);
         if let Some(line) = outcome.line {
             transcript.push(line.clone());
             let mut conversation = state.conversation.lock().await;
@@ -979,6 +991,13 @@ async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
     }
     set_conversation_running(state, false).await;
     emit_world_update(state, app).await;
+
+    let _ = app.emit(
+        EVENT_STREAM_END,
+        StreamEndPayload {
+            hints: combined_hints,
+        },
+    );
 }
 
 pub(crate) async fn tick_inactivity(state: &Arc<AppState>, app: &tauri::AppHandle) {

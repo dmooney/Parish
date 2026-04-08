@@ -518,6 +518,7 @@ async fn handle_look(state: &Arc<AppState>) {
 
 struct TurnOutcome {
     line: Option<ConversationLine>,
+    hints: Vec<parish_core::npc::IrishWordHint>,
 }
 
 async fn run_npc_turn(
@@ -605,9 +606,6 @@ async fn run_npc_turn(
             "text-log",
             &text_log("system", "The storyteller has wandered off mid-tale."),
         );
-        state
-            .event_bus
-            .emit("stream-end", &StreamEndPayload { hints: vec![] });
         return None;
     };
 
@@ -618,9 +616,6 @@ async fn run_npc_turn(
             "text-log",
             &text_log("system", INFERENCE_FAILURE_MESSAGES[idx]),
         );
-        state
-            .event_bus
-            .emit("stream-end", &StreamEndPayload { hints: vec![] });
         return None;
     }
 
@@ -640,10 +635,6 @@ async fn run_npc_turn(
         }
     }
 
-    state
-        .event_bus
-        .emit("stream-end", &StreamEndPayload { hints });
-
     let line = if parsed.dialogue.trim().is_empty() {
         None
     } else {
@@ -653,7 +644,7 @@ async fn run_npc_turn(
         })
     };
 
-    Some(TurnOutcome { line })
+    Some(TurnOutcome { line, hints })
 }
 
 async fn set_conversation_running(state: &Arc<AppState>, running: bool) {
@@ -736,6 +727,8 @@ async fn handle_npc_conversation(raw: String, target_names: Vec<String>, state: 
     }
     emit_world_update(state).await;
 
+    let mut combined_hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+
     for (speaker_id, follow_up) in build_turn_order(&targets, max_follow_up_turns) {
         let prompt = if follow_up {
             "listens while the nearby conversation continues"
@@ -749,6 +742,7 @@ async fn handle_npc_conversation(raw: String, target_names: Vec<String>, state: 
             break;
         };
 
+        combined_hints.extend(outcome.hints);
         if let Some(line) = outcome.line {
             transcript.push(line.clone());
             let mut conversation = state.conversation.lock().await;
@@ -763,6 +757,17 @@ async fn handle_npc_conversation(raw: String, target_names: Vec<String>, state: 
     }
     set_conversation_running(state, false).await;
     emit_world_update(state).await;
+
+    // Emit a single stream-end at the end of the entire turn so the input
+    // field stays disabled through every NPC's response. (PR #222 emitted
+    // one per turn, which let the input flicker open between NPCs — that
+    // contradicted the explicit user spec.)
+    state.event_bus.emit(
+        "stream-end",
+        &StreamEndPayload {
+            hints: combined_hints,
+        },
+    );
 }
 
 async fn run_idle_banter(state: &Arc<AppState>) {
@@ -805,6 +810,8 @@ async fn run_idle_banter(state: &Arc<AppState>) {
     }
     emit_world_update(state).await;
 
+    let mut combined_hints: Vec<parish_core::npc::IrishWordHint> = Vec::new();
+
     for (speaker_id, follow_up) in build_turn_order(&speakers, max_follow_up_turns) {
         let prompt = if follow_up {
             "answers the nearby remark and keeps the local chatter going"
@@ -817,6 +824,7 @@ async fn run_idle_banter(state: &Arc<AppState>) {
             break;
         };
 
+        combined_hints.extend(outcome.hints);
         if let Some(line) = outcome.line {
             transcript.push(line.clone());
             let mut conversation = state.conversation.lock().await;
@@ -831,6 +839,15 @@ async fn run_idle_banter(state: &Arc<AppState>) {
     }
     set_conversation_running(state, false).await;
     emit_world_update(state).await;
+
+    // Single stream-end after the entire idle-banter sequence (see comment
+    // in handle_npc_conversation for the rationale).
+    state.event_bus.emit(
+        "stream-end",
+        &StreamEndPayload {
+            hints: combined_hints,
+        },
+    );
 }
 
 pub(crate) async fn tick_inactivity(state: &Arc<AppState>) {
@@ -1695,6 +1712,9 @@ mod tests {
             config.max_follow_up_turns = 1;
         }
 
+        // Subscribe BEFORE the dispatch so we can count stream-end events.
+        let mut rx = state.event_bus.subscribe();
+
         let (prompts, worker) = install_scripted_inference_queue(
             &state,
             vec![
@@ -1744,6 +1764,27 @@ mod tests {
         assert!(prompts[0].contains("- You: What news is there?"));
         assert!(prompts[1].contains("- Siobhan Murphy: I heard the fair will be lively."));
         assert!(prompts[2].contains("- Padraig Darcy: If it is, Siobhan, I'll bring the cart."));
+
+        // Regression guard: stream-end must fire EXACTLY ONCE for the whole
+        // turn (addressed + follow-up), so the input field stays disabled
+        // through every NPC's response. PR #222 emitted one per turn, which
+        // let the input flicker open between NPCs and contradicted the
+        // explicit user spec.
+        let mut stream_end_count = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(event) if event.event == "stream-end" => stream_end_count += 1,
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            }
+        }
+        assert_eq!(
+            stream_end_count, 1,
+            "expected exactly one stream-end after a 3-turn dispatch, got {}",
+            stream_end_count
+        );
 
         worker.abort();
     }
