@@ -146,15 +146,6 @@
 	}
 
 	onMount(async () => {
-		const rootStyle = document.documentElement.style;
-		const updateViewportHeight = () => {
-			const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-			rootStyle.setProperty('--app-viewport-height', `${viewportHeight}px`);
-		};
-		updateViewportHeight();
-		window.visualViewport?.addEventListener('resize', updateViewportHeight);
-		window.visualViewport?.addEventListener('scroll', updateViewportHeight);
-
 		// Frontend auto-pause tracker — fires /pause after 60s of true UI
 		// inactivity (no key/mouse/touch). The server-side tick_inactivity
 		// backstop in parish-server still runs for the tab-close case.
@@ -367,8 +358,6 @@
 		}
 
 		return () => {
-			window.visualViewport?.removeEventListener('resize', updateViewportHeight);
-			window.visualViewport?.removeEventListener('scroll', updateViewportHeight);
 			window.removeEventListener('keydown', onTrackerKey);
 			window.removeEventListener('mousedown', onTrackerMousedown);
 			window.removeEventListener('touchstart', onTrackerTouch);
@@ -437,7 +426,7 @@
 	.app-shell {
 		display: flex;
 		flex-direction: column;
-		height: var(--app-viewport-height, 100dvh);
+		height: 100dvh;
 		overflow: hidden;
 		transition: height 0.15s ease;
 		padding-bottom: env(safe-area-inset-bottom);
