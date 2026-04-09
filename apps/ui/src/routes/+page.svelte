@@ -39,12 +39,12 @@
 		submitInput
 	} from '$lib/ipc';
 	import { createAutoPauseTracker } from '$lib/auto-pause';
+	import { getStreamChunkDelayMs, takeNextStreamChunk } from '$lib/stream-pacing';
 	import type { LanguageHint } from '$lib/types';
 
 	const AUTO_PAUSE_MS = 60_000;
 	const MOUSEMOVE_THROTTLE_MS = 1000;
-	const STREAM_PACE_CHARS_PER_SECOND = 18;
-	const STREAM_PACE_TICK_MS = 90;
+	const STREAM_WAIT_FOR_WORD_MS = 70;
 
 	// F5 toggle for save picker, F12 toggle for debug panel, M toggle for map
 	function handleKeydown(e: KeyboardEvent) {
@@ -100,7 +100,12 @@
 				const last = log[log.length - 1];
 				return [
 					...log.slice(0, -1),
-					{ ...last, content: last.content + token }
+					{
+						...last,
+						content: last.content + token,
+						latest_chunk: token,
+						stream_chunk_id: (last.stream_chunk_id ?? 0) + 1
+					}
 				];
 			}
 			// Merge with the empty NPC name placeholder emitted by Rust
@@ -113,7 +118,13 @@
 			) {
 				return [
 					...log.slice(0, -1),
-					{ ...last, content: token, streaming: true }
+					{
+						...last,
+						content: token,
+						streaming: true,
+						latest_chunk: token,
+						stream_chunk_id: 1
+					}
 				];
 			}
 			// Use the most recent NPC source name if available, otherwise fall back
@@ -121,7 +132,16 @@
 				last && last.source !== 'player' && last.source !== 'system'
 					? last.source
 					: 'NPC';
-			return trimTextLog([...log, { source: npcSource, content: token, streaming: true }]);
+			return trimTextLog([
+				...log,
+				{
+					source: npcSource,
+					content: token,
+					streaming: true,
+					latest_chunk: token,
+					stream_chunk_id: 1
+				}
+			]);
 		});
 	}
 
@@ -189,15 +209,22 @@
 		} catch (_) {}
 
 		let streamBuffer = '';
-		let streamPumpHandle: ReturnType<typeof setInterval> | null = null;
+		let streamPumpHandle: ReturnType<typeof setTimeout> | null = null;
 		let pendingStreamEndHints: LanguageHint[] | null = null;
-		let pacedCharBudget = 0;
 
 		const finishNpcStream = () => {
 			textLog.update((log) => {
 				if (log.length > 0 && log[log.length - 1].streaming) {
 					const last = log[log.length - 1];
-					return [...log.slice(0, -1), { ...last, streaming: false }];
+					return [
+						...log.slice(0, -1),
+						{
+							...last,
+							streaming: false,
+							latest_chunk: undefined,
+							stream_chunk_id: undefined
+						}
+					];
 				}
 				return log;
 			});
@@ -208,27 +235,43 @@
 
 		const stopStreamPump = () => {
 			if (streamPumpHandle !== null) {
-				clearInterval(streamPumpHandle);
+				clearTimeout(streamPumpHandle);
 				streamPumpHandle = null;
 			}
 		};
 
+		const scheduleStreamPump = (delayMs: number) => {
+			streamPumpHandle = setTimeout(() => {
+				streamPumpHandle = null;
+				pumpStream();
+			}, delayMs);
+		};
+
+		const pumpStream = () => {
+			if (streamBuffer.length === 0) {
+				stopStreamPump();
+				if (pendingStreamEndHints !== null) finishNpcStream();
+				return;
+			}
+
+			const { chunk, rest } = takeNextStreamChunk(
+				streamBuffer,
+				pendingStreamEndHints !== null
+			);
+
+			if (chunk === null) {
+				scheduleStreamPump(STREAM_WAIT_FOR_WORD_MS);
+				return;
+			}
+
+			streamBuffer = rest;
+			appendStreamToken(chunk);
+			scheduleStreamPump(getStreamChunkDelayMs(chunk));
+		};
+
 		const startStreamPumpIfNeeded = () => {
 			if (streamPumpHandle !== null) return;
-			streamPumpHandle = setInterval(() => {
-				if (streamBuffer.length === 0) {
-					stopStreamPump();
-					if (pendingStreamEndHints !== null) finishNpcStream();
-					return;
-				}
-
-				pacedCharBudget += (STREAM_PACE_CHARS_PER_SECOND * STREAM_PACE_TICK_MS) / 1000;
-				const charsToEmit = Math.max(1, Math.floor(pacedCharBudget));
-				pacedCharBudget -= charsToEmit;
-				const token = streamBuffer.slice(0, charsToEmit);
-				streamBuffer = streamBuffer.slice(charsToEmit);
-				appendStreamToken(token);
-			}, STREAM_PACE_TICK_MS);
+			pumpStream();
 		};
 
 		const listeners: Array<() => void> = [];
