@@ -18,6 +18,7 @@
 
 	import LightningFlash from './effects/LightningFlash.svelte';
 	import RainStreaks from './effects/RainStreaks.svelte';
+	import FogCreep from './effects/FogCreep.svelte';
 
 	let engine: EffectsEngine | null = null;
 
@@ -75,6 +76,7 @@
 		{#each $activeEffects as effect (effect.instanceKey)}
 			{#if effect.id === 'lightning-flash'}<LightningFlash {effect} />{/if}
 			{#if effect.id === 'rain-streaks'}<RainStreaks {effect} />{/if}
+			{#if effect.id === 'fog-creep'}<FogCreep {effect} />{/if}
 		{/each}
 	</div>
 {/if}
