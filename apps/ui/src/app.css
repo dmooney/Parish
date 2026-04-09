@@ -99,6 +99,54 @@ body.wind-gust {
 	100% { transform: translate(0, 0) rotate(0deg); }
 }
 
+/* ── Rain ink bleed — subtle text blur in heavy rain ── */
+body.rain-ink-bleed .chat-panel {
+	text-shadow: 0 0 0.3px var(--color-fg);
+	transition: text-shadow 2s ease-in;
+}
+
+/* ── Breathing page — paper texture opacity pulse ── */
+body.breathing-page::after {
+	animation: page-breathe 10s ease-in-out infinite;
+}
+
+@keyframes page-breathe {
+	0%, 100% { opacity: 0.045; }
+	50%      { opacity: 0.065; }
+}
+
+/* ── Ink splash on submit ── */
+body.ink-splash .input-wrapper {
+	animation: ink-splash-ring 400ms ease-out;
+}
+
+@keyframes ink-splash-ring {
+	0%   { box-shadow: 0 0 0 0 rgba(49, 36, 15, 0.3); }
+	50%  { box-shadow: 0 0 0 6px rgba(49, 36, 15, 0.1); }
+	100% { box-shadow: 0 0 0 12px rgba(49, 36, 15, 0); }
+}
+
+/* ── Page turn on travel ── */
+body.page-turn {
+	animation: page-turn 500ms ease-out;
+}
+
+@keyframes page-turn {
+	0%   { transform: perspective(800px) rotateY(0deg); }
+	30%  { transform: perspective(800px) rotateY(-1.5deg); box-shadow: 4px 0 8px rgba(0,0,0,0.1); }
+	100% { transform: perspective(800px) rotateY(0deg); box-shadow: none; }
+}
+
+/* ── Candle guttering on idle ── */
+body.candle-gutter::before {
+	animation: candle-dim 8s ease-in forwards;
+}
+
+@keyframes candle-dim {
+	0%   { background: radial-gradient(ellipse at 50% 40%, transparent 35%, rgba(0,0,0,0.28) 100%); }
+	100% { background: radial-gradient(ellipse at 50% 40%, transparent 20%, rgba(0,0,0,0.50) 100%); }
+}
+
 /* ── Mobile adjustments ── */
 @media (max-width: 768px) {
 	html, body {
