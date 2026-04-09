@@ -21,6 +21,23 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
 		singleton: true,
 	},
 
+	// ── Folklore ─────────────────────────────────────────────────────────
+
+	{
+		id: 'fairy-sprite',
+		conditions: {
+			indoor: false,
+			locationMatch: ['crossroads', 'fairy', 'rath', 'fort', 'bog', 'hawthorn'],
+		},
+		cooldownMs: 600_000,
+		intervalMs: [300_000, 900_000],
+		durationMs: 35_000,
+		probability: 0.3,
+		singleton: true,
+	},
+
+	// ── Weather ──────────────────────────────────────────────────────────
+
 	{
 		id: 'fog-creep',
 		conditions: { weather: ['Fog'], indoor: false },
