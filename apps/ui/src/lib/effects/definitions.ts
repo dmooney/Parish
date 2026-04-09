@@ -10,5 +10,14 @@ import type { EffectDefinition } from './types';
 
 export const EFFECT_DEFINITIONS: EffectDefinition[] = [
 	// ── Weather ──────────────────────────────────────────────────────────
-	// Individual effects will be added here by subsequent commits.
+
+	{
+		id: 'lightning-flash',
+		conditions: { weather: ['Storm'], indoor: false },
+		cooldownMs: 15_000,
+		intervalMs: [30_000, 90_000],
+		durationMs: 800,
+		probability: 0.7,
+		singleton: true,
+	},
 ];

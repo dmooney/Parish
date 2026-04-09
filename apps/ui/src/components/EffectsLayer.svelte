@@ -16,8 +16,7 @@
 	import { EffectsEngine, EFFECT_DEFINITIONS } from '$lib/effects';
 	import type { EffectContext } from '$lib/effects';
 
-	// Import individual effect renderers here as they're added.
-	// e.g.: import LightningFlash from './effects/LightningFlash.svelte';
+	import LightningFlash from './effects/LightningFlash.svelte';
 
 	let engine: EffectsEngine | null = null;
 
@@ -73,9 +72,7 @@
 {#if $activeEffects.length > 0}
 	<div class="effects-layer" aria-hidden="true">
 		{#each $activeEffects as effect (effect.instanceKey)}
-			<!-- Effect renderers dispatched by ID. -->
-			<!-- Individual effect components will be added here. -->
-			<!-- e.g.: {#if effect.id === 'lightning-flash'}<LightningFlash {effect} />{/if} -->
+			{#if effect.id === 'lightning-flash'}<LightningFlash {effect} />{/if}
 		{/each}
 	</div>
 {/if}
