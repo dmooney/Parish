@@ -62,6 +62,18 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
 
 	// ── Ambient ──────────────────────────────────────────────────────────
 
+	// ── Seasonal ─────────────────────────────────────────────────────────
+
+	{
+		id: 'autumn-leaf',
+		conditions: { season: ['Autumn'], indoor: false },
+		cooldownMs: 15_000,
+		intervalMs: [20_000, 60_000],
+		durationMs: 9_000,
+		probability: 0.5,
+		singleton: true,
+	},
+
 	{
 		id: 'dust-motes',
 		conditions: {
