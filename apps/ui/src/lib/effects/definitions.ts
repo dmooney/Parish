@@ -62,6 +62,16 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
 
 	// ── Ambient ──────────────────────────────────────────────────────────
 
+	{
+		id: 'firelight-warmth',
+		conditions: { indoor: true },
+		cooldownMs: 0,
+		intervalMs: [1_000, 2_000],
+		durationMs: 60_000,
+		probability: 1.0,
+		singleton: true,
+	},
+
 	// ── Seasonal ─────────────────────────────────────────────────────────
 
 	{

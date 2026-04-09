@@ -25,6 +25,7 @@
 	import WindGust from './effects/WindGust.svelte';
 	import DustMotes from './effects/DustMotes.svelte';
 	import AutumnLeaf from './effects/AutumnLeaf.svelte';
+	import FirelightWarmth from './effects/FirelightWarmth.svelte';
 
 	let engine: EffectsEngine | null = null;
 
@@ -89,6 +90,7 @@
 			{#if effect.id === 'wind-gust'}<WindGust {effect} />{/if}
 			{#if effect.id === 'dust-motes'}<DustMotes {effect} />{/if}
 			{#if effect.id === 'autumn-leaf'}<AutumnLeaf {effect} />{/if}
+			{#if effect.id === 'firelight-warmth'}<FirelightWarmth {effect} />{/if}
 		{/each}
 	</div>
 {/if}
