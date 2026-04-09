@@ -208,6 +208,10 @@ pub struct NpcConfig {
     /// NPC arrival reaction tuning.
     #[serde(default)]
     pub reactions: ReactionConfig,
+    /// Whether to use two-pass dialogue generation (pre-pass validates
+    /// which people the NPC intends to reference before generating dialogue).
+    #[serde(default)]
+    pub two_pass_dialogue: bool,
 }
 
 impl Default for NpcConfig {
@@ -224,6 +228,7 @@ impl Default for NpcConfig {
             relationship_labels: RelationshipLabelConfig::default(),
             reaction_context_count: 5,
             reactions: ReactionConfig::default(),
+            two_pass_dialogue: false,
         }
     }
 }

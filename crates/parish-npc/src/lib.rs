@@ -457,6 +457,83 @@ pub fn validate_mentioned_people(
     hallucinated
 }
 
+/// Response type for the reference extraction pre-pass.
+#[derive(Debug, Clone, Deserialize)]
+struct ReferencePrePassResponse {
+    #[serde(default)]
+    names: Vec<String>,
+}
+
+/// Asks a small/fast model which people from the roster an NPC would
+/// naturally reference when responding to the player's input.
+///
+/// Returns validated names (filtered against the roster). Used as the
+/// first pass of two-pass dialogue generation to prevent hallucinated names.
+pub async fn extract_intended_references(
+    client: &crate::inference::openai_client::OpenAiClient,
+    model: &str,
+    npc_name: &str,
+    player_input: &str,
+    known_roster: &[(NpcId, String, String)],
+) -> Vec<String> {
+    if known_roster.is_empty() {
+        return Vec::new();
+    }
+
+    let roster_list: Vec<String> = known_roster
+        .iter()
+        .map(|(_, name, occ)| format!("{} ({})", name, occ))
+        .collect();
+    let roster_str = roster_list.join(", ");
+
+    let prompt = format!(
+        "You are {npc_name}. A newcomer says: \"{player_input}\"\n\
+        People you know: {roster_str}\n\n\
+        Which of these people would you naturally mention in your reply? \
+        Return a JSON object: {{\"names\": [\"Name1\", \"Name2\"]}} \
+        or {{\"names\": []}} if none."
+    );
+
+    match client
+        .generate_json::<ReferencePrePassResponse>(model, &prompt, None, Some(100), None)
+        .await
+    {
+        Ok(resp) => {
+            // Filter against roster to be safe
+            resp.names
+                .into_iter()
+                .filter(|name| {
+                    let lower = name.to_lowercase();
+                    known_roster.iter().any(|(_, rn, _)| {
+                        let rl = rn.to_lowercase();
+                        rl == lower
+                            || rl
+                                .split_whitespace()
+                                .next()
+                                .is_some_and(|first| first == lower)
+                    })
+                })
+                .collect()
+        }
+        Err(e) => {
+            tracing::warn!("Reference pre-pass failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Formats validated references as a context injection for the main dialogue prompt.
+pub fn format_reference_hint(validated_names: &[String]) -> String {
+    if validated_names.is_empty() {
+        "You don't need to mention anyone specific in your response.".to_string()
+    } else {
+        format!(
+            "People you may reference in your response: {}",
+            validated_names.join(", ")
+        )
+    }
+}
+
 /// Builds the Tier 1 context prompt for an NPC interaction.
 ///
 /// Includes the current location, time of day, weather, and season.
