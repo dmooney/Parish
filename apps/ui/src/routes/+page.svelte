@@ -9,6 +9,7 @@
 	import InputField from '../components/InputField.svelte';
 	import DebugPanel from '../components/DebugPanel.svelte';
 	import SavePicker from '../components/SavePicker.svelte';
+	import EffectsLayer from '../components/EffectsLayer.svelte';
 
 	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen, addReaction, trimTextLog } from '../stores/game';
 
@@ -419,6 +420,7 @@
 	{/if}
 </div>
 
+<EffectsLayer />
 <DebugPanel />
 <SavePicker />
 
