@@ -2,7 +2,7 @@
 
 > [Docs Index](../index.md) | [Ambient Sound Design](ambient-sound.md) | [ADR-015](../adr/015-ambient-sound-system.md) | [Music Research](../research/music-entertainment.md) | [Audio Sources](../research/ambient-sound-sources.md)
 
-*This is a brainstorming document — a creative vision for how Parish should sound and feel. The technical architecture lives in [ambient-sound.md](ambient-sound.md). The historical research lives in [music-entertainment.md](../research/music-entertainment.md). This document is about the why and the what-if.*
+*This is a brainstorming document — a creative vision for how Rundale should sound and feel. The technical architecture lives in [ambient-sound.md](ambient-sound.md). The historical research lives in [music-entertainment.md](../research/music-entertainment.md). This document is about the why and the what-if.*
 
 ---
 
@@ -28,9 +28,9 @@ Key principles to steal:
 - **Long-session tolerance.** Parish sessions can run 2–6 hours. Nothing should become grating. Loops must be long (3–5 minutes minimum), varied, and layered so they never feel repetitive.
 - **Sound is information.** In Factorio, you can *hear* that something's wrong before you see it. In Parish, you should be able to *hear* that it's getting late (birdsong fading, evening settling sounds), that weather is changing (wind picking up before rain arrives), or that the pub is lively tonight (distant fiddle music).
 
-### The Parish Synthesis: Sound as World-Building
+### The Rundale Synthesis: Sound as World-Building
 
-Parish is a text game. The player reads descriptions and types commands. They see a minimap and a sidebar. Their visual channel is occupied by *reading*. This means **sound has an outsized role in creating presence**. It fills the sensory gap that text alone cannot bridge.
+Rundale is a text game. The player reads descriptions and types commands. They see a minimap and a sidebar. Their visual channel is occupied by *reading*. This means **sound has an outsized role in creating presence**. It fills the sensory gap that text alone cannot bridge.
 
 You can describe rain. But *hearing* it — a steady patter on a thatched roof, punctuated by the distant toll of the Angelus bell — creates the feeling of *being there*. The player's imagination does the visual work from text; sound provides the emotional and spatial grounding.
 
@@ -273,7 +273,7 @@ Strictly period-correct for 1820s Connacht:
 
 ### Diegetic vs. Non-Diegetic Music
 
-Parish should use **both**, but the player should never be quite sure which they're hearing.
+Rundale should use **both**, but the player should never be quite sure which they're hearing.
 
 **Diegetic (music that exists in the world):**
 - Fiddle music from Darcy's Pub (propagates Near, louder at night)

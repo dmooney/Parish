@@ -25,7 +25,7 @@ The headless and TUI modes continue to use the Rust `LoadingAnimation` (`crates/
 
 ## Overview
 
-Parish has three UI modes, selectable via CLI flags:
+Rundale (via the Parish engine) has three UI modes, selectable via CLI flags:
 
 | Mode | Flag | Framework | Description |
 |------|------|-----------|-------------|

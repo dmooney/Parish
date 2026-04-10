@@ -418,7 +418,7 @@ Hold spacebar (when the input field is empty) to speak instead of type. Release 
 
 **Effort**: Low (Web Speech API path) to Medium (Whisper sidecar path).
 
-**Why this matters**: Voice input is faster than typing for natural language. Parish is a conversation game — speaking to NPCs instead of typing to them is a natural fit. And with push-to-talk (not always-on), it stays intentional.
+**Why this matters**: Voice input is faster than typing for natural language. Rundale is a conversation game — speaking to NPCs instead of typing to them is a natural fit. And with push-to-talk (not always-on), it stays intentional.
 
 ---
 

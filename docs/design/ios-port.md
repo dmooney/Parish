@@ -1,4 +1,4 @@
-# iOS Port — Fully On-Device Parish
+# iOS Port — Fully On-Device Rundale
 
 > Parent: [Architecture Overview](overview.md) | [Docs Index](../index.md) |
 > ADRs: [005 — Ollama Local Inference](../adr/005-ollama-local-inference.md), [014 — Web/Mobile Architecture](../adr/014-web-mobile-architecture.md), [016 — Tauri + Svelte GUI](../adr/016-tauri-svelte-gui.md) |
@@ -8,10 +8,10 @@
 
 ## Goal
 
-Ship the entire Parish game — UI, simulation, persistence, and LLM inference —
+Ship the entire Rundale game — UI, simulation, persistence, and LLM inference —
 running fully on-device on a modern iPhone (15 Pro / 16 class), with no
 network calls and no companion server. The player downloads the app, the app
-downloads its language model on first launch, and from then on Parish runs
+downloads its language model on first launch, and from then on Rundale runs
 offline.
 
 This is deliberately the *opposite* of the [Phase 7 — Web & Mobile](../plans/phase-7-web-mobile.md)
