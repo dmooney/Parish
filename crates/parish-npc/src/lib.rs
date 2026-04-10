@@ -5,6 +5,7 @@
 //! by the NpcManager based on distance from the player.
 
 pub mod anachronism;
+pub mod autonomous;
 pub mod data;
 pub mod manager;
 pub mod memory;

@@ -541,7 +541,7 @@ async fn handle_headless_load(app: &mut App, name: &str) {
                 let _ = db.save_snapshot(app.active_branch_id, &snapshot).await;
             }
             if let Some(ref gm) = app.game_mod {
-                if let Ok(world) = crate::world::WorldState::from_mod(gm) {
+                if let Ok(world) = parish_core::game_mod::world_state_from_mod(gm) {
                     app.world = world;
                 }
                 let npcs_path = gm.npcs_path();
