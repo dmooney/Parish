@@ -1,4 +1,4 @@
-# Parish Development Journal
+# Rundale Development Journal
 
 > [Docs Index](index.md)
 

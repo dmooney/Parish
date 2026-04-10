@@ -201,7 +201,7 @@ General village life sounds for Kilteevan Village and indoor locations.
 | **Mixkit License** | Free for commercial use. | Good. |
 | **Zapsplat License** | Free tier requires attribution. | Acceptable. |
 
-**Policy:** Prefer CC0 > CC-BY > Pixabay License. Avoid NC licenses unless Parish is definitively non-commercial. Maintain an `AUDIO_CREDITS.md` file listing all audio sources and their licenses.
+**Policy:** Prefer CC0 > CC-BY > Pixabay License. Avoid NC licenses unless Rundale is definitively non-commercial. Maintain an `AUDIO_CREDITS.md` file listing all audio sources and their licenses.
 
 ---
 

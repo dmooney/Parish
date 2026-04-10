@@ -52,7 +52,7 @@ This timeline is not background lore — it is a design resource with specific a
 
 **Timeline advancement**, if the game supports it, transforms the parish utterly. Characters the player knows and cares about will face starvation, emigration, the workhouse, death. The cosy familiarity of the parish becomes a source of dread. The game can use the passage of time as its most powerful narrative mechanism — not through dramatic set-pieces but through absence, through the empty houses and the names no longer spoken.
 
-**The weight of knowing** is perhaps the most distinctive quality this material gives the game. Parish is set in a world that feels stable, rooted, ancient in its rhythms. The research in this document reveals that world to be balanced on a knife's edge. Every potato ridge is a countdown. Every new baby in a subdivided holding is a step closer to catastrophe. The game does not need to depict the Famine to be haunted by it. It only needs to depict, with honesty and care, the world that made the Famine possible — and trust the player to feel the shadow falling.
+**The weight of knowing** is perhaps the most distinctive quality this material gives the game. Rundale is set in a world that feels stable, rooted, ancient in its rhythms. The research in this document reveals that world to be balanced on a knife's edge. Every potato ridge is a countdown. Every new baby in a subdivided holding is a step closer to catastrophe. The game does not need to depict the Famine to be haunted by it. It only needs to depict, with honesty and care, the world that made the Famine possible — and trust the player to feel the shadow falling.
 
 ---
 

@@ -362,7 +362,7 @@ other people's phones without going through full App Store review.
 5. Testers install the **TestFlight app** from the App Store, accept the invite, and get builds. Updates push automatically.
 
 TestFlight builds expire after 90 days; upload a new build to refresh. This
-is how Parish should be distributed to playtesters before any App Store
+is how Rundale should be distributed to playtesters before any App Store
 submission.
 
 ### CI
@@ -406,7 +406,7 @@ Once a TestFlight build is solid:
 1. In **App Store Connect**, create the app listing (bundle ID `ie.parish.app`, name, primary language, SKU)
 2. Fill out metadata: description, keywords, support URL, marketing URL, age rating questionnaire, category, pricing
 3. Upload **screenshots** for every required device size (currently 6.7" and 6.5" iPhone are mandatory; iPad if supported). Apple is strict about pixel dimensions.
-4. Provide a **privacy policy URL** and complete the **App Privacy** disclosures. A fully on-device Parish should be a clean "no data collected" declaration, which is the easy case.
+4. Provide a **privacy policy URL** and complete the **App Privacy** disclosures. A fully on-device Rundale should be a clean "no data collected" declaration, which is the easy case.
 5. Pick a build from TestFlight as the release candidate
 6. Submit for review
 
