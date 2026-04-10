@@ -10,7 +10,7 @@
 	import DebugPanel from '../components/DebugPanel.svelte';
 	import SavePicker from '../components/SavePicker.svelte';
 
-	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen, addReaction, trimTextLog } from '../stores/game';
+	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen, focailOpen, addReaction, trimTextLog } from '../stores/game';
 
 	/** Which mobile-only panel is open (if any). Desktop ignores this. */
 	let mobilePanel = $state<'none' | 'map' | 'sidebar'>('none');
@@ -384,28 +384,32 @@
 					fullMapOpen.set(false);
 				} else {
 					mobilePanel = 'none';
+					focailOpen.set(false);
 					fullMapOpen.set(true);
 				}
 			}}
 		>Map</button>
 		<button
 			class="mobile-btn"
-			class:active={mobilePanel === 'sidebar'}
+			class:active={$focailOpen}
 			onclick={() => {
-				if (mobilePanel === 'sidebar') {
-					mobilePanel = 'none';
+				if ($focailOpen) {
+					focailOpen.set(false);
 				} else {
+					mobilePanel = 'none';
 					fullMapOpen.set(false);
-					mobilePanel = 'sidebar';
+					focailOpen.set(true);
 				}
 			}}
-		>Hints</button>
+		>Language Hints</button>
 	</div>
 
 	<div class="main-area">
 		<div class="chat-col" class:mobile-hidden={mobilePanel !== 'none'}>
 			{#if $fullMapOpen}
 				<FullMapOverlay onclose={() => fullMapOpen.set(false)} />
+			{:else if $focailOpen}
+				<Sidebar onclose={() => focailOpen.set(false)} />
 			{:else}
 				<ChatPanel />
 				<InputField />
@@ -417,14 +421,6 @@
 		</div>
 	</div>
 
-	<!-- Mobile-only panel (replaces chat area when open) -->
-	{#if mobilePanel === 'sidebar'}
-		<div class="mobile-panel">
-			<div class="mobile-panel-inner">
-				<Sidebar />
-			</div>
-		</div>
-	{/if}
 </div>
 
 <DebugPanel />
@@ -468,18 +464,6 @@
 
 	/* ── Mobile toolbar ── */
 	.mobile-toolbar {
-		display: none;
-	}
-
-	:global(.status-bar) {
-		position: sticky;
-		top: 0;
-		z-index: 30;
-		flex-shrink: 0;
-	}
-
-	/* ── Mobile panel (shown when a toolbar button is active) ── */
-	.mobile-panel {
 		display: none;
 	}
 
@@ -527,19 +511,5 @@
 			border-color: var(--color-accent);
 		}
 
-		.mobile-panel {
-			display: flex;
-			flex: 1;
-			min-height: 0;
-			overflow: hidden;
-		}
-
-		.mobile-panel-inner {
-			flex: 1;
-			display: flex;
-			flex-direction: column;
-			overflow-y: auto;
-			background: var(--color-bg);
-		}
 	}
 </style>

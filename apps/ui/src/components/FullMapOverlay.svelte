@@ -207,11 +207,6 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="map-embed">
-	<div class="overlay-header">
-		<span class="overlay-title">Parish Map</span>
-		<span class="overlay-hint">Scroll to zoom &middot; Drag to pan &middot; M to close</span>
-		<button class="close-btn" onclick={onclose} title="Close (M)">&times;</button>
-	</div>
 	<div
 		class="map-viewport"
 		onwheel={handleWheel}
@@ -367,44 +362,7 @@
 		position: relative;
 	}
 
-	.overlay-header {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		padding: 0.5rem 0.75rem;
-		border-bottom: 1px solid var(--color-border);
-		flex-shrink: 0;
-	}
-
-	.overlay-title {
-		font-size: 0.9rem;
-		font-weight: 600;
-		color: var(--color-fg);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
-
-	.overlay-hint {
-		font-size: 0.7rem;
-		color: var(--color-muted);
-		flex: 1;
-	}
-
-	.close-btn {
-		background: none;
-		border: none;
-		color: var(--color-muted);
-		font-size: 1.4rem;
-		cursor: pointer;
-		padding: 0 4px;
-		line-height: 1;
-	}
-
-	.close-btn:hover {
-		color: var(--color-fg);
-	}
-
-	.map-viewport {
+.map-viewport {
 		flex: 1;
 		overflow: hidden;
 		cursor: grab;
