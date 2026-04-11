@@ -1375,7 +1375,7 @@ pub fn run() {
 
 /// Returns `(client, model_name, provider_name, base_url, api_key)`.
 fn build_client_from_env() -> (Option<OpenAiClient>, String, String, String, Option<String>) {
-    let provider = std::env::var("PARISH_PROVIDER").unwrap_or_else(|_| "ollama".to_string());
+    let provider = std::env::var("PARISH_PROVIDER").unwrap_or_else(|_| "simulator".to_string());
     let model = std::env::var("PARISH_MODEL").unwrap_or_default();
     let base_url = std::env::var("PARISH_BASE_URL").unwrap_or_else(|_| {
         Provider::from_str_loose(&provider)

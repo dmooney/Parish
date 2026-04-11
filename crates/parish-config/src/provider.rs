@@ -31,8 +31,7 @@ const DEFAULT_TOGETHER_URL: &str = "https://api.together.xyz";
 /// auto-start, GPU detection, and model pulling features.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Provider {
-    /// Local Ollama server with auto-management (default).
-    #[default]
+    /// Local Ollama server with auto-management.
     Ollama,
     /// Local LM Studio server.
     LmStudio,
@@ -57,7 +56,8 @@ pub enum Provider {
     /// Any OpenAI-compatible endpoint (requires base_url).
     Custom,
     /// Built-in offline simulator — generates funny nonsense locally,
-    /// no network, no model download. Intended for testing and development.
+    /// no network, no model download. Default when no provider is configured.
+    #[default]
     Simulator,
 }
 
@@ -771,8 +771,8 @@ mod tests {
 
         let cli = CliOverrides::default();
         let config = resolve_config(Some(Path::new("/nonexistent/parish.toml")), &cli).unwrap();
-        assert_eq!(config.provider, Provider::Ollama);
-        assert_eq!(config.base_url, "http://localhost:11434");
+        assert_eq!(config.provider, Provider::Simulator);
+        assert_eq!(config.base_url, "");
         assert!(config.api_key.is_none());
         assert!(config.model.is_none());
     }

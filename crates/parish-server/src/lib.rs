@@ -708,7 +708,7 @@ fn spawn_background_ticks(state: Arc<AppState>) {
 
 /// Builds the local LLM client and config from environment variables.
 fn build_client_and_config() -> (Option<OpenAiClient>, GameConfig) {
-    let provider = std::env::var("PARISH_PROVIDER").unwrap_or_else(|_| "ollama".to_string());
+    let provider = std::env::var("PARISH_PROVIDER").unwrap_or_else(|_| "simulator".to_string());
     let model = std::env::var("PARISH_MODEL").unwrap_or_default();
     let base_url = std::env::var("PARISH_BASE_URL").unwrap_or_else(|_| {
         parish_core::config::Provider::from_str_loose(&provider)
@@ -807,8 +807,8 @@ mod tests {
 
     #[test]
     fn build_client_and_config_defaults() {
-        // In test env, PARISH_PROVIDER is usually not set → defaults to "ollama"
+        // In test env, PARISH_PROVIDER is usually not set → defaults to "simulator"
         let (_client, config) = build_client_and_config();
-        assert_eq!(config.provider_name, "ollama");
+        assert_eq!(config.provider_name, "simulator");
     }
 }
