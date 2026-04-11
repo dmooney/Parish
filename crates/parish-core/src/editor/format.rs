@@ -5,21 +5,24 @@
 //! `git diff`. Any drift here silently corrupts source files over time.
 //!
 //! This module provides [`write_json_deterministic`], which formats JSON with
-//! a stable 2-space indent and atomically writes the result by staging to a
+//! a stable **4-space indent** (matching the on-disk convention in
+//! `mods/rundale/*.json`) and atomically writes the result by staging to a
 //! `.tmp` sibling file and renaming on success.
 
 use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
+use serde_json::ser::{PrettyFormatter, Serializer};
 
 use parish_types::ParishError;
 
 /// Writes a serializable value to `path` as pretty JSON, atomically.
 ///
-/// 1. Serializes `value` with `serde_json::to_string_pretty` (2-space indent).
-/// 2. Appends a trailing newline (matches the existing `mods/rundale/*.json`
-///    convention and keeps `git diff` happy).
+/// 1. Serializes `value` with a 4-space-indent `PrettyFormatter` (matches
+///    the on-disk `mods/rundale/*.json` convention).
+/// 2. Appends a trailing newline (matches the existing file convention and
+///    keeps `git diff` happy).
 /// 3. Writes to `<path>.tmp` first.
 /// 4. Renames `<path>.tmp` → `<path>` atomically.
 ///
@@ -27,7 +30,14 @@ use parish_types::ParishError;
 /// structs (not maps) where ordering matters, and prefer `BTreeMap` over
 /// `HashMap` for any map-typed fields.
 pub fn write_json_deterministic<T: Serialize>(path: &Path, value: &T) -> Result<(), ParishError> {
-    let mut body = serde_json::to_string_pretty(value).map_err(ParishError::Serialization)?;
+    let mut buf = Vec::with_capacity(4096);
+    let formatter = PrettyFormatter::with_indent(b"    ");
+    let mut ser = Serializer::with_formatter(&mut buf, formatter);
+    value
+        .serialize(&mut ser)
+        .map_err(ParishError::Serialization)?;
+    let mut body = String::from_utf8(buf)
+        .map_err(|e| ParishError::Config(format!("JSON output is not UTF-8: {}", e)))?;
     body.push('\n');
 
     let tmp_path = tmp_path_for(path);

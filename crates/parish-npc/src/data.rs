@@ -47,7 +47,6 @@ pub struct NpcFileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intelligence: Option<IntelligenceFileEntry>,
     pub home: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub workplace: Option<u32>,
     pub mood: String,
     /// Legacy flat schedule (backward compat).
