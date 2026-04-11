@@ -56,6 +56,9 @@ pub enum Provider {
     Together,
     /// Any OpenAI-compatible endpoint (requires base_url).
     Custom,
+    /// Built-in offline simulator — generates funny nonsense locally,
+    /// no network, no model download. Intended for testing and development.
+    Simulator,
 }
 
 impl Provider {
@@ -74,9 +77,10 @@ impl Provider {
             "deepseek" | "deep-seek" | "deep_seek" => Ok(Provider::DeepSeek),
             "together" | "togetherai" | "together-ai" | "together_ai" => Ok(Provider::Together),
             "custom" => Ok(Provider::Custom),
+            "simulator" | "sim" | "mock" => Ok(Provider::Simulator),
             other => Err(ParishError::Config(format!(
                 "unknown provider '{}'. Expected: ollama, lmstudio, openrouter, vllm, openai, \
-                 google, groq, xai, mistral, deepseek, together, custom",
+                 google, groq, xai, mistral, deepseek, together, custom, simulator",
                 other
             ))),
         }
@@ -97,6 +101,7 @@ impl Provider {
             Provider::DeepSeek => DEFAULT_DEEPSEEK_URL,
             Provider::Together => DEFAULT_TOGETHER_URL,
             Provider::Custom => "",
+            Provider::Simulator => "",
         }
     }
 
@@ -118,7 +123,7 @@ impl Provider {
     /// Whether this provider requires an explicit model name
     /// (no auto-detection available).
     pub fn requires_model(&self) -> bool {
-        !matches!(self, Provider::Ollama)
+        !matches!(self, Provider::Ollama | Provider::Simulator)
     }
 }
 

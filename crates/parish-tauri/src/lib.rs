@@ -19,7 +19,7 @@ use parish_core::debug_snapshot::{DebugEvent, InferenceDebug};
 use parish_core::game_mod::PronunciationEntry;
 use parish_core::inference::openai_client::OpenAiClient;
 use parish_core::inference::{
-    InferenceLog, InferenceQueue, new_inference_log, spawn_inference_worker,
+    AnyClient, InferenceLog, InferenceQueue, new_inference_log, spawn_inference_worker,
 };
 use parish_core::ipc::ConversationLine;
 use parish_core::npc::manager::NpcManager;
@@ -630,19 +630,33 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Initialise inference queue now that the tokio runtime is running
                 {
-                    let client_guard = state_setup.client.lock().await;
-                    if let Some(ref client) = *client_guard {
-                        let (interactive_tx, interactive_rx) = tokio::sync::mpsc::channel(16);
-                        let (background_tx, background_rx) = tokio::sync::mpsc::channel(32);
+                    let provider_name = {
+                        let config = state_setup.config.lock().await;
+                        config.provider_name.clone()
+                    };
+                    let any_client: Option<AnyClient> = if provider_name == "simulator" {
+                        Some(AnyClient::simulator())
+                    } else {
+                        let client_guard = state_setup.client.lock().await;
+                        client_guard
+                            .as_ref()
+                            .map(|c| AnyClient::open_ai(c.clone()))
+                    };
+                    if let Some(ac) = any_client {
+                        let (interactive_tx, interactive_rx) =
+                            tokio::sync::mpsc::channel(16);
+                        let (background_tx, background_rx) =
+                            tokio::sync::mpsc::channel(32);
                         let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(64);
                         let _worker = spawn_inference_worker(
-                            client.clone(),
+                            ac,
                             interactive_rx,
                             background_rx,
                             batch_rx,
                             state_setup.inference_log.clone(),
                         );
-                        let queue = InferenceQueue::new(interactive_tx, background_tx, batch_tx);
+                        let queue =
+                            InferenceQueue::new(interactive_tx, background_tx, batch_tx);
                         let mut iq = state_setup.inference_queue.lock().await;
                         *iq = Some(queue);
                     }

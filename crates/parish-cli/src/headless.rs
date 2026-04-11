@@ -7,7 +7,7 @@
 use crate::app::App;
 use crate::config::{CategoryConfig, CloudConfig, InferenceCategory, ProviderConfig};
 use crate::inference::openai_client::OpenAiClient;
-use crate::inference::{self, InferenceClients, InferenceQueue};
+use crate::inference::{self, AnyClient, InferenceClients, InferenceQueue};
 use crate::input::{Command, InputResult, classify_input, extract_mention, parse_intent};
 use crate::loading::LoadingAnimation;
 use crate::npc::manager::NpcManager;
@@ -59,8 +59,13 @@ pub async fn run_headless(
     let (background_tx, background_rx) = mpsc::channel(32);
     let (batch_tx, batch_rx) = mpsc::channel(64);
     let inference_log = inference::new_inference_log();
+    let worker_client = if provider_config.provider == parish_core::config::Provider::Simulator {
+        AnyClient::simulator()
+    } else {
+        AnyClient::open_ai(dial_client.clone())
+    };
     let _worker = inference::spawn_inference_worker(
-        dial_client.clone(),
+        worker_client,
         interactive_rx,
         background_rx,
         batch_rx,
@@ -195,9 +200,16 @@ pub async fn run_headless(
             InputResult::SystemCommand(cmd) => {
                 let (quit, rebuild) = handle_headless_command(&mut app, cmd).await;
                 if rebuild {
-                    // Rebuild dialogue queue: prefer cloud client, fall back to local
-                    let dial_client = app.cloud_client.clone().or_else(|| app.client.clone());
-                    if let Some(new_client) = dial_client {
+                    // Rebuild dialogue queue: simulator, cloud, or local client.
+                    let any = if app.provider_name == "simulator" {
+                        Some(AnyClient::simulator())
+                    } else {
+                        app.cloud_client
+                            .clone()
+                            .or_else(|| app.client.clone())
+                            .map(AnyClient::open_ai)
+                    };
+                    if let Some(new_client) = any {
                         let (interactive_tx, interactive_rx) = mpsc::channel(16);
                         let (background_tx, background_rx) = mpsc::channel(32);
                         let (batch_tx, batch_rx) = mpsc::channel(64);
@@ -527,7 +539,9 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
     for effect in &result.effects {
         match effect {
             CommandEffect::RebuildInference => {
-                app.client = Some(OpenAiClient::new(&app.base_url, app.api_key.as_deref()));
+                if app.provider_name != "simulator" {
+                    app.client = Some(OpenAiClient::new(&app.base_url, app.api_key.as_deref()));
+                }
                 rebuild = true;
             }
             CommandEffect::RebuildCloudClient => {
