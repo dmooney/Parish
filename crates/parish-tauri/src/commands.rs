@@ -33,6 +33,14 @@ use crate::{AppState, MapData, MapLocation, NpcInfo, SaveState, ThemePalette, Wo
 /// Monotonically increasing request ID counter for inference requests.
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Returns a formatted game-time string (`HH:MM YYYY-MM-DD`) snapshotted
+/// from the shared world clock. Used for debug event timestamps so the
+/// Events tab no longer renders blank times.
+async fn debug_event_timestamp(state: &Arc<AppState>) -> String {
+    let world = state.world.lock().await;
+    world.clock.now().format("%H:%M %Y-%m-%d").to_string()
+}
+
 // ── Helper: build a WorldSnapshot from locked world state ────────────────────
 
 /// Builds a [`WorldSnapshot`] from a locked world state reference.
@@ -163,6 +171,7 @@ pub async fn get_debug_snapshot(
     let world = state.world.lock().await;
     let npc_manager = state.npc_manager.lock().await;
     let events = state.debug_events.lock().await;
+    let game_events = state.game_events.lock().await;
     let config = state.config.lock().await;
 
     let call_log: Vec<parish_core::debug_snapshot::InferenceLogEntry> =
@@ -175,6 +184,7 @@ pub async fn get_debug_snapshot(
         cloud_provider: config.cloud_provider_name.clone(),
         cloud_model: config.cloud_model_name.clone(),
         has_queue: state.inference_queue.lock().await.is_some(),
+        reaction_req_id: parish_core::game_session::reaction_req_id_peek(),
         improv_enabled: config.improv_enabled,
         call_log,
     };
@@ -183,6 +193,7 @@ pub async fn get_debug_snapshot(
         &world,
         &npc_manager,
         &events,
+        &game_events,
         &inference,
     ))
 }
@@ -600,6 +611,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
 
     // Record tier transitions in the debug event log
     if !effects.tier_transitions.is_empty() {
+        let ts = debug_event_timestamp(&state).await;
         let mut debug_events = state.debug_events.lock().await;
         for tt in &effects.tier_transitions {
             if debug_events.len() >= crate::DEBUG_EVENT_CAPACITY {
@@ -607,7 +619,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
             }
             let direction = if tt.promoted { "promoted" } else { "demoted" };
             debug_events.push_back(DebugEvent {
-                timestamp: String::new(),
+                timestamp: ts.clone(),
                 category: "tier".to_string(),
                 message: format!(
                     "{} {} {:?} → {:?}",
@@ -716,12 +728,13 @@ async fn run_npc_turn(
         Ok(rx) => rx,
         Err(e) => {
             tracing::error!("Failed to submit inference request: {}", e);
+            let ts = debug_event_timestamp(state).await;
             let mut events = state.debug_events.lock().await;
             if events.len() >= crate::DEBUG_EVENT_CAPACITY {
                 events.pop_front();
             }
             events.push_back(DebugEvent {
-                timestamp: String::new(),
+                timestamp: ts,
                 category: "inference".to_string(),
                 message: format!("Queue submit failed: {e}"),
             });
@@ -762,12 +775,13 @@ async fn run_npc_turn(
 
     if let Some(ref err) = response.error {
         tracing::warn!("Inference error: {:?}", err);
+        let ts = debug_event_timestamp(state).await;
         let mut events = state.debug_events.lock().await;
         if events.len() >= crate::DEBUG_EVENT_CAPACITY {
             events.pop_front();
         }
         events.push_back(DebugEvent {
-            timestamp: String::new(),
+            timestamp: ts,
             category: "inference".to_string(),
             message: format!("Dialogue error: {err}"),
         });
