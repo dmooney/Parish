@@ -220,8 +220,8 @@ impl Default for NpcConfig {
             memory_capacity: 20,
             separator_holdback: 24,
             memory_context_count: 5,
-            memory_truncation_dialogue: 80,
-            memory_truncation_event_log: 60,
+            memory_truncation_dialogue: 250,
+            memory_truncation_event_log: 150,
             event_summary_truncation: 100,
             event_summary_debug_truncation: 50,
             cognitive_tiers: CognitiveTierConfig::default(),
@@ -247,10 +247,10 @@ fn default_memory_context_count() -> usize {
     5
 }
 fn default_memory_truncation_dialogue() -> usize {
-    80
+    250
 }
 fn default_memory_truncation_event_log() -> usize {
-    60
+    150
 }
 fn default_event_summary_truncation() -> usize {
     100

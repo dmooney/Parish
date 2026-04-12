@@ -135,6 +135,41 @@ impl ShortTermMemory {
         }
         lines.join("\n")
     }
+
+    /// Formats recent memories with friendly relative timestamps.
+    ///
+    /// Uses human-readable relative dates ("a few minutes ago", "yesterday",
+    /// etc.) instead of bare clock times. Returns an empty string if there
+    /// are no memories.
+    pub fn context_string_with_now(&self, n: usize, now: DateTime<Utc>) -> String {
+        let recent = self.recent(n);
+        if recent.is_empty() {
+            return String::new();
+        }
+
+        let mut lines = Vec::with_capacity(recent.len());
+        for entry in &recent {
+            let label = relative_time_label(entry.timestamp, now);
+            lines.push(format!("- [{}] {}", label, entry.content));
+        }
+        lines.join("\n")
+    }
+}
+
+/// Formats a game timestamp relative to `now` as a human-readable label.
+fn relative_time_label(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    use chrono::Timelike;
+    let diff = now.signed_duration_since(ts);
+    let mins = diff.num_minutes();
+    match mins {
+        m if m <= 0 => "just now".to_string(),
+        1..=59 => format!("{} min ago", mins),
+        60..=1439 => format!("{} hr ago", diff.num_hours()),
+        1440..=2879 => format!("yesterday, {:02}:{:02}", ts.hour(), ts.minute()),
+        2880..=20159 => format!("{} days ago", diff.num_days()),
+        20160..=86399 => format!("{} weeks ago", diff.num_weeks()),
+        _ => format!("{} months ago", diff.num_days() / 30),
+    }
 }
 
 impl Default for ShortTermMemory {
@@ -488,6 +523,96 @@ mod tests {
     fn test_memory_context_string_empty() {
         let mem = ShortTermMemory::new();
         assert_eq!(mem.context_string(5), "");
+    }
+
+    #[test]
+    fn test_context_string_with_now_empty() {
+        let mem = ShortTermMemory::new();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap();
+        assert_eq!(mem.context_string_with_now(5, now), "");
+    }
+
+    #[test]
+    fn test_context_string_with_now_just_now() {
+        let mut mem = ShortTermMemory::new();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap();
+        // Entry timestamped at the same time as "now"
+        mem.add(MemoryEntry {
+            timestamp: now,
+            content: "Said hello".to_string(),
+            participants: vec![],
+            location: LocationId(1),
+            kind: None,
+        });
+        let ctx = mem.context_string_with_now(5, now);
+        assert!(ctx.contains("[just now] Said hello"), "got: {ctx}");
+    }
+
+    #[test]
+    fn test_context_string_with_now_minutes_ago() {
+        let mut mem = ShortTermMemory::new();
+        let ts = Utc.with_ymd_and_hms(1820, 3, 20, 11, 45, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap(); // 15 min later
+        mem.add(MemoryEntry {
+            timestamp: ts,
+            content: "Bought bread".to_string(),
+            participants: vec![],
+            location: LocationId(1),
+            kind: None,
+        });
+        let ctx = mem.context_string_with_now(5, now);
+        assert!(ctx.contains("[15 min ago] Bought bread"), "got: {ctx}");
+    }
+
+    #[test]
+    fn test_context_string_with_now_hours_ago() {
+        let mut mem = ShortTermMemory::new();
+        let ts = Utc.with_ymd_and_hms(1820, 3, 20, 8, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap(); // 4 hr later
+        mem.add(MemoryEntry {
+            timestamp: ts,
+            content: "Opened the shop".to_string(),
+            participants: vec![],
+            location: LocationId(1),
+            kind: None,
+        });
+        let ctx = mem.context_string_with_now(5, now);
+        assert!(ctx.contains("[4 hr ago] Opened the shop"), "got: {ctx}");
+    }
+
+    #[test]
+    fn test_context_string_with_now_yesterday() {
+        let mut mem = ShortTermMemory::new();
+        let ts = Utc.with_ymd_and_hms(1820, 3, 19, 8, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap(); // 28 hr later
+        mem.add(MemoryEntry {
+            timestamp: ts,
+            content: "Met the priest".to_string(),
+            participants: vec![],
+            location: LocationId(1),
+            kind: None,
+        });
+        let ctx = mem.context_string_with_now(5, now);
+        assert!(
+            ctx.contains("[yesterday, 08:00] Met the priest"),
+            "got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn test_context_string_with_now_days_ago() {
+        let mut mem = ShortTermMemory::new();
+        let ts = Utc.with_ymd_and_hms(1820, 3, 15, 10, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(1820, 3, 20, 12, 0, 0).unwrap(); // 5 days later
+        mem.add(MemoryEntry {
+            timestamp: ts,
+            content: "Attended the fair".to_string(),
+            participants: vec![],
+            location: LocationId(1),
+            kind: None,
+        });
+        let ctx = mem.context_string_with_now(5, now);
+        assert!(ctx.contains("[5 days ago] Attended the fair"), "got: {ctx}");
     }
 
     #[test]

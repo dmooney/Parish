@@ -405,22 +405,40 @@ pub fn resolve_npc_targets(
     targets
 }
 
-fn append_transcript_context(context: &mut String, transcript: &[ConversationLine]) {
+fn append_transcript_context(
+    context: &mut String,
+    transcript: &[ConversationLine],
+    player_label: &str,
+    current_player_input: &str,
+) {
+    let current_trimmed = current_player_input.trim();
+    // Exclude the player's current message — it's already been pushed to the transcript
+    // before this call (commands.rs), but it will be rendered separately below as the
+    // triggering "just said" line. Showing it in both places creates duplication.
     let lines: Vec<&ConversationLine> = transcript
         .iter()
-        .filter(|line| !line.text.trim().is_empty())
+        .filter(|line| {
+            !(line.text.trim().is_empty()
+                || line.speaker == "You" && line.text.trim() == current_trimmed)
+        })
         .collect();
     if lines.is_empty() {
         return;
     }
 
     context.push_str("\n\nRecent conversation here:\n");
-    for line in lines {
-        context.push_str(&format!("- {}: {}\n", line.speaker, line.text.trim()));
+    for line in &lines {
+        // "You" in the transcript refers to the player (the caller's perspective),
+        // but from the NPC's perspective "You" = the NPC themselves. Remap it to
+        // the player's name so the NPC doesn't mistake the player's words for their own.
+        let speaker = if line.speaker == "You" {
+            player_label
+        } else {
+            line.speaker.as_str()
+        };
+        context.push_str(&format!("- {}: {}\n", speaker, line.text.trim()));
     }
-    context.push_str(
-        "\nRespond to the live exchange above. You may answer the player or another nearby NPC by name when it feels natural.\n",
-    );
+    // No CTA here — the caller appends the triggering "just said" line and CTA after.
 }
 
 /// Irish-themed canned messages shown when NPC inference fails.
@@ -461,8 +479,10 @@ pub fn mask_key(key: &str) -> String {
 /// Data needed to start an NPC conversation, returned by [`prepare_npc_conversation`].
 #[derive(Debug, Clone)]
 pub struct NpcConversationSetup {
-    /// Display name of the NPC (for UI labels).
+    /// Display name of the NPC (for UI labels — may be a brief description if not introduced).
     pub display_name: String,
+    /// Actual NPC name (always the real name, used for conversation log speaker_name).
+    pub npc_name: String,
     /// NPC's unique ID.
     pub npc_id: NpcId,
     /// The assembled system prompt for the LLM.
@@ -495,7 +515,26 @@ pub fn prepare_npc_conversation_turn(
         .all_npcs()
         .map(|n| (n.id, n.name.clone()))
         .collect();
-    let roster = npc_manager.known_roster(&npc);
+    // Determine if this NPC knows the player's name
+    let player_name_for_npc = if npc_manager.knows_player_name(speaker_id) {
+        world.player_name.as_deref()
+    } else {
+        None
+    };
+
+    // Build roster; if NPC knows the player, inject the player at the front
+    // so they appear in PEOPLE YOU KNOW with a clear "currently speaking with" note.
+    let mut roster = npc_manager.known_roster(&npc);
+    if let Some(pname) = player_name_for_npc {
+        roster.insert(
+            0,
+            (
+                NpcId(0),
+                pname.to_string(),
+                "newcomer to the parish".to_string(),
+            ),
+        );
+    }
     let system_prompt = ticks::build_enhanced_system_prompt_with_config(
         &npc,
         improv_enabled,
@@ -503,13 +542,6 @@ pub fn prepare_npc_conversation_turn(
         &npc_names,
         Some(&roster),
     );
-
-    // Determine if this NPC knows the player's name
-    let player_name_for_npc = if npc_manager.knows_player_name(speaker_id) {
-        world.player_name.as_deref()
-    } else {
-        None
-    };
 
     let mut context = ticks::build_enhanced_context_with_config(
         &npc,
@@ -520,7 +552,9 @@ pub fn prepare_npc_conversation_turn(
         &npc_names,
         player_name_for_npc,
     );
-    append_transcript_context(&mut context, transcript);
+    let player_label = player_name_for_npc.unwrap_or("The newcomer");
+    // Transcript history first (current player input excluded — shown separately below).
+    append_transcript_context(&mut context, transcript, player_label, player_input);
 
     // Check for anachronisms in player input and inject alert into context
     let anachronisms = anachronism::check_input(player_input);
@@ -528,11 +562,22 @@ pub fn prepare_npc_conversation_turn(
         context.push_str(&alert);
     }
 
+    // Current player input — comes after conversation history as the triggering line.
+    context.push_str("\n\n");
+    context.push_str(&parish_npc::build_named_action_line(
+        player_input,
+        player_name_for_npc,
+    ));
+    context.push_str(
+        "\n\nRespond to the live exchange above. You may answer the player or another nearby NPC by name when it feels natural.\n",
+    );
+
     // Mark NPC as introduced on first conversation
     npc_manager.mark_introduced(speaker_id);
 
     Some(NpcConversationSetup {
         display_name,
+        npc_name: npc.name.clone(),
         npc_id: speaker_id,
         system_prompt,
         context,

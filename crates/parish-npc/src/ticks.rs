@@ -87,11 +87,18 @@ pub fn build_enhanced_system_prompt_with_config(
     let mut prompt = build_tier1_system_prompt(npc, improv);
 
     // Add known NPC roster (relationships + memory + co-located NPCs)
+    // NpcId(0) is the player — shown first with a special "currently speaking with" note.
     if let Some(roster) = known_roster {
         if !roster.is_empty() {
             prompt.push_str("\n\nPEOPLE YOU KNOW:\n");
             for (target_id, name, occupation) in roster {
-                if let Some(rel) = npc.relationships.get(target_id) {
+                if *target_id == NpcId(0) {
+                    // The player — highlight them as the current interlocutor
+                    prompt.push_str(&format!(
+                        "- {}, {} \u{2014} this is the person you are currently speaking with\n",
+                        name, occupation
+                    ));
+                } else if let Some(rel) = npc.relationships.get(target_id) {
                     let strength_desc =
                         relationship_label_with_config(rel.strength, &config.relationship_labels);
                     prompt.push_str(&format!(
@@ -159,6 +166,12 @@ pub fn build_enhanced_context_with_config(
 ) -> String {
     let mut context = build_tier1_context(world);
 
+    // Clearly identify who the NPC is talking to
+    let interlocutor_label = player_name_for_npc.unwrap_or("A newcomer to the parish");
+    context.push_str(&format!(
+        "\n\nPERSON YOU ARE SPEAKING WITH:\n{interlocutor_label}.",
+    ));
+
     // Add other NPCs present with relationship context
     if !other_npcs.is_empty() {
         context.push_str("\n\nAlso present:");
@@ -180,9 +193,11 @@ pub fn build_enhanced_context_with_config(
     }
 
     // Add recent conversation history at this location
-    let conv_ctx = world
-        .conversation_log
-        .context_string(world.player_location, npc.id, 3);
+    let player_label = player_name_for_npc.unwrap_or("The newcomer");
+    let conv_ctx =
+        world
+            .conversation_log
+            .context_string(world.player_location, npc.id, player_label, 3);
     if !conv_ctx.is_empty() {
         context.push_str("\n\nWhat's been said here:\n");
         context.push_str(&conv_ctx);
@@ -193,10 +208,11 @@ pub fn build_enhanced_context_with_config(
         .conversation_log
         .has_recent_exchange_with(world.player_location, npc.id, 2)
     {
-        context.push_str(
-            "\n\nYou are already in conversation with this newcomer. \
-            Do not re-introduce yourself or greet them again.",
-        );
+        let name = player_name_for_npc.unwrap_or("this newcomer");
+        context.push_str(&format!(
+            "\n\nYou are already in conversation with {name}. \
+            Do not re-introduce yourself or greet them again."
+        ));
     }
 
     // Add recent player reactions (emoji feedback)
@@ -210,7 +226,7 @@ pub fn build_enhanced_context_with_config(
 
     // Add recent short-term memories unconditionally (ensures NPC doesn't
     // forget what just happened, even if keyword matching would miss it)
-    let stm_ctx = npc.memory.context_string(5);
+    let stm_ctx = npc.memory.context_string_with_now(5, world.clock.now());
     if !stm_ctx.is_empty() {
         context.push_str("\n\nRecent events you remember:\n");
         context.push_str(&stm_ctx);
@@ -245,10 +261,6 @@ pub fn build_enhanced_context_with_config(
         context.push_str(&gossip_ctx);
     }
 
-    // Player's current input last — everything above is context for this moment
-    context.push_str("\n\n");
-    context.push_str(&build_named_action_line(player_input, player_name_for_npc));
-
     context
 }
 
@@ -263,7 +275,7 @@ pub fn build_enhanced_context(
     other_npcs: &[&Npc],
     npc_names: &std::collections::HashMap<NpcId, String>,
 ) -> String {
-    build_enhanced_context_with_config(
+    let mut context = build_enhanced_context_with_config(
         npc,
         world,
         player_input,
@@ -271,7 +283,11 @@ pub fn build_enhanced_context(
         &NpcConfig::default(),
         npc_names,
         None,
-    )
+    );
+    // Player's current input last — everything above is context for this moment
+    context.push_str("\n\n");
+    context.push_str(&build_named_action_line(player_input, None));
+    context
 }
 
 /// Processes a Tier 1 NPC response using the given config, updating mood and recording a memory.
@@ -287,6 +303,7 @@ pub fn apply_tier1_response_with_config(
     player_input: &str,
     game_time: chrono::DateTime<Utc>,
     config: &NpcConfig,
+    player_name: Option<&str>,
 ) -> Vec<String> {
     let mut events = Vec::new();
 
@@ -299,9 +316,11 @@ pub fn apply_tier1_response_with_config(
         npc.mood = meta.mood.clone();
     }
 
-    // Record memory of the interaction
+    // Record memory of the interaction, using player's name if known
+    let speaker_label = player_name.unwrap_or("A newcomer");
     let content = format!(
-        "A newcomer said: '{}'. Responded: {}",
+        "{} said: '{}'. Responded: {}",
+        speaker_label,
         player_input,
         truncate_for_memory(&response.dialogue, config.memory_truncation_dialogue)
     );
@@ -315,7 +334,7 @@ pub fn apply_tier1_response_with_config(
         content,
         participants: vec![NpcId(0), npc.id], // NpcId(0) = player
         location: npc.location,
-        kind: Some(crate::npc::memory::MemoryKind::SpokeWithPlayer),
+        kind: Some(crate::memory::MemoryKind::SpokeWithPlayer),
     };
     if let Some(evicted) = npc.memory.add(mem_entry) {
         let npc_name = npc.name.clone();
@@ -345,6 +364,7 @@ pub fn apply_tier1_response(
         player_input,
         game_time,
         &NpcConfig::default(),
+        None,
     )
 }
 
@@ -383,7 +403,7 @@ pub fn record_witness_memories(
             content: content.clone(),
             participants: vec![NpcId(0), speaker_id, witness_id],
             location,
-            kind: Some(crate::npc::memory::MemoryKind::OverheardConversation),
+            kind: Some(crate::memory::MemoryKind::OverheardConversation),
         };
 
         if let Some(witness) = npcs.get_mut(&witness_id) {
@@ -547,7 +567,7 @@ pub fn apply_tier2_event_with_config(
                 content: memory_content.clone(),
                 participants: event.participants.clone(),
                 location: event.location,
-                kind: Some(crate::npc::memory::MemoryKind::SpokeWithNpc(participant_id)),
+                kind: Some(crate::memory::MemoryKind::SpokeWithNpc(participant_id)),
             };
             if let Some(evicted) = npc.memory.add(mem_entry) {
                 let npc_name = npc.name.clone();
@@ -1224,8 +1244,9 @@ mod tests {
             memory_truncation_event_log: 30,
             ..NpcConfig::default()
         };
-        let events =
-            apply_tier1_response_with_config(&mut npc, &response, "waves", game_time, &config);
+        let events = apply_tier1_response_with_config(
+            &mut npc, &response, "waves", game_time, &config, None,
+        );
 
         // The debug event log entry should be truncated to ~30 chars
         assert!(events.iter().any(|e| e.contains("remembers:")));

@@ -25,7 +25,7 @@ use parish_core::npc::NpcId;
 use parish_core::npc::manager::NpcManager;
 use parish_core::npc::parse_npc_stream_response;
 use parish_core::npc::reactions;
-use parish_core::npc::ticks::apply_tier1_response;
+use parish_core::npc::ticks::apply_tier1_response_with_config;
 use parish_core::world::{LocationId, WorldState};
 
 use parish_core::debug_snapshot::{self, DebugSnapshot, InferenceDebug};
@@ -694,8 +694,20 @@ async fn run_npc_turn(
         let world = state.world.lock().await;
         let game_time = world.clock.now();
         let mut npc_manager = state.npc_manager.lock().await;
+        let player_name = if npc_manager.knows_player_name(speaker_id) {
+            world.player_name.clone()
+        } else {
+            None
+        };
         if let Some(npc) = npc_manager.get_mut(speaker_id) {
-            let _ = apply_tier1_response(npc, &parsed, prompt_input, game_time);
+            let _ = apply_tier1_response_with_config(
+                npc,
+                &parsed,
+                prompt_input,
+                game_time,
+                &Default::default(),
+                player_name.as_deref(),
+            );
         }
     }
 

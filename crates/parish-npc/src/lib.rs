@@ -26,9 +26,11 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use chrono::{Datelike, Timelike};
 use memory::{LongTermMemory, ShortTermMemory};
 use parish_types::{DayType, LocationId, Season};
 use parish_world::WorldState;
+use parish_world::description::render_description;
 use reactions::ReactionLog;
 use transitions::NpcSummary;
 use types::{Intelligence, NpcState, Relationship, SeasonalSchedule};
@@ -468,7 +470,7 @@ struct ReferencePrePassResponse {
 /// Returns validated names (filtered against the roster). Used as the
 /// first pass of two-pass dialogue generation to prevent hallucinated names.
 pub async fn extract_intended_references(
-    client: &crate::inference::openai_client::OpenAiClient,
+    client: &parish_inference::openai_client::OpenAiClient,
     model: &str,
     npc_name: &str,
     player_input: &str,
@@ -500,7 +502,7 @@ pub async fn extract_intended_references(
             // Filter against roster to be safe
             resp.names
                 .into_iter()
-                .filter(|name| {
+                .filter(|name: &String| {
                     let lower = name.to_lowercase();
                     known_roster.iter().any(|(_, rn, _)| {
                         let rl = rn.to_lowercase();
@@ -532,26 +534,60 @@ pub fn format_reference_hint(validated_names: &[String]) -> String {
     }
 }
 
+/// Returns the full name of a calendar month (1–12).
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
+    }
+}
+
 /// Builds the Tier 1 context prompt for an NPC interaction.
 ///
-/// Includes the current location, time of day, weather, and season.
+/// Renders the location description template (substituting `{time}`,
+/// `{weather}`, and `{npcs_present}` placeholders) and includes the
+/// full game date and time so NPCs have precise temporal context.
 /// The player's action is intentionally omitted here so callers can
 /// append it at the end of the full context (after memory, history, etc.).
 pub fn build_tier1_context(world: &WorldState) -> String {
-    let location = world.current_location();
     let time_of_day = world.clock.time_of_day();
     let season = world.clock.season();
+    let now = world.clock.now();
+
+    // Render the location description with current time/weather substituted.
+    let rendered_desc = if let Some(loc_data) = world.current_location_data() {
+        render_description(loc_data, time_of_day, &world.weather.to_string(), &[])
+    } else {
+        world.current_location().description.clone()
+    };
+
+    let date_time_str = format!(
+        "{day_of_week} {day} {month} {year} | {hour:02}:{minute:02} | {season}",
+        day_of_week = now.format("%A"),
+        day = now.day(),
+        month = month_name(now.month()),
+        year = now.year(),
+        hour = now.hour(),
+        minute = now.minute(),
+        season = season,
+    );
 
     format!(
         "Your Location: {loc_name} — {loc_desc}\n\
-        Time: {time}\n\
-        Season: {season}\n\
-        Weather: {weather}",
-        loc_name = location.name,
-        loc_desc = location.description,
-        time = time_of_day,
-        season = season,
-        weather = world.weather,
+        Date and time: {date_time}",
+        loc_name = world.current_location().name,
+        loc_desc = rendered_desc,
+        date_time = date_time_str,
     )
 }
 
@@ -613,11 +649,16 @@ mod tests {
         let world = WorldState::new();
         let context = build_tier1_context(&world);
         assert!(context.contains("The Crossroads"));
-        assert!(context.contains("Morning"));
+        // Time of day is conveyed by the clock time (e.g. 08:00), not a separate label
         assert!(context.contains("Spring"));
-        assert!(context.contains("Clear"));
+        assert!(context.contains("1820"));
         assert!(context.contains("Your Location:"));
+        assert!(context.contains("Date and time:"));
         assert!(!context.contains("is here"));
+        // Weather is now embedded in the rendered description, not a standalone line
+        assert!(!context.contains("\nWeather:"));
+        assert!(!context.contains("\nTime:"));
+        assert!(!context.contains("\nSeason:"));
     }
 
     #[test]
