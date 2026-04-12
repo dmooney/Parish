@@ -375,8 +375,9 @@ impl NpcManager {
 
         tracing::debug!(
             player_location = player_location.0,
-            tier1 = self.tier1_npcs().len(),
-            tier2 = self.tier2_npcs().len(),
+            // Perf: use tier_count() to avoid allocating two Vecs just for .len().
+            tier1 = self.tier_count(CogTier::Tier1),
+            tier2 = self.tier_count(CogTier::Tier2),
             transitions = transitions.len(),
             "Tier assignment complete"
         );
@@ -387,6 +388,14 @@ impl NpcManager {
     /// Returns the current cognitive tier for an NPC.
     pub fn tier_of(&self, id: NpcId) -> Option<CogTier> {
         self.tier_assignments.get(&id).copied()
+    }
+
+    /// Counts NPCs assigned to the given tier without allocating a Vec.
+    pub fn tier_count(&self, tier: CogTier) -> usize {
+        self.tier_assignments
+            .values()
+            .filter(|t| **t == tier)
+            .count()
     }
 
     /// Returns the ids of all NPCs assigned to Tier 1.
@@ -509,16 +518,8 @@ impl NpcManager {
                                 .get(desired)
                                 .map(|d| d.name.clone())
                                 .unwrap_or_else(|| "?".to_string());
-                            events.push(ScheduleEvent {
-                                npc_id: id,
-                                npc_name: npc_name.clone(),
-                                kind: ScheduleEventKind::Departed {
-                                    from,
-                                    to: desired,
-                                    to_name: dest_name,
-                                    minutes: travel_minutes,
-                                },
-                            });
+                            // Perf: trace before push so npc_name can be moved
+                            // into the event, avoiding one String clone per departure.
                             tracing::debug!(
                                 npc = %npc_name,
                                 from = from.0,
@@ -526,6 +527,16 @@ impl NpcManager {
                                 minutes = travel_minutes,
                                 "NPC starting transit"
                             );
+                            events.push(ScheduleEvent {
+                                npc_id: id,
+                                npc_name,
+                                kind: ScheduleEventKind::Departed {
+                                    from,
+                                    to: desired,
+                                    to_name: dest_name,
+                                    minutes: travel_minutes,
+                                },
+                            });
                             let npc = self.npcs.get_mut(&id).unwrap();
                             npc.state = NpcState::InTransit {
                                 from,
@@ -543,19 +554,21 @@ impl NpcManager {
                             .get(destination)
                             .map(|d| d.name.clone())
                             .unwrap_or_else(|| "?".to_string());
-                        events.push(ScheduleEvent {
-                            npc_id: id,
-                            npc_name: npc_name.clone(),
-                            kind: ScheduleEventKind::Arrived {
-                                location: destination,
-                                location_name: dest_name,
-                            },
-                        });
+                        // Perf: trace before push so npc_name can be moved
+                        // into the event, avoiding one String clone per arrival.
                         tracing::debug!(
                             npc = %npc_name,
                             location = destination.0,
                             "NPC arrived"
                         );
+                        events.push(ScheduleEvent {
+                            npc_id: id,
+                            npc_name,
+                            kind: ScheduleEventKind::Arrived {
+                                location: destination,
+                                location_name: dest_name,
+                            },
+                        });
                         let Some(npc) = self.npcs.get_mut(&id) else {
                             continue;
                         };
