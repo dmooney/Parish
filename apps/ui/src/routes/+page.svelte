@@ -10,7 +10,7 @@
 	import DebugPanel from '../components/DebugPanel.svelte';
 	import SavePicker from '../components/SavePicker.svelte';
 
-	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen, focailOpen, addReaction, trimTextLog } from '../stores/game';
+	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen, focailOpen, addReaction, trimTextLog, messageHints } from '../stores/game';
 
 	/** Which mobile-only panel is open (if any). Desktop ignores this. */
 	let mobilePanel = $state<'none' | 'map' | 'sidebar'>('none');
@@ -287,7 +287,17 @@
 			});
 		}
 
-		function finishNpcStream(hints = []) {
+		function finishNpcStream(hints: LanguageHint[] = []) {
+			// Associate Irish hints with the last NPC message for inline highlighting
+			if (hints.length > 0) {
+				const log = get(textLog);
+				for (let i = log.length - 1; i >= 0; i--) {
+					if (log[i].id && log[i].source !== 'player' && log[i].source !== 'system') {
+						messageHints.update((m) => { m.set(log[i].id!, hints); return m; });
+						break;
+					}
+				}
+			}
 			languageHints.set(hints);
 			streamingActive.set(false);
 		}
@@ -394,7 +404,8 @@
 							id: payload.id,
 							source: payload.source,
 							content,
-							stream_turn_id: payload.stream_turn_id ?? undefined
+							stream_turn_id: payload.stream_turn_id ?? undefined,
+							...(payload.subtype ? { subtype: payload.subtype } : {})
 						}
 					])
 				);

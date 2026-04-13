@@ -16,7 +16,7 @@ use parish_core::inference::{InferenceQueue, spawn_inference_worker};
 use parish_core::input::{InputResult, classify_input, parse_intent};
 use parish_core::ipc::{
     ConversationLine, IDLE_MESSAGES, INFERENCE_FAILURE_MESSAGES, capitalize_first,
-    compute_name_hints, text_log, text_log_for_stream_turn,
+    compute_name_hints, text_log, text_log_for_stream_turn, text_log_typed,
 };
 use parish_core::npc::NpcId;
 use parish_core::npc::parse_npc_stream_response;
@@ -588,7 +588,11 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
 
     // Emit all player-visible messages in order
     for msg in &effects.messages {
-        let _ = app.emit(EVENT_TEXT_LOG, text_log(msg.source, &msg.text));
+        let payload = match msg.subtype {
+            Some(st) => text_log_typed(msg.source, &msg.text, st),
+            None => text_log(msg.source, &msg.text),
+        };
+        let _ = app.emit(EVENT_TEXT_LOG, payload);
     }
 
     // Emit NPC arrival reactions — upgrade to LLM text where available
