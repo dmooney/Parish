@@ -267,6 +267,9 @@ impl SimulatorClient {
     }
 
     /// Streams the response word-by-word through `token_tx`, then returns the full text.
+    ///
+    /// Adds per-token delays (~40 ms each) to mimic real LLM streaming so the
+    /// loading spinner has time to render and the streaming UI feels natural.
     pub async fn generate_stream(
         &self,
         _model: &str,
@@ -284,6 +287,8 @@ impl SimulatorClient {
             let chunk = format!("{} ", word);
             // Ignore send errors — receiver may have dropped
             let _ = token_tx.send(chunk);
+            // ~40ms per token ≈ 25 tok/s, similar to a fast local model.
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
         }
 
         Ok(text)
