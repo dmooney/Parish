@@ -72,7 +72,7 @@ fn tier2_event_seeds_gossip_and_propagates_to_colocated_npc() {
         let mut network = network.clone();
         let mut rng = StdRng::seed_from_u64(seed);
         let transmitted = propagate_gossip_at_location(&participants, &mut network, &mut rng);
-        if !transmitted.is_empty() {
+        if transmitted > 0 {
             // Bob's known_by set must now include the gossip item.
             let bob_gossip = network.known_by(bob);
             assert_eq!(
@@ -148,7 +148,7 @@ fn gossip_propagates_transitively_across_two_rounds() {
     for seed in 0..50 {
         let mut net = network.clone();
         let mut rng = StdRng::seed_from_u64(seed);
-        if !propagate_gossip_at_location(&alice_bob, &mut net, &mut rng).is_empty() {
+        if propagate_gossip_at_location(&alice_bob, &mut net, &mut rng) > 0 {
             network = net;
             break;
         }
@@ -167,7 +167,7 @@ fn gossip_propagates_transitively_across_two_rounds() {
     for seed in 0..50 {
         let mut net = network.clone();
         let mut rng = StdRng::seed_from_u64(seed);
-        if !propagate_gossip_at_location(&bob_carol, &mut net, &mut rng).is_empty() {
+        if propagate_gossip_at_location(&bob_carol, &mut net, &mut rng) > 0 {
             network = net;
             break;
         }

@@ -3,15 +3,19 @@
 //! Closes the "async LLM path for Tier 2 inference is unexercised" gap
 //! identified in the engine audit (Tier A.2). The inline unit tests only
 //! cover the solo-NPC template path (no HTTP) and the empty-group path.
-//! These tests spin up a wiremock server and drive the multi-NPC path
-//! through success, HTTP error, and malformed-JSON branches.
-
-use parish_npc::ticks::{NpcSnapshot, Tier2Group, run_tier2_for_group};
-use parish_types::{LocationId, NpcId};
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+//! These tests spin up a wiremock server, back an InferenceQueue worker
+//! with it, and drive the multi-NPC path through success, HTTP error,
+//! and malformed-JSON branches.
 
 use parish_inference::openai_client::OpenAiClient;
+use parish_inference::{
+    AnyClient, InferenceQueue, InferenceRequest, new_inference_log, spawn_inference_worker,
+};
+use parish_npc::ticks::{NpcSnapshot, Tier2Group, run_tier2_for_group};
+use parish_types::{LocationId, NpcId};
+use tokio::sync::mpsc;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn two_npc_group() -> Tier2Group {
     Tier2Group {
@@ -40,6 +44,22 @@ fn two_npc_group() -> Tier2Group {
     }
 }
 
+/// Build an InferenceQueue backed by a wiremock server and spawn a worker.
+fn spawn_mock_worker(server_uri: &str) -> InferenceQueue {
+    let client = OpenAiClient::new(server_uri, None);
+    let any_client = AnyClient::open_ai(client);
+    let log = new_inference_log();
+
+    let (itx, irx) = mpsc::channel::<InferenceRequest>(16);
+    let (btx, brx) = mpsc::channel::<InferenceRequest>(32);
+    let (batx, batrx) = mpsc::channel::<InferenceRequest>(64);
+    let queue = InferenceQueue::new(itx, btx, batx);
+
+    spawn_inference_worker(any_client, irx, brx, batrx, log);
+
+    queue
+}
+
 /// Mount a `/v1/chat/completions` response whose `content` field is a JSON
 /// string that will be deserialized into `Tier2Response`.
 async fn mount_tier2_response(server: &MockServer, content: &str) {
@@ -61,9 +81,9 @@ async fn tier2_multi_npc_success_returns_event() {
     )
     .await;
 
-    let client = OpenAiClient::new(&server.uri(), None);
+    let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&client, "test-model", &group, "Afternoon", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Afternoon", "Clear").await;
 
     let event = event.expect("multi-NPC group should return Some on successful LLM response");
     assert_eq!(event.location, LocationId(2));
@@ -82,9 +102,9 @@ async fn tier2_multi_npc_with_mood_and_relationship_changes() {
     )
     .await;
 
-    let client = OpenAiClient::new(&server.uri(), None);
+    let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&client, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
 
     let event = event.unwrap();
     assert_eq!(event.mood_changes.len(), 1);
@@ -101,9 +121,9 @@ async fn tier2_http_error_returns_none() {
         .mount(&server)
         .await;
 
-    let client = OpenAiClient::new(&server.uri(), None);
+    let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&client, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
 
     assert!(event.is_none(), "HTTP error must return None, not panic");
 }
@@ -113,9 +133,9 @@ async fn tier2_malformed_json_returns_none() {
     let server = MockServer::start().await;
     mount_tier2_response(&server, "this is not json at all").await;
 
-    let client = OpenAiClient::new(&server.uri(), None);
+    let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&client, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
 
     assert!(
         event.is_none(),
@@ -128,15 +148,13 @@ async fn tier2_empty_choices_returns_none() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "choices": []
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"choices": []})))
         .mount(&server)
         .await;
 
-    let client = OpenAiClient::new(&server.uri(), None);
+    let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&client, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
 
     assert!(
         event.is_none(),
@@ -147,12 +165,11 @@ async fn tier2_empty_choices_returns_none() {
 #[tokio::test]
 async fn tier2_missing_optional_fields_defaults_to_empty() {
     let server = MockServer::start().await;
-    // Only summary, no mood_changes or relationship_changes
     mount_tier2_response(&server, r#"{"summary":"They nod at each other."}"#).await;
 
-    let client = OpenAiClient::new(&server.uri(), None);
+    let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&client, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
 
     let event = event.expect("missing optional fields should still parse via serde defaults");
     assert_eq!(event.summary, "They nod at each other.");
