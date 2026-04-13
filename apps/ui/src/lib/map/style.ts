@@ -79,44 +79,46 @@ export function buildStyle(variant: MapVariant, theme: ThemeColors): StyleSpecif
 	}
 
 	// 2. Edges (graph connections with footprint-weighted width).
+	//
+	// Split into two layers — solid for normal edges, dashed for frontier —
+	// because MapLibre GL JS does not support data-driven expressions for
+	// `line-dasharray`. A single layer with `['case', ['get', 'frontier'], ...]`
+	// on `line-dasharray` causes silent style validation failure (the `load`
+	// event never fires, leaving the canvas blank).
+	// 2a. Solid edges (visited/known connections).
 	layers.push({
-		id: 'edges',
+		id: 'edges-solid',
 		type: 'line',
 		source: 'edges',
-		layout: {
-			'line-cap': 'round',
-			'line-join': 'round'
-		},
+		filter: ['!', ['get', 'frontier']],
+		layout: { 'line-cap': 'round', 'line-join': 'round' },
 		paint: {
-			'line-color': [
-				'case',
-				['get', 'frontier'],
-				theme.muted,
-				theme.border
-			],
-			'line-opacity': [
-				'case',
-				['get', 'frontier'],
-				0.4,
-				0.85
-			],
+			'line-color': theme.border,
+			'line-opacity': 0.85,
 			'line-width': [
-				'interpolate',
-				['linear'],
-				['zoom'],
-				// At low zoom, still visible
-				10,
-				['+', 1, ['*', ['get', 'traversalWeight'], 2]],
-				// At high zoom, footprints really thicken up
-				18,
-				['+', 2, ['*', ['get', 'traversalWeight'], 4]]
-			],
-			'line-dasharray': [
-				'case',
-				['get', 'frontier'],
-				['literal', [2, 1.5]],
-				['literal', [1, 0]]
+				'interpolate', ['linear'], ['zoom'],
+				10, ['+', 1, ['*', ['get', 'traversalWeight'], 2]],
+				18, ['+', 2, ['*', ['get', 'traversalWeight'], 4]]
 			]
+		}
+	});
+
+	// 2b. Dashed frontier edges (fog-of-war).
+	layers.push({
+		id: 'edges-frontier',
+		type: 'line',
+		source: 'edges',
+		filter: ['get', 'frontier'],
+		layout: { 'line-cap': 'round', 'line-join': 'round' },
+		paint: {
+			'line-color': theme.muted,
+			'line-opacity': 0.4,
+			'line-width': [
+				'interpolate', ['linear'], ['zoom'],
+				10, ['+', 1, ['*', ['get', 'traversalWeight'], 2]],
+				18, ['+', 2, ['*', ['get', 'traversalWeight'], 4]]
+			],
+			'line-dasharray': [2, 1.5]
 		}
 	});
 

@@ -215,28 +215,31 @@
 			</svg>
 		</button>
 	</div>
-	{#if $mapData}
-		<div class="map-wrap">
-			<div class="map-container" bind:this={container}></div>
-			{#if stubs.length > 0}
-				<svg
-					class="stub-overlay"
-					viewBox="0 0 {containerSize.width} {containerSize.height}"
-					width={containerSize.width}
-					height={containerSize.height}
-				>
-					{#each stubs as stub}
-						<line
-							x1={stub.x1}
-							y1={stub.y1}
-							x2={stub.x2}
-							y2={stub.y2}
-							class="continuation-stub"
-						/>
-					{/each}
-				</svg>
-			{/if}
-		</div>
+	<!-- map-wrap is always in the DOM so onMount can bind the container
+	     before mapData arrives. MapLibre needs a stable element to attach to. -->
+	<div class="map-wrap">
+		<div class="map-container" bind:this={container}></div>
+		{#if $mapData && stubs.length > 0}
+			<svg
+				class="stub-overlay"
+				viewBox="0 0 {containerSize.width} {containerSize.height}"
+				width={containerSize.width}
+				height={containerSize.height}
+			>
+				{#each stubs as stub}
+					<line
+						x1={stub.x1}
+						y1={stub.y1}
+						x2={stub.x2}
+						y2={stub.y2}
+						class="continuation-stub"
+					/>
+				{/each}
+			</svg>
+		{/if}
+		{#if !$mapData}
+			<div class="empty">Loading map&hellip;</div>
+		{/if}
 		{#if tooltip}
 			<div class="tooltip">
 				<div class="tooltip-name">{tooltip.name}</div>
@@ -252,9 +255,7 @@
 				{/if}
 			</div>
 		{/if}
-	{:else}
-		<div class="empty">Loading map&hellip;</div>
-	{/if}
+	</div>
 </div>
 
 <style>
@@ -351,10 +352,14 @@
 	}
 
 	.empty {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		color: var(--color-muted);
 		font-style: italic;
 		font-size: 0.85rem;
-		text-align: center;
-		padding: 2rem;
+		pointer-events: none;
 	}
 </style>
