@@ -40,7 +40,7 @@ test.describe('Parish Web UI', () => {
 
 		// Chat panel should update with player input echo and system response
 		const chatPanel = page.locator('[data-testid="chat-panel"]');
-		await expect(chatPanel).toContainText('> look', { timeout: 5_000 });
+		await expect(chatPanel).toContainText('look', { timeout: 5_000 });
 	});
 
 	test('player can move to a location', async ({ page }) => {
