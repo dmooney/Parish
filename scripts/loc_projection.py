@@ -31,14 +31,26 @@ ACTUAL = [
     ("2026-03-27",  4721),
     ("2026-03-28",  3787),
     ("2026-03-29", 11953),
-    ("2026-03-30", 17187),
-    ("2026-03-31", -5811),  # big dedup: src/ modules consolidated into parish-core
-    ("2026-04-01", -6500),  # continued refactor + slash commands, save picker
+    ("2026-03-30",  6031),
+    ("2026-03-31",  8101),
+    ("2026-04-01", -12310),  # src/ → parish-core dedup
+    ("2026-04-02",  2084),
+    ("2026-04-03",  9222),
+    ("2026-04-04",  2927),
+    ("2026-04-05",  6651),
+    ("2026-04-07", -4646),  # cleanup
+    ("2026-04-08",  3296),
+    ("2026-04-09",    10),
+    ("2026-04-10",  -758),
+    ("2026-04-11",   322),
+    ("2026-04-12",  5749),
+    ("2026-04-13",  3590),
+    ("2026-04-14",  3082),
 ]
 
 START_DATE = date(2026, 3, 18)
-CURRENT_LOC = 71848
-CURRENT_DAY = (date(2026, 4, 2) - START_DATE).days  # day 15
+CURRENT_LOC = 102482
+CURRENT_DAY = (date(2026, 4, 15) - START_DATE).days  # day 28
 
 MILESTONES = [100_000, 250_000, 500_000, 1_000_000]
 
@@ -89,7 +101,7 @@ for datestr, net in ACTUAL:
         print(f"  Day {day_num:2d} {DIM}{datestr}{RESET}  {MAGENTA}{b}{RESET} {net:>+7,d}  ({fmt_loc(cumulative)})")
 
 print(f"\n  {BOLD}Current: {CURRENT_LOC:,} LOC on day {CURRENT_DAY}{RESET}")
-print(f"  {BOLD}Commits: 155 across 15 days{RESET}")
+print(f"  {BOLD}Commits: 257 across 28 days{RESET}")
 
 
 # ── Projection scenarios ─────────────────────────────────────────
