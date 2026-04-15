@@ -61,7 +61,7 @@
 	<div class="debug-panel">
 		<div class="debug-header">
 			<span class="debug-title">Debug</span>
-			<button class="debug-close" on:click={() => debugVisible.set(false)}>X</button>
+			<button class="debug-close" onclick={() => debugVisible.set(false)}>X</button>
 		</div>
 
 		<div class="tab-bar">
@@ -69,7 +69,7 @@
 				<button
 					class="tab-btn"
 					class:active={tab === i}
-					on:click={() => selectTab(i)}
+					onclick={() => selectTab(i)}
 				>
 					{tabName}
 				</button>
@@ -178,7 +178,7 @@
 				<!-- NPCs -->
 				{#if selectedNpc}
 					<div class="npc-detail">
-						<button class="back-btn" on:click={deselectNpc}>Back to list</button>
+						<button class="back-btn" onclick={deselectNpc}>Back to list</button>
 						<h4 class="accent">{selectedNpc.name}</h4>
 
 						<div class="section">
@@ -316,7 +316,7 @@
 				{:else}
 					<div class="npc-list">
 						{#each snap.npcs as npc}
-							<button class="npc-row" on:click={() => selectNpc(npc.id)}>
+							<button class="npc-row" onclick={() => selectNpc(npc.id)}>
 								<span class="npc-name">{npc.name}</span>
 								<span class="npc-tier">[{npc.tier}]</span>
 								<span class="npc-mood">{npc.mood}</span>
@@ -455,7 +455,7 @@
 				{@const selectedEntry = snap.inference.call_log.find(e => e.request_id === selectedLogId) ?? null}
 				{#if selectedEntry}
 					<!-- Detail view: one long scrollable page -->
-					<button class="back-btn" on:click={deselectLog}>Back to list</button>
+					<button class="back-btn" onclick={deselectLog}>Back to list</button>
 					{@const npcLabel = npcLabelFromEntry(selectedEntry)}
 					<div class="log-detail-header">
 						<span class="muted">[{selectedEntry.timestamp}]</span>
@@ -499,7 +499,7 @@
 							<div class="field muted">Avg latency: {avgMs}ms | Errors: {errorCount}</div>
 							{#each [...snap.inference.call_log].reverse() as entry}
 								{@const npcLabel = npcLabelFromEntry(entry)}
-								<button class="log-row" class:log-row-error={entry.error} on:click={() => selectLog(entry.request_id)}>
+								<button class="log-row" class:log-row-error={entry.error} onclick={() => selectLog(entry.request_id)}>
 									<span class="muted">[{entry.timestamp}]</span>
 									<span class="log-id">#{entry.request_id}</span>
 									{#if npcLabel}<span class="log-npc accent">{npcLabel}</span>{:else}<span class="log-model">{entry.model}</span>{/if}
