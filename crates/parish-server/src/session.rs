@@ -92,9 +92,14 @@ impl SessionRegistry {
                 provider         TEXT NOT NULL,
                 provider_user_id TEXT NOT NULL,
                 session_id       TEXT NOT NULL,
+                display_name     TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (provider, provider_user_id)
             );",
         )?;
+        // Idempotent migration: add display_name to existing DBs that predate this column.
+        let _ = conn.execute_batch(
+            "ALTER TABLE oauth_accounts ADD COLUMN display_name TEXT NOT NULL DEFAULT ''",
+        );
         Ok(Self {
             sessions: DashMap::new(),
             db: std::sync::Mutex::new(conn),
@@ -153,13 +158,19 @@ impl SessionRegistry {
         .ok()
     }
 
-    /// Associates an OAuth identity with a session_id.
-    pub fn link_oauth(&self, provider: &str, provider_user_id: &str, session_id: &str) {
+    /// Associates an OAuth identity with a session_id, storing the user's display name.
+    pub fn link_oauth(
+        &self,
+        provider: &str,
+        provider_user_id: &str,
+        session_id: &str,
+        display_name: &str,
+    ) {
         let db = self.db.lock().unwrap();
         let _ = db.execute(
             "INSERT OR REPLACE INTO oauth_accounts
-             (provider, provider_user_id, session_id) VALUES (?1, ?2, ?3)",
-            rusqlite::params![provider, provider_user_id, session_id],
+             (provider, provider_user_id, session_id, display_name) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![provider, provider_user_id, session_id, display_name],
         );
     }
 
@@ -173,17 +184,17 @@ impl SessionRegistry {
         self.sessions.insert(session_id, entry);
     }
 
-    /// Returns the Google `sub` linked to `session_id`, if any.
+    /// Returns the Google `(sub, display_name)` linked to `session_id`, if any.
     ///
     /// Used by `GET /api/auth/status` to check whether the session has a
-    /// linked Google account.
-    pub fn google_account_for_session(&self, session_id: &str) -> Option<String> {
+    /// linked Google account and what name to display.
+    pub fn google_account_for_session(&self, session_id: &str) -> Option<(String, String)> {
         let db = self.db.lock().unwrap();
         db.query_row(
-            "SELECT provider_user_id FROM oauth_accounts \
+            "SELECT provider_user_id, display_name FROM oauth_accounts \
              WHERE session_id = ?1 AND provider = 'google'",
             rusqlite::params![session_id],
-            |row: &rusqlite::Row<'_>| row.get::<_, String>(0),
+            |row: &rusqlite::Row<'_>| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .ok()
     }

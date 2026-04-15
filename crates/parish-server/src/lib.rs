@@ -246,7 +246,8 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     if oauth_enabled {
         app = app
             .route("/auth/login/google", get(auth::login_google))
-            .route("/auth/callback/google", get(auth::callback_google));
+            .route("/auth/callback/google", get(auth::callback_google))
+            .route("/auth/logout", get(auth::logout));
     }
 
     let app = app

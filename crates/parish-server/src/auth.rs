@@ -126,7 +126,7 @@ pub async fn callback_google(
     };
 
     // Fetch user info.
-    let (provider_user_id, _display_name) = match fetch_user_info(&access_token).await {
+    let (provider_user_id, display_name) = match fetch_user_info(&access_token).await {
         Ok(u) => u,
         Err(e) => {
             tracing::warn!("Userinfo fetch failed: {}", e);
@@ -155,8 +155,8 @@ pub async fn callback_google(
         };
         global
             .sessions
-            .link_oauth("google", &provider_user_id, &sid);
-        tracing::info!(session_id = %sid, google_id = %provider_user_id, "Google account linked");
+            .link_oauth("google", &provider_user_id, &sid, &display_name);
+        tracing::info!(session_id = %sid, google_id = %provider_user_id, name = %display_name, "Google account linked");
         sid
     };
 
@@ -177,6 +177,26 @@ pub async fn callback_google(
     }
     if let Ok(v) = HeaderValue::from_str(&clear_state_cookie) {
         response.headers_mut().append(header::SET_COOKIE, v);
+    }
+    response
+}
+
+/// `GET /auth/logout` — ends the current Google session.
+///
+/// Creates a fresh anonymous session and issues a new cookie so the browser
+/// starts clean.  The old session (and its saves) remain intact: the user can
+/// recover it by logging in again with the same Google account.
+pub async fn logout(State(global): State<Arc<GlobalState>>) -> Response {
+    let (new_session_id, _, _) = get_or_create_session(&global, None).await;
+    global.sessions.persist_new(&new_session_id);
+
+    let cookie = format!(
+        "{}={}; HttpOnly; SameSite=Lax; Max-Age=31536000; Path=/",
+        SESSION_COOKIE, new_session_id
+    );
+    let mut response = Redirect::to("/").into_response();
+    if let Ok(v) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().insert(header::SET_COOKIE, v);
     }
     response
 }
@@ -269,16 +289,12 @@ async fn fetch_user_info(access_token: &str) -> Result<(String, String), String>
 
 /// Looks up the Google account linked to `session_id`.
 ///
-/// Returns `(provider_user_id, display_name)` if found.  The Google `sub`
-/// doubles as the display name since we don't persist the user's name.
+/// Returns `(provider_user_id, display_name)` if found.
 fn find_oauth_account_for_session(
     global: &GlobalState,
     session_id: &str,
 ) -> Option<(String, String)> {
-    global
-        .sessions
-        .google_account_for_session(session_id)
-        .map(|uid| (uid.clone(), uid))
+    global.sessions.google_account_for_session(session_id)
 }
 
 /// Reads a named cookie value from a `HeaderMap`.
