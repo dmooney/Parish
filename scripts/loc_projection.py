@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Parish LOC Growth Projector
-============================
+Rundale LOC Growth Projector
+=============================
 Uses actual daily net-LOC data from git history, fits a growth model
 with diminishing returns, and projects milestones.
+
+Excludes markdown (.md) files — code-only count.
 
 Model: daily output follows a learning curve that ramps up then
 gradually declines as the codebase matures and more time goes to
@@ -17,39 +19,39 @@ Cumulative LOC is the running integral of that.
 import math
 from datetime import date, timedelta
 
-# --- Actual data from git log --all ---
+# --- Actual data from git log --all, code files only (excludes .md) ---
 ACTUAL = [
-    ("2026-03-18",  8535),
-    ("2026-03-19",  2318),
-    ("2026-03-20",  2780),
-    ("2026-03-21", 11189),
-    ("2026-03-22", 10285),
-    ("2026-03-23",  3948),
-    ("2026-03-24", 26486),
-    ("2026-03-25", 37168),
-    ("2026-03-26", -31472),  # big refactor day
-    ("2026-03-27",  4721),
-    ("2026-03-28",  3787),
-    ("2026-03-29", 11953),
-    ("2026-03-30",  6031),
-    ("2026-03-31",  8101),
-    ("2026-04-01", -12310),  # src/ → parish-core dedup
-    ("2026-04-02",  2084),
-    ("2026-04-03",  9222),
-    ("2026-04-04",  2927),
-    ("2026-04-05",  6651),
-    ("2026-04-07", -4646),  # cleanup
-    ("2026-04-08",  3296),
+    ("2026-03-18",  2409),
+    ("2026-03-19",  2117),
+    ("2026-03-20",  2711),
+    ("2026-03-21", 10550),
+    ("2026-03-22",  3912),
+    ("2026-03-23",  2879),
+    ("2026-03-24", 24458),
+    ("2026-03-25",  3422),
+    ("2026-03-26",  1684),
+    ("2026-03-27",  3728),
+    ("2026-03-28",  2610),
+    ("2026-03-29", 11215),
+    ("2026-03-30",  5456),
+    ("2026-03-31",  4585),
+    ("2026-04-01", -12549),  # src/ → parish-core dedup
+    ("2026-04-02",   881),
+    ("2026-04-03",  9050),
+    ("2026-04-04",  2889),
+    ("2026-04-05",  6478),
+    ("2026-04-07", -4662),  # cleanup
+    ("2026-04-08",  2677),
     ("2026-04-09",    10),
-    ("2026-04-10",  -758),
+    ("2026-04-10",  -683),
     ("2026-04-11",   322),
-    ("2026-04-12",  5749),
-    ("2026-04-13",  3590),
-    ("2026-04-14",  3082),
+    ("2026-04-12",  5524),
+    ("2026-04-13",  3499),
+    ("2026-04-14",  2273),
 ]
 
 START_DATE = date(2026, 3, 18)
-CURRENT_LOC = 102482
+CURRENT_LOC = 82536
 CURRENT_DAY = (date(2026, 4, 15) - START_DATE).days  # day 28
 
 MILESTONES = [100_000, 250_000, 500_000, 1_000_000]
@@ -84,8 +86,8 @@ def bar(value, max_val, width=40):
 
 # ── Historical summary ───────────────────────────────────────────
 
-print(f"\n{BOLD}Parish LOC Growth Projection{RESET}")
-print(f"{'=' * 50}")
+print(f"\n{BOLD}Rundale LOC Growth Projection{RESET} {DIM}(code only, no markdown){RESET}")
+print(f"{'=' * 55}")
 print(f"\n{CYAN}Historical daily net LOC:{RESET}\n")
 
 max_abs = max(abs(d[1]) for d in ACTUAL)
@@ -160,9 +162,9 @@ scenarios = [
      scenario_mature),
 ]
 
-print(f"\n{BOLD}{'─' * 50}")
+print(f"\n{BOLD}{'─' * 55}")
 print(f"Projection Scenarios{RESET}")
-print(f"{'─' * 50}\n")
+print(f"{'─' * 55}\n")
 
 for name, desc, fn in scenarios:
     results = project(name, fn)
@@ -183,13 +185,15 @@ total_days = CURRENT_DAY
 avg_all = CURRENT_LOC / total_days
 lines_per_hour = avg_all / 16
 
-print(f"{BOLD}{'─' * 50}")
+print(f"{BOLD}{'─' * 55}")
 print(f"Fun Stats{RESET}")
-print(f"{'─' * 50}\n")
+print(f"{'─' * 55}\n")
 print(f"  Average net output:    {BOLD}{avg_all:,.0f}{RESET} LOC/day")
 print(f"  That's roughly:        {BOLD}{lines_per_hour:,.0f}{RESET} LOC/hour")
 print(f"  Or:                    {BOLD}{lines_per_hour/60:,.1f}{RESET} LOC/minute")
-print(f"  Peak single day:       {BOLD}{max(n for _,n in ACTUAL):,}{RESET} LOC (Mar 25)")
-print(f"  Biggest refactor:      {BOLD}{min(n for _,n in ACTUAL):,}{RESET} LOC (Mar 26)")
+peak_day = max(ACTUAL, key=lambda x: x[1])
+min_day = min(ACTUAL, key=lambda x: x[1])
+print(f"  Peak single day:       {BOLD}+{peak_day[1]:,}{RESET} LOC ({peak_day[0]})")
+print(f"  Biggest refactor:      {BOLD}{min_day[1]:,}{RESET} LOC ({min_day[0]})")
 print(f"  Days to write a novel: {DIM}(~80k words){RESET} {BOLD}{80000/avg_all:.1f}{RESET} days at this pace")
 print()
