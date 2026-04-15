@@ -113,6 +113,8 @@ pub enum Command {
     Tick,
     /// Show or change the UI theme.
     Theme(Option<String>),
+    /// Show or change the map tile source.
+    Tiles(Option<String>),
     /// Invalid branch name was provided.
     InvalidBranchName(String),
     /// Feature flag management (`/flag enable|disable|list <name>`).
@@ -307,6 +309,19 @@ pub fn parse_system_command(input: &str) -> Option<Command> {
             Some(Command::Theme(None))
         } else {
             Some(Command::Theme(Some(arg)))
+        }
+    } else if lower == "/tiles" {
+        Some(Command::Tiles(None))
+    } else if lower.starts_with("/tiles ") {
+        let arg = trimmed
+            .get("/tiles ".len()..)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if arg.is_empty() {
+            Some(Command::Tiles(None))
+        } else {
+            Some(Command::Tiles(Some(arg)))
         }
     } else if let Some(cmd) = parse_category_command(trimmed, &lower) {
         Some(cmd)
@@ -1381,6 +1396,27 @@ mod tests {
         assert_eq!(
             parse_system_command("/THEME Solarized Dark"),
             Some(Command::Theme(Some("Solarized Dark".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_parse_tiles_command() {
+        assert_eq!(parse_system_command("/tiles"), Some(Command::Tiles(None)));
+        assert_eq!(
+            parse_system_command("/tiles   "),
+            Some(Command::Tiles(None))
+        );
+        assert_eq!(
+            parse_system_command("/tiles osm"),
+            Some(Command::Tiles(Some("osm".to_string())))
+        );
+        assert_eq!(
+            parse_system_command("/tiles tailte-historic-6inch"),
+            Some(Command::Tiles(Some("tailte-historic-6inch".to_string())))
+        );
+        assert_eq!(
+            parse_system_command("/TILES OSM"),
+            Some(Command::Tiles(Some("OSM".to_string())))
         );
     }
 

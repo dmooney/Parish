@@ -357,6 +357,11 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
                     &serde_json::json!({ "name": name, "mode": mode }),
                 );
             }
+            CommandEffect::ApplyTiles(id) => {
+                state
+                    .event_bus
+                    .emit("tiles-switch", &serde_json::json!({ "id": id }));
+            }
         }
     }
 
@@ -1818,6 +1823,8 @@ mod tests {
             hints_label: "test".to_string(),
             default_accent: "#000".to_string(),
             splash_text: String::new(),
+            active_tile_source: String::new(),
+            tile_sources: Vec::new(),
         };
         let theme_palette = parish_core::game_mod::default_theme_palette();
         let saves_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../saves");
@@ -1844,6 +1851,8 @@ mod tests {
                 category_base_url: [None, None, None, None],
                 flags: parish_core::config::FeatureFlags::default(),
                 category_rate_limit: [None, None, None, None],
+                active_tile_source: String::new(),
+                tile_sources: Vec::new(),
             },
             None,
             transport,

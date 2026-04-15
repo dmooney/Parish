@@ -17,6 +17,7 @@
 	import { debugVisible, debugSnapshot } from '../stores/debug';
 	import { savePickerVisible } from '../stores/save';
 	import { palette } from '../stores/theme';
+	import { tiles } from '../stores/tiles';
 	import { startTravel } from '../stores/travel';
 	import {
 		getWorldSnapshot,
@@ -33,6 +34,7 @@
 		onLoading,
 		onThemeUpdate,
 		onThemeSwitch,
+		onTilesSwitch,
 		onDebugUpdate,
 		onSavePicker,
 		onToggleFullMap,
@@ -202,6 +204,7 @@
 		try {
 			const cfg = await getUiConfig();
 			uiConfig.set(cfg);
+			tiles.initFromUiConfig(cfg);
 			if (cfg.splash_text) {
 				textLog.update((log) => [
 					{ source: 'system', content: cfg.splash_text },
@@ -465,6 +468,10 @@
 					name: p.name as 'default' | 'solarized',
 					mode: p.mode as 'light' | 'dark' | 'auto' | ''
 				});
+			}));
+
+			listeners.push(await onTilesSwitch((p) => {
+				tiles.setActiveId(p.id);
 			}));
 
 			listeners.push(await onDebugUpdate((snap) => {

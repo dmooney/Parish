@@ -561,6 +561,9 @@ impl GameTestHarness {
                 CommandEffect::ApplyTheme(..) => {
                     // No visual theme in test harness; response text is returned below.
                 }
+                CommandEffect::ApplyTiles(..) => {
+                    // No map in test harness; response text is returned below.
+                }
             }
         }
 

@@ -443,6 +443,12 @@ async fn handle_system_command(
                     serde_json::json!({ "name": name, "mode": mode }),
                 );
             }
+            CommandEffect::ApplyTiles(id) => {
+                let _ = app.emit(
+                    crate::events::EVENT_TILES_SWITCH,
+                    serde_json::json!({ "id": id }),
+                );
+            }
         }
     }
 

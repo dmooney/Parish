@@ -31,6 +31,8 @@ pub const EVENT_NPC_REACTION: &str = "npc-reaction";
 pub const EVENT_TRAVEL_START: &str = "travel-start";
 /// Event emitted when a `/theme` command selects a new UI theme.
 pub const EVENT_THEME_SWITCH: &str = "theme-switch";
+/// Event emitted when a `/tiles` command selects a new map tile source.
+pub const EVENT_TILES_SWITCH: &str = "tiles-switch";
 
 /// How many milliseconds to batch streaming tokens before emitting.
 pub const BATCH_MS: u64 = 16;

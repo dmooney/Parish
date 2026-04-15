@@ -123,6 +123,7 @@ The map could be more than navigation:
 | ~~**Phase B**~~ | ~~Fog of war / progressive disclosure (#4) + hover tooltips (#5)~~ | **Done** |
 | ~~**Phase C**~~ | ~~Animated travel (#7) + time-of-day atmosphere (#6)~~ | **Done** |
 | ~~**Phase D (map)**~~ | ~~OSM tile background for full map (#9), migrated to MapLibre GL JS for polished label placement (variable anchors, zoom-aware decluttering, symbol-sort priority)~~ | **Done** |
+| ~~**Phase D.1 (tiles)**~~ | ~~`/tiles` slash command + configurable tile-source registry (OSM + Tailte Éireann Historic 6" 1829–1842), gated behind `period-map-tiles` feature flag~~ | **Done** |
 | **Phase D (TUI)** | TUI ASCII map (#8) | Medium |
 | **Phase E** | Narrative annotations (#10) + NPC trails | Large |
 
@@ -133,6 +134,41 @@ The map could be more than navigation:
 - Should fog of war persist across save/load? (Probably yes — it's part of game state.)
 - How does the `/map` overlay interact with the input field? Does it capture keyboard focus?
 - Do we want the minimap in the TUI as well, or only GUI mode?
+
+## Phase D.1 — Period tiles (configurable tile-source registry)
+
+The OSM background shipped in Phase D is anachronistic for Rundale's 1820
+setting — it renders modern motorways, housing estates, wind farms, etc.
+Phase D.1 adds a **registry of named tile sources** data-driven from
+`parish.toml`'s `[engine.map]` section and a `/tiles <id>` slash command
+to switch between them at runtime.
+
+Two sources ship baked-in:
+
+- **`osm`** — the current OSM raster (working default).
+- **`tailte-historic-6inch`** — Tailte Éireann's Historic 6" first-edition
+  series (surveyed 1829–1842), the most period-accurate cartography for
+  Kiltoom. Its `url` ships empty because MapGenie is gated behind the
+  National Mapping Agreement and GeoHive's free public viewer doesn't
+  publish its tile endpoint — operators paste a URL into `parish.toml`
+  after capturing it from the viewer's browser DevTools. An empty URL
+  falls back to the flat panel background with a one-shot console warning
+  instead of a broken map.
+
+Adding further sources (custom sepia-styled tiles, scanned grand-jury
+maps georeferenced via MapWarper, etc.) is a pure TOML add; no code
+changes needed.
+
+The feature is gated behind the **`period-map-tiles`** flag
+(default-enabled, per CLAUDE.md rule #6). Kill-switch:
+`/flag disable period-map-tiles`.
+
+**Scope limits (defer to later phases):**
+- Only XYZ raster URL templates (`{z}/{x}/{y}.png`, optional TMS y-flip)
+  — no WMS/WMTS adapters yet.
+- No custom MapLibre style (still the Phase D sepia-via-desaturation look).
+- No offline tile bundling — still on-demand fetch.
+- Minimap stays flat-bg only.
 
 ## Related
 

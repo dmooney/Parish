@@ -726,6 +726,9 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
             CommandEffect::ApplyTheme(..) => {
                 // No visual theme in headless mode; response text is printed below.
             }
+            CommandEffect::ApplyTiles(..) => {
+                // No map in headless mode; response text is printed below.
+            }
         }
     }
 

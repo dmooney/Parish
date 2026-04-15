@@ -89,3 +89,50 @@ fuzzy_threshold = 0.82          # Jaro-Winkler similarity for fuzzy location mat
 
 [engine.persistence]
 journal_compaction_threshold = 1000  # Max journal entries before compaction (reserved)
+
+# ---------------------------------------------------------------------------
+# Map tile sources
+# ---------------------------------------------------------------------------
+# The full-map overlay fetches raster tiles from whichever entry below is
+# selected at runtime via `/tiles <id>` (see /help). The OSM default is
+# anachronistic for Rundale's 1820 setting; see docs/design/map-evolution.md
+# for the Phase D.1 motivation.
+#
+# Baked-in defaults (no config needed): `osm` and `tailte-historic-6inch`.
+# Overriding any entry replaces it; entries you don't list stay intact —
+# see MapConfig::apply_defaults in crates/parish-config/src/engine.rs.
+#
+# [engine.map]
+# default_tile_source = "osm"
+#
+# [engine.map.tile_sources.osm]
+# label = "OpenStreetMap"
+# url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+# tile_size = 256
+# minzoom = 0
+# maxzoom = 19
+# attribution = "© OpenStreetMap contributors"
+# raster_saturation = -0.4         # -1.0 fully grey, 0.0 untouched, 1.0 saturated
+# raster_opacity = 0.85
+# tms = false                      # true flips y-axis (ArcGIS-style services)
+#
+# [engine.map.tile_sources.tailte-historic-6inch]
+# # Tailte Éireann Historic 6" — surveyed 1829–1842, period-appropriate for
+# # 1820 Roscommon. The URL below ships empty because:
+# #   - MapGenie (https://tailte.ie/services/mapgenie/) requires a National
+# #     Mapping Agreement subscription and publishes no public tile URLs.
+# #   - GeoHive (https://map.geohive.ie/) is the free public viewer for the
+# #     same historic layers but doesn't document its tile endpoint — capture
+# #     it from the browser DevTools Network tab while panning the historic
+# #     layer in the viewer.
+# # Verify the captured URL has `Access-Control-Allow-Origin: *` in its
+# # response headers (or add a proxy) before committing to shared config.
+# label = 'Tailte Éireann Historic 6"'
+# url = ""                         # e.g. "https://<host>/.../MapServer/tile/{z}/{y}/{x}"
+# tile_size = 256
+# minzoom = 0
+# maxzoom = 17
+# attribution = 'Tailte Éireann, Historic 6" First Edition (1829–1842)'
+# raster_saturation = 0.0
+# raster_opacity = 1.0
+# tms = true                       # ArcGIS MapServer tile/{z}/{y}/{x} needs y-flip
