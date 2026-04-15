@@ -136,11 +136,21 @@ pub async fn callback_google(
 
     // Determine which session to use.
     let current_session_id = cookie_value(&headers, SESSION_COOKIE);
+    tracing::info!(
+        current_session_id = ?current_session_id,
+        provider_user_id = %provider_user_id,
+        display_name = %display_name,
+        "OAuth callback: resolving target session"
+    );
 
     let target_session_id = if let Some(existing) =
         global.sessions.find_by_oauth("google", &provider_user_id)
     {
         // A session is already linked to this Google account — use it.
+        tracing::info!(
+            existing_session_id = %existing,
+            "OAuth callback: found existing session linked to this Google account"
+        );
         existing
     } else {
         // Link the current anonymous session to this Google account.
@@ -148,6 +158,7 @@ pub async fn callback_google(
             Some(id) if global.sessions.exists_in_db(id) => id.to_string(),
             _ => {
                 // No current session — create a fresh one.
+                tracing::info!("OAuth callback: no valid current session, creating a new one");
                 let (new_id, _, _) = get_or_create_session(&global, None).await;
                 global.sessions.persist_new(&new_id);
                 new_id
@@ -159,6 +170,11 @@ pub async fn callback_google(
         tracing::info!(session_id = %sid, google_id = %provider_user_id, name = %display_name, "Google account linked");
         sid
     };
+
+    tracing::info!(
+        target_session_id = %target_session_id,
+        "OAuth callback: setting parish_sid cookie and redirecting to /"
+    );
 
     // Build the response: set the parish_sid cookie to the target session,
     // clear the CSRF state cookie, and redirect to the game.
@@ -211,6 +227,7 @@ pub async fn get_auth_status(
     let session_id = match cookie_value(&headers, SESSION_COOKIE) {
         Some(id) => id,
         None => {
+            tracing::debug!("auth/status: no parish_sid cookie, anonymous");
             return Json(AuthStatus {
                 oauth_enabled,
                 logged_in: false,
@@ -222,6 +239,11 @@ pub async fn get_auth_status(
 
     // Check whether this session has a linked OAuth account.
     let linked = find_oauth_account_for_session(&global, &session_id);
+    tracing::debug!(
+        session_id = %session_id,
+        linked = linked.is_some(),
+        "auth/status resolved"
+    );
 
     Json(AuthStatus {
         oauth_enabled,

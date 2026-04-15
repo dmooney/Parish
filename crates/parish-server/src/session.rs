@@ -130,20 +130,24 @@ impl SessionRegistry {
     pub fn persist_new(&self, session_id: &str) {
         let now = Self::now_iso();
         let db = self.db.lock().unwrap();
-        let _ = db.execute(
+        if let Err(e) = db.execute(
             "INSERT OR IGNORE INTO sessions (id, created_at, last_active) VALUES (?1, ?2, ?2)",
             rusqlite::params![session_id, now],
-        );
+        ) {
+            tracing::warn!(session_id = %session_id, error = %e, "persist_new failed");
+        }
     }
 
     /// Updates the `last_active` timestamp for a session in sessions.db.
     pub fn update_last_active(&self, session_id: &str) {
         let now = Self::now_iso();
         let db = self.db.lock().unwrap();
-        let _ = db.execute(
+        if let Err(e) = db.execute(
             "UPDATE sessions SET last_active = ?1 WHERE id = ?2",
             rusqlite::params![now, session_id],
-        );
+        ) {
+            tracing::warn!(session_id = %session_id, error = %e, "update_last_active failed");
+        }
     }
 
     /// Returns the session_id linked to an OAuth identity, if any.
@@ -167,11 +171,27 @@ impl SessionRegistry {
         display_name: &str,
     ) {
         let db = self.db.lock().unwrap();
-        let _ = db.execute(
+        match db.execute(
             "INSERT OR REPLACE INTO oauth_accounts
              (provider, provider_user_id, session_id, display_name) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![provider, provider_user_id, session_id, display_name],
-        );
+        ) {
+            Ok(rows) => tracing::info!(
+                provider = %provider,
+                provider_user_id = %provider_user_id,
+                session_id = %session_id,
+                display_name = %display_name,
+                rows = rows,
+                "link_oauth stored account"
+            ),
+            Err(e) => tracing::error!(
+                provider = %provider,
+                provider_user_id = %provider_user_id,
+                session_id = %session_id,
+                error = %e,
+                "link_oauth DB write failed"
+            ),
+        }
     }
 
     /// Returns a session from the in-memory map.
@@ -591,4 +611,88 @@ fn build_session_cloud_client(global: &GlobalState) -> Option<OpenAiClient> {
             Some(key),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that a fresh DB round-trips the Google OAuth link:
+    /// after `link_oauth`, both `find_by_oauth` and
+    /// `google_account_for_session` return the stored values.
+    ///
+    /// This is the exact flow the callback + status endpoint use, so if
+    /// this test passes but the UI shows the user as signed out, the bug
+    /// is elsewhere (cookies, middleware, frontend).
+    #[test]
+    fn oauth_link_round_trips_on_fresh_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = SessionRegistry::open(tmp.path()).unwrap();
+        reg.persist_new("sess_abc");
+        reg.link_oauth("google", "sub_123", "sess_abc", "John Doe");
+
+        assert_eq!(
+            reg.find_by_oauth("google", "sub_123"),
+            Some("sess_abc".to_string()),
+            "find_by_oauth should return the linked session_id"
+        );
+        assert_eq!(
+            reg.google_account_for_session("sess_abc"),
+            Some(("sub_123".to_string(), "John Doe".to_string())),
+            "google_account_for_session should return (sub, display_name)"
+        );
+    }
+
+    /// Verifies the migration from a pre-display_name schema to the
+    /// current schema: opening a DB that was created with the old schema
+    /// should add the `display_name` column, and subsequent link_oauth
+    /// + google_account_for_session calls should work end-to-end.
+    #[test]
+    fn oauth_link_round_trips_on_migrated_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sessions.db");
+
+        // Simulate an existing DB created with the pre-display_name schema.
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    last_active TEXT NOT NULL
+                );
+                CREATE TABLE oauth_accounts (
+                    provider         TEXT NOT NULL,
+                    provider_user_id TEXT NOT NULL,
+                    session_id       TEXT NOT NULL,
+                    PRIMARY KEY (provider, provider_user_id)
+                );",
+            )
+            .unwrap();
+            // Insert a row that predates the display_name column.
+            conn.execute(
+                "INSERT INTO oauth_accounts (provider, provider_user_id, session_id) \
+                 VALUES ('google', 'legacy_sub', 'legacy_sess')",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Re-open through SessionRegistry — this should ADD COLUMN display_name.
+        let reg = SessionRegistry::open(tmp.path()).unwrap();
+
+        // Legacy row has empty display_name (default).
+        assert_eq!(
+            reg.google_account_for_session("legacy_sess"),
+            Some(("legacy_sub".to_string(), String::new())),
+        );
+
+        // New link writes the display_name column correctly.
+        reg.persist_new("sess_new");
+        reg.link_oauth("google", "sub_new", "sess_new", "Jane Doe");
+        assert_eq!(
+            reg.google_account_for_session("sess_new"),
+            Some(("sub_new".to_string(), "Jane Doe".to_string())),
+        );
+    }
 }
