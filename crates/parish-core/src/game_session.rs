@@ -662,7 +662,10 @@ mod tests {
         world.player_location = loc_with_npc;
         let log_len_before = world.text_log.len();
 
-        let config = ReactionConfig::default();
+        // Force base_chance = 1.0 so every present NPC reacts regardless of
+        // dice rolls; the test is about the pipeline, not the probability model.
+        let mut config = ReactionConfig::default();
+        config.base_chance = 1.0;
         let reactions = apply_arrival_reactions(&mut world, &mut mgr, &templates, &config);
 
         assert!(
