@@ -327,10 +327,10 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .and_then(|cookies| {
             for pair in cookies.split(';') {
                 let pair = pair.trim();
-                if let Some(rest) = pair.strip_prefix(name) {
-                    if let Some(rest) = rest.strip_prefix('=') {
-                        return Some(rest.trim().to_string());
-                    }
+                if let Some(rest) = pair.strip_prefix(name)
+                    && let Some(rest) = rest.strip_prefix('=')
+                {
+                    return Some(rest.trim().to_string());
                 }
             }
             None
