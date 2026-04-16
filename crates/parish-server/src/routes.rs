@@ -2336,7 +2336,7 @@ pub(crate) mod tests {
             file_path: "../../etc/passwd".to_string(),
             branch_id: 1,
         };
-        let result = load_branch(State(state), Json(body)).await;
+        let result = load_branch(Extension(state), Json(body)).await;
         assert!(result.is_err());
         let (status, _msg) = result.unwrap_err();
         assert_eq!(status, StatusCode::BAD_REQUEST);

@@ -437,8 +437,9 @@ async fn init_inference_queue(app_state: &Arc<AppState>, client: &OpenAiClient) 
     let (interactive_tx, interactive_rx) = tokio::sync::mpsc::channel(16);
     let (background_tx, background_rx) = tokio::sync::mpsc::channel(32);
     let (batch_tx, batch_rx) = tokio::sync::mpsc::channel(64);
+    use parish_core::inference::AnyClient;
     let _worker = spawn_inference_worker(
-        client.clone(),
+        AnyClient::open_ai(client.clone()),
         interactive_rx,
         background_rx,
         batch_rx,
