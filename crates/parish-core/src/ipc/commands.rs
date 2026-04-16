@@ -408,29 +408,29 @@ pub fn handle_command(
         Command::Quit => CommandResult::effect_only(CommandEffect::Quit),
         Command::Help => CommandResult::text(
             [
-                "A few things ye might say:",
-                "  /help              — Show this help",
-                "  /about             — About this game",
-                "  /status            — Where am I?",
-                "  /time              — Time, weather, and season details",
-                "  /npcs              — Who is nearby?",
-                "  /wait [minutes]    — Wait in place (default: 15 min)",
-                "  /pause             — Hold time still",
-                "  /resume            — Let time flow again",
-                "  /speed [slow|normal|fast|fastest|ludicrous]  — Show or change game speed",
-                "  /irish             — Toggle Irish pronunciation sidebar",
-                "  /improv            — Toggle improv craft mode",
-                "  /map [id]          — List or switch map tile sources",
-                "  /designer          — Open the Parish Designer",
-                "  /flag list                  — List all feature flags",
-                "  /flag enable <name>         — Enable a feature flag",
-                "  /flag disable <name>        — Disable a feature flag",
-                "  /save              — Save the game",
-                "  /fork <name>       — Fork a new branch from here",
-                "  /load <name>       — Load a named branch",
-                "  /branches          — List save branches",
-                "  /log               — Show branch history",
-                "  /new-game          — Start a fresh game",
+                "Available commands:",
+                "  /about                                             — About this game",
+                "  /branches                                          — List save branches",
+                "  /designer                                          — Open the Parish Designer",
+                "  /flag disable <name>                               — Disable a feature flag",
+                "  /flag enable <name>                                — Enable a feature flag",
+                "  /flag list                                         — List all feature flags",
+                "  /fork <name>                                       — Fork a new branch from here",
+                "  /help                                              — Show this help",
+                "  /improv                                            — Toggle improv craft mode",
+                "  /irish                                             — Toggle Irish pronunciation sidebar",
+                "  /load <name>                                       — Load a named branch",
+                "  /log                                               — Show branch history",
+                "  /map [id]                                          — List or switch map tile sources",
+                "  /new-game                                          — Start a fresh game",
+                "  /npcs                                              — Who is nearby?",
+                "  /pause                                             — Hold time still",
+                "  /resume                                            — Let time flow again",
+                "  /save                                              — Save the game",
+                "  /speed [slow|normal|fast|fastest|ludicrous]       — Show or change game speed",
+                "  /status                                            — Where am I?",
+                "  /time                                              — Time, weather, and season details",
+                "  /wait [minutes]                                    — Wait in place (default: 15 min)",
             ]
             .join("\n"),
         ),
@@ -743,6 +743,20 @@ mod tests {
         assert!(result.response.contains("/help"));
         assert!(result.response.contains("/save"));
         assert!(result.response.contains("/pause"));
+        let about_pos = result
+            .response
+            .find("/about")
+            .expect("help text should include /about");
+        let help_pos = result
+            .response
+            .find("/help")
+            .expect("help text should include /help");
+        let time_pos = result
+            .response
+            .find("/time")
+            .expect("help text should include /time");
+        assert!(about_pos < help_pos);
+        assert!(help_pos < time_pos);
         assert!(result.effects.is_empty());
     }
 
