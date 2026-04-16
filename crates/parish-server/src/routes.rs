@@ -275,9 +275,6 @@ async fn handle_system_command(cmd: parish_core::input::Command, state: &Arc<App
                     ),
                 );
             }
-            CommandEffect::ToggleMap => {
-                state.event_bus.emit("toggle-full-map", &());
-            }
             CommandEffect::SaveGame => {
                 let msg = match do_save_game_inner(state).await {
                     Ok(msg) => msg,

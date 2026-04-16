@@ -26,8 +26,6 @@ pub enum CommandEffect {
     Quit,
     /// The inference pipeline needs to be rebuilt (provider/key changed).
     RebuildInference,
-    /// Toggle the full map overlay (GUI) or show text map (CLI).
-    ToggleMap,
     /// Save the game.
     SaveGame,
     /// Fork a new timeline branch with the given name.
@@ -52,7 +50,7 @@ pub enum CommandEffect {
     /// Carries (theme_name, mode) where mode is "light", "dark", "auto", or "".
     ApplyTheme(String, String),
     /// Switch the full-map base tile source. Carries the source id
-    /// (e.g. "osm", "historic-6inch") — frontend looks up URL etc.
+    /// (e.g. "osm", "historic") — frontend looks up URL etc.
     /// from the tile registry it received via `UiConfigSnapshot`.
     ApplyTiles(String),
 }
@@ -418,8 +416,7 @@ pub fn handle_command(
                 "  /speed [slow|normal|fast|fastest|ludicrous]  — Show or change game speed",
                 "  /irish             — Toggle Irish pronunciation sidebar",
                 "  /improv            — Toggle improv craft mode",
-                "  /map               — Toggle the full map",
-                "  /tiles [id]        — List or switch map tile sources",
+                "  /map [id]          — List or switch map tile sources",
                 "  /flag list                  — List all feature flags",
                 "  /flag enable <name>         — Enable a feature flag",
                 "  /flag disable <name>        — Disable a feature flag",
@@ -437,11 +434,10 @@ pub fn handle_command(
         Command::Load(name) => CommandResult::effect_only(CommandEffect::LoadBranch(name)),
         Command::Branches => CommandResult::effect_only(CommandEffect::ListBranches),
         Command::Log => CommandResult::effect_only(CommandEffect::ShowLog),
-        Command::Map => CommandResult::effect_only(CommandEffect::ToggleMap),
+        Command::Map(arg) => handle_map_command(config, arg),
         Command::Debug(sub) => CommandResult::effect_only(CommandEffect::Debug(sub)),
         Command::Spinner(secs) => CommandResult::effect_only(CommandEffect::ShowSpinner(secs)),
         Command::NewGame => CommandResult::effect_only(CommandEffect::NewGame),
-        Command::Tiles(arg) => handle_tiles_command(config, arg),
         Command::Theme(arg) => match arg.as_deref().map(str::trim) {
             None | Some("") => CommandResult::text(
                 "Available themes: default, solarized\n\
@@ -489,12 +485,12 @@ pub fn handle_command(
     }
 }
 
-/// Handles the `/tiles` command (list / switch map tile sources).
+/// Handles the `/map` command (list / switch map tile sources).
 ///
 /// Gated by the `period-map-tiles` feature flag (default-enabled per
 /// CLAUDE.md rule #6). Uses `is_disabled` semantics so the feature ships
 /// on without needing to seed the flags file.
-fn handle_tiles_command(config: &mut GameConfig, arg: Option<String>) -> CommandResult {
+fn handle_map_command(config: &mut GameConfig, arg: Option<String>) -> CommandResult {
     if config.flags.is_disabled("period-map-tiles") {
         return CommandResult::text(
             "Period map tiles are disabled. Re-enable with /flag enable period-map-tiles.",
@@ -504,7 +500,7 @@ fn handle_tiles_command(config: &mut GameConfig, arg: Option<String>) -> Command
     let arg = arg.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     // Compare case-insensitively: TOML keys are canonical lowercase, but
-    // the parser preserves case from the user input (`/tiles OSM`).
+    // the parser preserves case from the user input (`/map OSM`).
     let lookup_id = |needle: &str| -> Option<(String, String)> {
         let needle_lower = needle.to_lowercase();
         config
@@ -533,7 +529,7 @@ fn handle_tiles_command(config: &mut GameConfig, arg: Option<String>) -> Command
                 };
                 lines.push(format!("  {} {}{} — {}", marker, id, active_tag, label));
             }
-            lines.push("Usage: /tiles <id>".to_string());
+            lines.push("Usage: /map <id>".to_string());
             CommandResult::text(lines.join("\n"))
         }
         Some(needle) => match lookup_id(needle) {
@@ -1139,13 +1135,6 @@ mod tests {
     }
 
     #[test]
-    fn map_returns_toggle_effect() {
-        let (mut world, mut npc, mut config) = default_state();
-        let result = handle_command(Command::Map, &mut world, &mut npc, &mut config);
-        assert!(result.effects.contains(&CommandEffect::ToggleMap));
-    }
-
-    #[test]
     fn new_game_returns_effect() {
         let (mut world, mut npc, mut config) = default_state();
         let result = handle_command(Command::NewGame, &mut world, &mut npc, &mut config);
@@ -1278,62 +1267,62 @@ mod tests {
         assert!(result.response.contains("No one"));
     }
 
-    // ── /tiles command ─────────────────────────────────────────────────────
+    // ── /map command ───────────────────────────────────────────────────────
 
     fn seed_tile_sources(config: &mut GameConfig) {
         config.tile_sources = vec![
             ("osm".to_string(), "OpenStreetMap".to_string()),
             (
-                "historic-6inch".to_string(),
-                "Ireland Historic 6\" (via NLS)".to_string(),
+                "historic".to_string(),
+                "Historic 6\" OS Ireland (1st ed., via NLS)".to_string(),
             ),
         ];
         config.active_tile_source = "osm".to_string();
     }
 
     #[test]
-    fn tiles_list_when_no_arg() {
+    fn map_list_when_no_arg() {
         let (mut world, mut npc, mut config) = default_state();
         seed_tile_sources(&mut config);
-        let result = handle_command(Command::Tiles(None), &mut world, &mut npc, &mut config);
+        let result = handle_command(Command::Map(None), &mut world, &mut npc, &mut config);
         assert!(result.response.contains("osm"));
-        assert!(result.response.contains("historic-6inch"));
+        assert!(result.response.contains("historic"));
         assert!(result.response.contains("(active)"));
         assert!(result.effects.is_empty());
     }
 
     #[test]
-    fn tiles_list_empty_registry() {
+    fn map_list_empty_registry() {
         let (mut world, mut npc, mut config) = default_state();
-        let result = handle_command(Command::Tiles(None), &mut world, &mut npc, &mut config);
+        let result = handle_command(Command::Map(None), &mut world, &mut npc, &mut config);
         assert!(result.response.contains("No tile sources configured"));
         assert!(result.effects.is_empty());
     }
 
     #[test]
-    fn tiles_switch_sets_config_and_emits_effect() {
+    fn map_switch_sets_config_and_emits_effect() {
         let (mut world, mut npc, mut config) = default_state();
         seed_tile_sources(&mut config);
         let result = handle_command(
-            Command::Tiles(Some("historic-6inch".to_string())),
+            Command::Map(Some("historic".to_string())),
             &mut world,
             &mut npc,
             &mut config,
         );
-        assert_eq!(config.active_tile_source, "historic-6inch");
+        assert_eq!(config.active_tile_source, "historic");
         assert!(result.response.contains("Switched"));
         assert_eq!(
             result.effects,
-            vec![CommandEffect::ApplyTiles("historic-6inch".to_string())]
+            vec![CommandEffect::ApplyTiles("historic".to_string())]
         );
     }
 
     #[test]
-    fn tiles_switch_is_case_insensitive() {
+    fn map_switch_is_case_insensitive() {
         let (mut world, mut npc, mut config) = default_state();
         seed_tile_sources(&mut config);
         let result = handle_command(
-            Command::Tiles(Some("OSM".to_string())),
+            Command::Map(Some("OSM".to_string())),
             &mut world,
             &mut npc,
             &mut config,
@@ -1346,11 +1335,11 @@ mod tests {
     }
 
     #[test]
-    fn tiles_unknown_id_returns_error_text() {
+    fn map_unknown_id_returns_error_text() {
         let (mut world, mut npc, mut config) = default_state();
         seed_tile_sources(&mut config);
         let result = handle_command(
-            Command::Tiles(Some("made-up".to_string())),
+            Command::Map(Some("made-up".to_string())),
             &mut world,
             &mut npc,
             &mut config,
@@ -1363,12 +1352,12 @@ mod tests {
     }
 
     #[test]
-    fn tiles_disabled_flag_returns_refusal() {
+    fn map_disabled_flag_returns_refusal() {
         let (mut world, mut npc, mut config) = default_state();
         seed_tile_sources(&mut config);
         config.flags.disable("period-map-tiles");
         let result = handle_command(
-            Command::Tiles(Some("historic-6inch".to_string())),
+            Command::Map(Some("historic".to_string())),
             &mut world,
             &mut npc,
             &mut config,
@@ -1379,9 +1368,9 @@ mod tests {
     }
 
     #[test]
-    fn tiles_help_lists_command() {
+    fn map_help_lists_command() {
         let (mut world, mut npc, mut config) = default_state();
         let result = handle_command(Command::Help, &mut world, &mut npc, &mut config);
-        assert!(result.response.contains("/tiles"));
+        assert!(result.response.contains("/map"));
     }
 }

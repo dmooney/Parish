@@ -37,7 +37,6 @@
 		onTilesSwitch,
 		onDebugUpdate,
 		onSavePicker,
-		onToggleFullMap,
 		onNpcReaction,
 		onTravelStart,
 		submitInput
@@ -476,10 +475,6 @@
 
 			listeners.push(await onDebugUpdate((snap) => {
 				debugSnapshot.set(snap);
-			}));
-
-			listeners.push(await onToggleFullMap(() => {
-				fullMapOpen.update((v) => !v);
 			}));
 
 			listeners.push(await onTravelStart((payload) => {

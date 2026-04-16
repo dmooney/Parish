@@ -19,7 +19,7 @@ function osm(): TileSource {
 
 function historic(): TileSource {
 	return {
-		id: 'historic-6inch',
+		id: 'historic',
 		label: 'Historic 6"',
 		url: 'https://mapseries-tilesets.s3.amazonaws.com/ireland_6inch/{z}/{x}/{y}.jpg',
 		tile_size: 256,
@@ -65,8 +65,8 @@ describe('tiles store', () => {
 	it('setActiveId switches the active source', async () => {
 		const { tiles } = await freshStore();
 		tiles.initFromUiConfig(cfg('osm'));
-		tiles.setActiveId('historic-6inch');
-		expect(get(tiles).activeId).toBe('historic-6inch');
+		tiles.setActiveId('historic');
+		expect(get(tiles).activeId).toBe('historic');
 	});
 
 	it('setActiveId ignores unknown ids', async () => {
@@ -79,15 +79,15 @@ describe('tiles store', () => {
 	it('setActiveId persists choice to localStorage', async () => {
 		const { tiles } = await freshStore();
 		tiles.initFromUiConfig(cfg('osm'));
-		tiles.setActiveId('historic-6inch');
-		expect(localStorage.getItem('parish.tile-source')).toBe('historic-6inch');
+		tiles.setActiveId('historic');
+		expect(localStorage.getItem('parish.tile-source')).toBe('historic');
 	});
 
 	it('initFromUiConfig prefers localStorage over backend default', async () => {
-		localStorage.setItem('parish.tile-source', 'historic-6inch');
+		localStorage.setItem('parish.tile-source', 'historic');
 		const { tiles } = await freshStore();
 		tiles.initFromUiConfig(cfg('osm'));
-		expect(get(tiles).activeId).toBe('historic-6inch');
+		expect(get(tiles).activeId).toBe('historic');
 	});
 
 	it('initFromUiConfig falls back to backend default when localStorage has unknown id', async () => {

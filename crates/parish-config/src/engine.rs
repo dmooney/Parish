@@ -755,7 +755,7 @@ fn default_journal_compaction_threshold() -> usize {
 /// Map tile source registry and active default.
 ///
 /// A registry of named raster-tile sources (XYZ templates) that the frontend
-/// can switch between at runtime via the `/tiles` slash command. Users can
+/// can switch between at runtime via the `/map` slash command. Users can
 /// override the baked-in defaults by adding `[engine.map.tile_sources.<id>]`
 /// blocks in `parish.toml`.
 ///
@@ -815,22 +815,27 @@ fn default_tile_sources() -> BTreeMap<String, TileSourceConfig> {
         },
     );
     m.insert(
-        "historic-6inch".to_string(),
+        "historic".to_string(),
         TileSourceConfig {
-            label: "Ireland Historic 6\" (via NLS)".to_string(),
-            // Ordnance Survey of Ireland First Edition 6-inch (1829–1842),
-            // reprojected and hosted by the National Library of Scotland.
-            // Free, public, CORS-open (S3). See:
-            //   https://maps.nls.uk/geo/explore/
-            // For alternative (gated) access via Tailte Éireann MapGenie,
-            // see https://tailte.ie/services/mapgenie/.
-            url: "https://mapseries-tilesets.s3.amazonaws.com/ireland_6inch/{z}/{x}/{y}.jpg"
+            label: "Historic 6\" OS Ireland (1st ed., via NLS)".to_string(),
+            // Ordnance Survey of Ireland First Edition 6-inch (surveyed 1829–1842),
+            // scanned and hosted by the National Library of Scotland. NLS serves
+            // Ireland as 32 separate per-county tilesets under `os/<county>1/`
+            // — there is no seamless all-Ireland layer. Rundale is set in
+            // County Roscommon, so we wire the Roscommon 1st-edition sheet;
+            // expanding to whole-island coverage will require a multi-source
+            // style (see issue #360).
+            //
+            // Terms: CC-BY-SA 3.0 per https://maps.nls.uk/copyright.html.
+            // Free, public, CORS-open (S3).
+            url: "https://mapseries-tilesets.s3.amazonaws.com/os/roscommon1/{z}/{x}/{y}.png"
                 .to_string(),
             tile_size: 256,
-            minzoom: 0,
-            maxzoom: 15,
-            attribution: "Historic 6\" OS Ireland (1829–1842), via National Library of Scotland"
-                .to_string(),
+            minzoom: 1,
+            maxzoom: 17,
+            attribution:
+                "Historic 6\" OS Ireland (1829–1842) — National Library of Scotland (CC-BY-SA 3.0)"
+                    .to_string(),
             raster_saturation: 0.0,
             raster_opacity: 1.0,
             tms: false,
@@ -842,7 +847,7 @@ fn default_tile_sources() -> BTreeMap<String, TileSourceConfig> {
 /// A single raster tile source — URL template plus display metadata.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TileSourceConfig {
-    /// Human-readable label displayed in `/tiles` listings.
+    /// Human-readable label displayed in `/map` listings.
     #[serde(default)]
     pub label: String,
     /// XYZ URL template (e.g. `https://…/{z}/{x}/{y}.png`). Empty string
@@ -891,7 +896,7 @@ fn default_raster_opacity() -> f32 {
 impl MapConfig {
     /// Returns tile-source entries as `(id, label)` pairs, alphabetical by id.
     /// Used by backends to populate [`parish_core::ipc::GameConfig::tile_sources`]
-    /// so the `/tiles` command handler can list and validate without needing
+    /// so the `/map` command handler can list and validate without needing
     /// a reference to the whole engine config.
     pub fn id_label_pairs(&self) -> Vec<(String, String)> {
         self.tile_sources
@@ -1065,19 +1070,23 @@ memory_capacity = 30
         let cfg = MapConfig::default();
         assert_eq!(cfg.default_tile_source, "osm");
         assert!(cfg.tile_sources.contains_key("osm"));
-        assert!(cfg.tile_sources.contains_key("historic-6inch"));
+        assert!(cfg.tile_sources.contains_key("historic"));
         let osm = &cfg.tile_sources["osm"];
         assert_eq!(osm.url, "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
         assert_eq!(osm.tile_size, 256);
         assert_eq!(osm.maxzoom, 19);
         assert!(!osm.tms);
-        let historic = &cfg.tile_sources["historic-6inch"];
+        let historic = &cfg.tile_sources["historic"];
         assert!(!historic.tms, "NLS serves standard XYZ, not TMS");
         assert!(
             historic.url.starts_with("https://"),
             "Historic 6\" ships with a live NLS URL"
         );
-        assert!(historic.url.contains("ireland_6inch"));
+        assert!(
+            historic.url.contains("roscommon1"),
+            "Historic ships with the Roscommon 1st-edition NLS tileset (issue #360 tracks whole-island)"
+        );
+        assert_eq!(historic.maxzoom, 17, "NLS serves 6-inch up to z=17");
     }
 
     #[test]
@@ -1110,7 +1119,7 @@ memory_capacity = 30
         cfg.apply_defaults();
         assert!(cfg.tile_sources.contains_key("custom"));
         assert!(cfg.tile_sources.contains_key("osm"));
-        assert!(cfg.tile_sources.contains_key("historic-6inch"));
+        assert!(cfg.tile_sources.contains_key("historic"));
     }
 
     #[test]
@@ -1140,7 +1149,7 @@ memory_capacity = 30
             &path,
             r#"
 [engine.map]
-default_tile_source = "historic-6inch"
+default_tile_source = "historic"
 
 [engine.map.tile_sources.osm]
 url = "https://override/{z}/{x}/{y}.png"
@@ -1148,11 +1157,11 @@ url = "https://override/{z}/{x}/{y}.png"
         )
         .unwrap();
         let cfg = load_engine_config(Some(&path));
-        assert_eq!(cfg.map.default_tile_source, "historic-6inch");
+        assert_eq!(cfg.map.default_tile_source, "historic");
         assert_eq!(
             cfg.map.tile_sources.len(),
             2,
-            "apply_defaults folded historic-6inch back in"
+            "apply_defaults folded historic back in"
         );
         assert_eq!(
             cfg.map.tile_sources["osm"].url,
@@ -1165,14 +1174,14 @@ url = "https://override/{z}/{x}/{y}.png"
         let cfg = MapConfig::default();
         let pairs = cfg.id_label_pairs();
         assert_eq!(pairs.len(), 2);
-        // BTreeMap iterates in sorted order, so "historic-6inch" < "osm".
-        assert_eq!(pairs[0].0, "historic-6inch");
+        // BTreeMap iterates in sorted order, so "historic" < "osm".
+        assert_eq!(pairs[0].0, "historic");
         assert_eq!(pairs[1].0, "osm");
     }
 
     #[test]
     fn test_map_config_deserialize_partial_toml() {
-        // A partial override: user only overrides OSM URL, historic-6inch entry
+        // A partial override: user only overrides OSM URL, historic entry
         // would be wiped without apply_defaults.
         let toml_str = r#"
 [tile_sources.osm]
@@ -1185,7 +1194,7 @@ attribution = "custom attribution"
         assert_eq!(
             cfg.tile_sources.len(),
             2,
-            "apply_defaults folds in historic-6inch"
+            "apply_defaults folds in historic"
         );
         assert_eq!(
             cfg.tile_sources["osm"].url,
