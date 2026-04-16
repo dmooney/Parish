@@ -32,6 +32,15 @@ pub async fn session_middleware(
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
+    // Auth routes (/auth/login/*, /auth/callback/*, /auth/logout) manage
+    // their own `parish_sid` cookies.  If the session middleware also runs
+    // on these paths it creates a throwaway session whose Set-Cookie header
+    // competes with the handler's — breaking the OAuth flow.
+    let path = req.uri().path().to_string();
+    if path.starts_with("/auth/") {
+        return next.run(req).await;
+    }
+
     // Extract the session ID from the incoming Cookie header.
     let cookie_id = req
         .headers()
@@ -41,7 +50,7 @@ pub async fn session_middleware(
 
     let (session_id, entry, is_new) = get_or_create_session(&global, cookie_id.as_deref()).await;
 
-    // Inject the per-session AppState and the session id as Axum extensions.
+    // Inject the per-session AppState and session id as Axum extensions.
     req.extensions_mut().insert(Arc::clone(&entry.app_state));
     req.extensions_mut().insert(SessionId(session_id.clone()));
 

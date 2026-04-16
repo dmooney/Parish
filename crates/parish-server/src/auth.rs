@@ -108,9 +108,14 @@ pub async fn callback_google(
     // CSRF check: the state param must match the cookie.
     let expected_state = cookie_value(&headers, OAUTH_STATE_COOKIE);
     if params.state.as_deref() != expected_state.as_deref() {
-        tracing::warn!("OAuth CSRF mismatch");
+        tracing::warn!(
+            received_state = ?params.state,
+            cookie_state = ?expected_state,
+            "OAuth CSRF mismatch"
+        );
         return (StatusCode::BAD_REQUEST, "Invalid state").into_response();
     }
+    tracing::info!(state = ?params.state, "OAuth CSRF state matched");
 
     // Exchange the authorization code for an access token.
     let redirect_uri = format!(
@@ -143,33 +148,46 @@ pub async fn callback_google(
         "OAuth callback: resolving target session"
     );
 
-    let target_session_id = if let Some(existing) =
-        global.sessions.find_by_oauth("google", &provider_user_id)
-    {
-        // A session is already linked to this Google account — use it.
-        tracing::info!(
-            existing_session_id = %existing,
-            "OAuth callback: found existing session linked to this Google account"
-        );
-        existing
-    } else {
-        // Link the current anonymous session to this Google account.
-        let sid = match current_session_id.as_deref() {
-            Some(id) if global.sessions.exists_in_db(id) => id.to_string(),
-            _ => {
-                // No current session — create a fresh one.
-                tracing::info!("OAuth callback: no valid current session, creating a new one");
-                let (new_id, _, _) = get_or_create_session(&global, None).await;
-                global.sessions.persist_new(&new_id);
-                new_id
+    let target_session_id =
+        if let Some(existing) = global.sessions.find_by_oauth("google", &provider_user_id) {
+            // Try to actually resolve the linked session.  If it comes back
+            // as `is_new` the session's save data is gone (e.g. different
+            // worktree, wiped saves/) and the middleware will overwrite
+            // whatever cookie we set.  Re-link to the caller's current
+            // session instead so the user isn't stuck in a login loop.
+            let (resolved_id, _, is_new) = get_or_create_session(&global, Some(&existing)).await;
+            if !is_new {
+                resolved_id
+            } else {
+                tracing::info!(
+                    stale_session = %existing,
+                    replacement = %resolved_id,
+                    "OAuth: linked session unrestorable, re-linking"
+                );
+                let sid = match current_session_id.as_deref() {
+                    Some(id) if global.sessions.exists_in_db(id) => id.to_string(),
+                    _ => resolved_id,
+                };
+                global
+                    .sessions
+                    .link_oauth("google", &provider_user_id, &sid, &display_name);
+                sid
             }
+        } else {
+            // Link the current anonymous session to this Google account.
+            let sid = match current_session_id.as_deref() {
+                Some(id) if global.sessions.exists_in_db(id) => id.to_string(),
+                _ => {
+                    let (new_id, _, _) = get_or_create_session(&global, None).await;
+                    global.sessions.persist_new(&new_id);
+                    new_id
+                }
+            };
+            global
+                .sessions
+                .link_oauth("google", &provider_user_id, &sid, &display_name);
+            sid
         };
-        global
-            .sessions
-            .link_oauth("google", &provider_user_id, &sid, &display_name);
-        tracing::info!(session_id = %sid, google_id = %provider_user_id, name = %display_name, "Google account linked");
-        sid
-    };
 
     tracing::info!(
         target_session_id = %target_session_id,
