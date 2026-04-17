@@ -174,8 +174,8 @@ pub async fn submit_input(
             state.event_bus.emit("text-log", &player_msg);
             let raw_for_reactions = raw.clone();
             handle_game_input(raw, body.addressed_to, &state).await;
-            // Generate rule-based NPC reactions to the player's message
-            emit_npc_reactions(&player_msg_id, &raw_for_reactions, &state).await;
+            // Generate NPC reactions to the player's message in the background.
+            emit_npc_reactions(&player_msg_id, &raw_for_reactions, &state);
         }
     }
 
@@ -1307,33 +1307,71 @@ pub async fn react_to_message(
     StatusCode::OK
 }
 
-/// Generates rule-based NPC reactions to a player message and emits events.
+/// Generates LLM-informed NPC reactions to a player message and emits events.
 ///
-/// Called after processing player input. Each NPC at the player's location
-/// has a chance to react with an emoji based on keyword matching.
-async fn emit_npc_reactions(player_msg_id: &str, player_input: &str, state: &Arc<AppState>) {
-    let npc_names: Vec<String> = {
-        let world = state.world.lock().await;
-        let npc_manager = state.npc_manager.lock().await;
-        npc_manager
-            .npcs_at(world.player_location)
-            .iter()
-            .map(|n| n.name.clone())
-            .collect()
-    };
+/// Runs as a detached background task so player input handling remains
+/// responsive while reactions resolve.
+fn emit_npc_reactions(player_msg_id: &str, player_input: &str, state: &Arc<AppState>) {
+    let state = Arc::clone(state);
+    let player_msg_id = player_msg_id.to_string();
+    let player_input = player_input.to_string();
 
-    for name in npc_names {
-        if let Some(emoji) = reactions::generate_rule_reaction(player_input) {
-            state.event_bus.emit(
-                "npc-reaction",
-                &NpcReactionPayload {
-                    message_id: player_msg_id.to_string(),
-                    emoji,
-                    source: capitalize_first(&name),
-                },
-            );
+    tokio::spawn(async move {
+        let npcs_here = {
+            let world = state.world.lock().await;
+            let npc_manager = state.npc_manager.lock().await;
+            npc_manager
+                .npcs_at(world.player_location)
+                .iter()
+                .map(|npc| (*npc).clone())
+                .collect::<Vec<_>>()
+        };
+
+        if npcs_here.is_empty() {
+            return;
         }
-    }
+
+        let (reaction_client, reaction_model, enabled) = {
+            let config = state.config.lock().await;
+            let base_client = state.client.lock().await;
+            let (client, model) =
+                config.resolve_category_client(InferenceCategory::Reaction, base_client.as_ref());
+            (
+                client,
+                model,
+                !config.flags.is_disabled("llm-player-message-reactions"),
+            )
+        };
+
+        if !enabled {
+            return;
+        }
+
+        let Some(client) = reaction_client else {
+            return;
+        };
+
+        for npc in npcs_here {
+            if let Some(emoji) = reactions::infer_player_message_reaction(
+                &client,
+                &reaction_model,
+                &npc,
+                &player_input,
+                std::time::Duration::from_secs(2),
+            )
+            .await
+            {
+                state.event_bus.emit(
+                    "npc-reaction",
+                    &NpcReactionPayload {
+                        message_id: player_msg_id.clone(),
+                        emoji,
+                        source: capitalize_first(&npc.name),
+                    },
+                );
+            }
+        }
+    });
 }
 
 // ── Persistence helpers (called by both REST handlers and CommandEffect) ─────

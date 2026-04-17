@@ -158,6 +158,13 @@ const KEYWORD_REACTIONS: &[(&[&str], &str)] = &[
     (&["strange", "ghost", "haunted", "spirit"], "😳"),
 ];
 
+/// Structured output for a player-message NPC reaction inference call.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LlmReactionDecision {
+    /// Emoji from [`REACTION_PALETTE`] or `None` for no reaction.
+    pub emoji: Option<String>,
+}
+
 /// Generates a rule-based NPC reaction to player input.
 ///
 /// Returns `Some(emoji)` if a keyword match triggers a reaction (60% chance),
@@ -175,6 +182,78 @@ pub fn generate_rule_reaction(player_input: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Builds the system + user prompts used to infer an NPC emoji reaction.
+pub fn build_player_message_reaction_prompt(npc: &Npc, player_input: &str) -> (String, String) {
+    let mut palette_lines: Vec<String> = REACTION_PALETTE
+        .iter()
+        .map(|(emoji, desc)| format!("- {emoji}: {desc}"))
+        .collect();
+    palette_lines.push("- null: no visible reaction".to_string());
+
+    let keyword_examples = KEYWORD_REACTIONS
+        .iter()
+        .map(|(group, emoji)| format!("- {:?} -> {}", group, emoji))
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    let system = format!(
+        "You decide whether a single NPC would visibly react to a player's spoken line.\n\
+         Return STRICT JSON only with schema: {{\"emoji\": <emoji-or-null>}}.\n\
+         If unsure or neutral, return {{\"emoji\": null}}.\n\
+         Never invent new emoji.\n\
+         Available palette:\n{}\n\
+         Legacy keyword cues (weak examples only; use full meaning and tone):\n{}",
+        palette_lines.join("\n"),
+        keyword_examples
+    );
+
+    let personality_snippet: String = npc.personality.chars().take(300).collect();
+    let user = format!(
+        "NPC:\n\
+         - Name: {}\n\
+         - Occupation: {}\n\
+         - Mood: {}\n\
+         - Personality: {}\n\n\
+         Player message:\n\
+         \"{}\"\n\n\
+         Choose one emoji or null.",
+        npc.name, npc.occupation, npc.mood, personality_snippet, player_input
+    );
+
+    (system, user)
+}
+
+/// Uses the LLM to infer an NPC emoji reaction for a player message.
+///
+/// Returns `Some(emoji)` only when:
+/// - inference succeeds,
+/// - the output emoji is in [`REACTION_PALETTE`], and
+/// - the 60% probabilistic gate fires.
+///
+/// Returns `None` for all errors, unknown emoji, explicit null output, or
+/// when the probabilistic gate does not fire.
+pub async fn infer_player_message_reaction(
+    client: &OpenAiClient,
+    model: &str,
+    npc: &Npc,
+    player_input: &str,
+    timeout: Duration,
+) -> Option<String> {
+    let (system, prompt) = build_player_message_reaction_prompt(npc, player_input);
+    let call =
+        client.generate_json::<LlmReactionDecision>(model, &prompt, Some(&system), Some(40), None);
+
+    let response = tokio::time::timeout(timeout, call).await.ok()?.ok()?;
+    let emoji = response.emoji?;
+    if reaction_description(&emoji).is_none() {
+        return None;
+    }
+    if rand::random::<f64>() >= 0.6 {
+        return None;
+    }
+    Some(emoji)
 }
 
 /// Deterministic variant for testing — always returns a reaction if keywords match.
@@ -1109,6 +1188,26 @@ mod tests {
             generate_rule_reaction_deterministic("Good morning to you"),
             None
         );
+    }
+
+    #[test]
+    fn build_player_message_reaction_prompt_contains_palette_and_examples() {
+        let npc = test_npc(1, "Padraig Darcy", "Publican", Some(LocationId(2)));
+        let (system, user) =
+            build_player_message_reaction_prompt(&npc, "Your landlord's agent is at the door.");
+
+        assert!(system.contains("Available palette"));
+        assert!(system.contains("null: no visible reaction"));
+        assert!(system.contains("Legacy keyword cues"));
+        assert!(system.contains("landlord"));
+        assert!(user.contains("Padraig Darcy"));
+        assert!(user.contains("Player message"));
+    }
+
+    #[test]
+    fn llm_reaction_decision_allows_null() {
+        let parsed: LlmReactionDecision = serde_json::from_str(r#"{"emoji":null}"#).unwrap();
+        assert!(parsed.emoji.is_none());
     }
 
     #[test]
