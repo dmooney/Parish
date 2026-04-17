@@ -137,7 +137,7 @@ async fn reload_live_world_from_disk(
         let npc_manager = state.npc_manager.lock().await;
         get_world_snapshot_inner(
             &world,
-            &state.transport.default_mode(),
+            state.transport.default_mode(),
             Some(&npc_manager),
             &state.pronunciations,
         )
