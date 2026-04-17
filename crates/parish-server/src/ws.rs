@@ -2,21 +2,47 @@
 //!
 //! Each connected client gets a WebSocket that receives JSON-encoded
 //! [`ServerEvent`] frames from the per-session [`EventBus`].
+//!
+//! # Authentication (#379)
+//! The upgrade request must carry a short-lived HMAC session token as a
+//! `?token=` query parameter.  Obtain one via `POST /api/session-init`.
+//! Missing or invalid tokens are rejected with `401 Unauthorized`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::Extension;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Extension, Query};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
+use crate::cf_auth::SessionToken;
 use crate::state::AppState;
 
 /// Upgrades the HTTP connection to a WebSocket.
+///
+/// Requires a valid `?token=` query parameter (issued by `POST /api/session-init`).
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    Query(params): Query<HashMap<String, String>>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
+    // #379 — validate session token before accepting the WS upgrade.
+    let token = match params.get("token") {
+        Some(t) => t.clone(),
+        None => {
+            tracing::warn!("ws_handler: rejected — missing ?token query param");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+
+    if let Err(e) = SessionToken::validate_full(&token) {
+        tracing::warn!(error = %e, "ws_handler: rejected — invalid session token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     ws.on_upgrade(|socket| handle_socket(socket, state))
+        .into_response()
 }
 
 /// Handles a single WebSocket connection.
