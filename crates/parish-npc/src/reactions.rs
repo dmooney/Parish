@@ -954,6 +954,8 @@ mod tests {
             mythological_significance: None,
             aliases: vec![],
             geo_kind: GeoKind::Fictional,
+            relative_to: None,
+            geo_source: None,
         }
     }
 

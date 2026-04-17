@@ -237,6 +237,8 @@ fn build_locations(
                     mythological_significance,
                     aliases: vec![],
                     geo_kind: GeoKind::Real,
+                    relative_to: None,
+                    geo_source: None,
                 },
                 description_source,
                 osm_id: Some(feature.osm_id),

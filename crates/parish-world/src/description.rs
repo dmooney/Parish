@@ -110,6 +110,8 @@ mod tests {
             lon: 0.0,
             aliases: vec![],
             geo_kind: GeoKind::Fictional,
+            relative_to: None,
+            geo_source: None,
         }
     }
 
@@ -184,6 +186,8 @@ mod tests {
             lon: 0.0,
             aliases: vec![],
             geo_kind: GeoKind::Fictional,
+            relative_to: None,
+            geo_source: None,
         };
         let result = render_description(&loc, TimeOfDay::Morning, "Clear", &[]);
         assert_eq!(result, "A plain description with no placeholders.");

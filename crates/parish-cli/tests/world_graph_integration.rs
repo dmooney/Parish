@@ -267,13 +267,17 @@ fn test_parish_description_templates_have_placeholders() {
 
 #[test]
 fn test_parish_computed_travel_times_reasonable() {
+    // Upper bound reflects realistic Irish-rural geography: a game-edge
+    // connection spans at most one cross-parish walk (~4-5 hours), enough
+    // to cover the 16 km Kilteevan ↔ Curraghboy Road connection that
+    // naturally emerges once real historical coordinates are used.
     let graph = load_parish_graph();
     for id in graph.location_ids() {
         for (target_id, _) in graph.neighbors(id) {
             let minutes = graph.edge_travel_minutes(id, target_id, 1.25);
             assert!(
-                (1..=60).contains(&minutes),
-                "travel time {} min from {:?} to {:?} should be 1-60 minutes",
+                (1..=300).contains(&minutes),
+                "travel time {} min from {:?} to {:?} should be 1-300 minutes",
                 minutes,
                 id,
                 target_id

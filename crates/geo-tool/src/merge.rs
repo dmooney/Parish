@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use parish_core::world::LocationId;
-use parish_core::world::graph::{Connection, GeoKind, LocationData, WorldGraph};
+use parish_core::world::graph::{Connection, LocationData, WorldGraph};
 
 use super::descriptions::DescriptionSource;
 use super::osm_model::haversine_distance;
@@ -226,6 +226,7 @@ pub fn connect_curated_to_generated(locations: &mut [TrackedLocation], max_dista
 mod tests {
     use super::*;
     use parish_core::npc::NpcId;
+    use parish_core::world::graph::GeoKind;
 
     fn make_tracked(
         id: u32,
@@ -248,6 +249,8 @@ mod tests {
                 mythological_significance: None,
                 aliases: vec![],
                 geo_kind: GeoKind::Real,
+                relative_to: None,
+                geo_source: None,
             },
             description_source: source,
             osm_id: None,
