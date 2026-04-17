@@ -163,10 +163,10 @@ Most configuration commands follow a **unified show/set pattern**: running the c
 - `/cloud key [value]` — Show or set the cloud API key
 
 **Per-Category Overrides (dot notation):**
-Categories are `dialogue`, `simulation`, or `intent`.
+Categories are `dialogue`, `simulation`, `intent`, or `reaction`.
 - `/provider.<category> [name]` — e.g. `/provider.dialogue openai`
 - `/model.<category> [name]` — e.g. `/model.intent qwen3:3b`
-- `/key.<category> [value]` — e.g. `/key.dialogue sk-...`
+- `/key.<category> [value]` — e.g. `/key.reaction sk-...`
 
 **Debug:**
 - `/debug [subcommand]` — Debug operations and metrics
