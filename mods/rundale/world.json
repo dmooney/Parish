@@ -61,8 +61,8 @@
                     "path_description": "the lane back to the crossroads"
                 }
             ],
-            "lat": 53.53308593464098,
-            "lon": -8.045154607764625,
+            "lat": 53.535518726707025,
+            "lon": -8.04318526704168,
             "associated_npcs": [
                 1
             ],
@@ -72,7 +72,12 @@
                 "the pub",
                 "tavern"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "fictional",
+            "relative_to": {
+                "anchor": 1,
+                "dnorth_m": 445.0,
+                "deast_m": 462.0
+            }
         },
         {
             "id": 3,
@@ -90,8 +95,8 @@
                     "path_description": "a muddy track past the graveyard wall"
                 }
             ],
-            "lat": 53.53145343464098,
-            "lon": -8.054548107764624,
+            "lat": 53.53501510660771,
+            "lon": -8.054169938739815,
             "associated_npcs": [],
             "mythological_significance": "Built on the site of an older holy well dedicated to Brigid, the goddess-turned-saint.",
             "aliases": [
@@ -99,7 +104,12 @@
                 "the church",
                 "chapel"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "fictional",
+            "relative_to": {
+                "anchor": 1,
+                "dnorth_m": 389.0,
+                "deast_m": -264.0
+            }
         },
         {
             "id": 4,
@@ -113,8 +123,8 @@
                     "path_description": "back across to the crossroads"
                 }
             ],
-            "lat": 53.52558593464098,
-            "lon": -8.047154607764625,
+            "lat": 53.528018384513665,
+            "lon": -8.045182480077704,
             "associated_npcs": [
                 23
             ],
@@ -125,7 +135,12 @@
                 "letters",
                 "mail"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "fictional",
+            "relative_to": {
+                "anchor": 1,
+                "dnorth_m": -389.0,
+                "deast_m": 330.0
+            }
         },
         {
             "id": 5,
@@ -170,15 +185,20 @@
                     "path_description": "a beaten path down to the hurling green"
                 }
             ],
-            "lat": 53.52408593464098,
-            "lon": -8.058154607764626,
+            "lat": 53.52651651743178,
+            "lon": -8.056167151775838,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
                 "school",
                 "schoolhouse"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "fictional",
+            "relative_to": {
+                "anchor": 1,
+                "dnorth_m": -556.0,
+                "deast_m": -396.0
+            }
         },
         {
             "id": 7,
@@ -262,8 +282,8 @@
                     "path_description": "a boreen through a gap in the hedge"
                 }
             ],
-            "lat": 53.50807919445866,
-            "lon": -8.0198160231171,
+            "lat": 53.533513239525824,
+            "lon": -8.023228267083224,
             "associated_npcs": [
                 18
             ],
@@ -272,7 +292,12 @@
                 "murphy's",
                 "murphys"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "fictional",
+            "relative_to": {
+                "anchor": 1,
+                "dnorth_m": 222.0,
+                "deast_m": 1781.0
+            }
         },
         {
             "id": 10,
@@ -372,8 +397,8 @@
                     "path_description": "a few steps back across the road to the crossroads"
                 }
             ],
-            "lat": 53.52608593464098,
-            "lon": -8.054154607764625,
+            "lat": 53.52851301139692,
+            "lon": -8.05217272570379,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
@@ -382,7 +407,12 @@
                 "general store",
                 "shop"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "fictional",
+            "relative_to": {
+                "anchor": 1,
+                "dnorth_m": -334.0,
+                "deast_m": -132.0
+            }
         },
         {
             "id": 14,
