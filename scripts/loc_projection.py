@@ -126,7 +126,8 @@ def project(name, daily_fn):
 
 
 # Scenario 1: Maintain current pace (avg of last 7 non-refactor days)
-recent = [n for _, n in ACTUAL[-7:] if n > 0]
+positive_days = [n for _, n in ACTUAL if n > 0]
+recent = positive_days[-7:]
 avg_recent = sum(recent) / len(recent) if recent else 5000
 
 # Scenario 2: Ramp up with diminishing returns
