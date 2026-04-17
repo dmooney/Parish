@@ -58,23 +58,30 @@ impl Drop for ActiveWsGuard {
 /// A second concurrent upgrade from the same email returns `409 Conflict` (#334).
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     Query(params): Query<HashMap<String, String>>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
-    // #379 — validate session token before accepting the WS upgrade.
-    let token = match params.get("token") {
-        Some(t) => t.clone(),
-        None => {
-            tracing::warn!("ws_handler: rejected — missing ?token query param");
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-    };
+    // #379 — debug-only loopback bypass matches `cf_access_guard`: e2e and local
+    // dev open a WS without minting a session-init token first.
+    let email = if cfg!(debug_assertions) && addr.ip().is_loopback() {
+        "dev@localhost".to_string()
+    } else {
+        // #377 — validate session token before accepting the WS upgrade.
+        let token = match params.get("token") {
+            Some(t) => t.clone(),
+            None => {
+                tracing::warn!("ws_handler: rejected — missing ?token query param");
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+        };
 
-    let email = match SessionToken::validate_full(&token) {
-        Ok(e) => e,
-        Err(err) => {
-            tracing::warn!(error = %err, "ws_handler: rejected — invalid session token");
-            return StatusCode::UNAUTHORIZED.into_response();
+        match SessionToken::validate_full(&token) {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::warn!(error = %err, "ws_handler: rejected — invalid session token");
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
         }
     };
 
