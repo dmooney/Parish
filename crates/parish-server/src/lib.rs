@@ -22,12 +22,16 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode};
+use axum::http::header::{
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
+use axum::http::{HeaderValue, Request, StatusCode};
 use axum::middleware as axum_mw;
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::{get, post};
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use parish_core::game_mod::{GameMod, find_default_mod};
 use parish_core::world::transport::TransportConfig;
@@ -257,6 +261,37 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .layer(axum_mw::from_fn_with_state(
             Arc::clone(&global),
             middleware::session_middleware,
+        ))
+        // ── Security hardening headers (outermost layer — covers all routes) ──
+        .layer(SetResponseHeaderLayer::overriding(
+            CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; \
+                 script-src 'self'; \
+                 style-src 'self' 'unsafe-inline'; \
+                 img-src 'self' data: blob: https:; \
+                 connect-src 'self' ws: wss: https:; \
+                 font-src 'self'; \
+                 frame-ancestors 'none'; \
+                 base-uri 'self'; \
+                 form-action 'self'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
         ));
 
     let addr = format!("0.0.0.0:{}", port);
