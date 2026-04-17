@@ -40,14 +40,15 @@
                     "path_description": "a short walk past the sound of hammering"
                 }
             ],
-            "lat": 53.53151674556069,
-            "lon": -8.050175512667765,
+            "lat": 53.63610233978225,
+            "lon": -8.115467722483066,
             "associated_npcs": [],
             "mythological_significance": "Crossroads hold power in Irish folklore — a place between places, where the veil is thin.",
             "aliases": [
                 "crossroads"
             ],
-            "geo_kind": "fictional"
+            "geo_kind": "manual",
+            "geo_source": "manually placed from modern Kilteevan crossroads coord"
         },
         {
             "id": 2,
@@ -61,8 +62,8 @@
                     "path_description": "the lane back to the crossroads"
                 }
             ],
-            "lat": 53.535518726707025,
-            "lon": -8.04318526704168,
+            "lat": 53.640104320928586,
+            "lon": -8.10846015877706,
             "associated_npcs": [
                 1
             ],
@@ -95,8 +96,8 @@
                     "path_description": "a muddy track past the graveyard wall"
                 }
             ],
-            "lat": 53.53501510660771,
-            "lon": -8.054169938739815,
+            "lat": 53.63960070082927,
+            "lon": -8.119472044600784,
             "associated_npcs": [],
             "mythological_significance": "Built on the site of an older holy well dedicated to Brigid, the goddess-turned-saint.",
             "aliases": [
@@ -123,8 +124,8 @@
                     "path_description": "back across to the crossroads"
                 }
             ],
-            "lat": 53.528018384513665,
-            "lon": -8.045182480077704,
+            "lat": 53.632603978735226,
+            "lon": -8.11046231983592,
             "associated_npcs": [
                 23
             ],
@@ -158,8 +159,8 @@
                     "path_description": "a grassy track past the ditch to a whitewashed cottage"
                 }
             ],
-            "lat": 53.527030449766926,
-            "lon": -8.064804495028687,
+            "lat": 53.59675417924797,
+            "lon": -8.108332634905555,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
@@ -185,8 +186,8 @@
                     "path_description": "a beaten path down to the hurling green"
                 }
             ],
-            "lat": 53.52651651743178,
-            "lon": -8.056167151775838,
+            "lat": 53.63110211165334,
+            "lon": -8.121474205659643,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
@@ -216,8 +217,8 @@
                     "path_description": "a rough track climbing away from the shore"
                 }
             ],
-            "lat": 53.50185197821366,
-            "lon": -7.989830269254875,
+            "lat": 53.52799837676905,
+            "lon": -8.0061533217087,
             "associated_npcs": [],
             "mythological_significance": "Lough Ree is said to be home to a monster — the Lough Ree wurm, Ireland's lesser-known cousin of Nessie.",
             "aliases": [
@@ -282,8 +283,8 @@
                     "path_description": "a boreen through a gap in the hedge"
                 }
             ],
-            "lat": 53.533513239525824,
-            "lon": -8.023228267083224,
+            "lat": 53.638098833747385,
+            "lon": -8.088453716075282,
             "associated_npcs": [
                 18
             ],
@@ -315,8 +316,8 @@
                     "path_description": "a soggy track across the lower field"
                 }
             ],
-            "lat": 53.51372270642731,
-            "lon": -8.014339188509751,
+            "lat": 53.56601550353809,
+            "lon": -8.046985293417402,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
@@ -341,8 +342,8 @@
                     "path_description": "a barely visible path through gorse and bracken"
                 }
             ],
-            "lat": 53.51531470053154,
-            "lon": -8.001429504898475,
+            "lat": 53.557148938220166,
+            "lon": -8.027546388824595,
             "associated_npcs": [],
             "mythological_significance": "A rath said to be home to the sídhe. No farmer has ever ploughed within twenty yards of it. Those who disturb fairy forts are said to suffer terrible misfortune.",
             "aliases": [
@@ -373,8 +374,8 @@
                     "path_description": "a squelching path along the bog's edge"
                 }
             ],
-            "lat": 53.527202445534144,
-            "lon": -8.040410523137187,
+            "lat": 53.58995380206708,
+            "lon": -8.079585849026367,
             "associated_npcs": [],
             "mythological_significance": "Bogs preserve everything — bodies, butter, memories. People say you can hear voices in the wind here on certain nights.",
             "aliases": [
@@ -397,8 +398,8 @@
                     "path_description": "a few steps back across the road to the crossroads"
                 }
             ],
-            "lat": 53.52851301139692,
-            "lon": -8.05217272570379,
+            "lat": 53.63309860561848,
+            "lon": -8.117469883541926,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
@@ -430,8 +431,8 @@
                     "path_description": "a path along the bog's edge back to the road"
                 }
             ],
-            "lat": 53.52056361402927,
-            "lon": -8.026198766260444,
+            "lat": 53.57285641114005,
+            "lon": -8.058844871168095,
             "associated_npcs": [],
             "mythological_significance": null,
             "aliases": [
@@ -644,8 +645,8 @@
                     "path_description": "the stony path back along the waterline to the bay"
                 }
             ],
-            "lat": 53.492063557161025,
-            "lon": -7.996521848202243,
+            "lat": 53.518209955716415,
+            "lon": -8.012844900656068,
             "associated_npcs": [
                 15,
                 16,
