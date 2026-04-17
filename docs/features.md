@@ -29,7 +29,7 @@ Parish is a text-based adventure game set in 1820s rural Ireland, powered by LLM
 - **Seven weather states:** Clear, PartlyCloudy, Overcast, LightRain, HeavyRain, Fog, Storm (`crates/parish-types/src/ids.rs`)
 - Weather transition engine runs in the simulation tick path
 - Weather affects UI palette tinting (desaturation, brightness, color temperature)
-- Weather influences en-route encounter probability
+- Weather state available to NPC dialogue context
 
 ### Festivals
 - Four traditional Irish calendar festivals, data-driven from mod files:
@@ -240,7 +240,7 @@ Provider config is resolved by `resolve_config` in `crates/parish-config/src/pro
 - Input auto-disabled during active streaming
 
 ### Inference Logging
-- Ring buffer of recent LLM calls (configurable capacity, default 100)
+- Ring buffer of recent LLM calls (configurable capacity, default 50)
 - Logs prompt, response, model, timing, streaming flag, and error status
 - Viewable in the Debug Panel's Inference tab
 
