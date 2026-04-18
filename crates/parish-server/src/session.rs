@@ -594,9 +594,8 @@ fn build_session_client(global: &GlobalState) -> (Option<AnyClient>, GameConfig)
     } else if config.model_name.is_empty() && config.provider_name != "ollama" {
         None
     } else {
-        let provider_enum =
-            parish_core::config::Provider::from_str_loose(&config.provider_name)
-                .unwrap_or_default();
+        let provider_enum = parish_core::config::Provider::from_str_loose(&config.provider_name)
+            .unwrap_or_default();
         Some(parish_core::inference::build_client(
             &provider_enum,
             &config.base_url,
