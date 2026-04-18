@@ -20,7 +20,7 @@ See the [Roadmap](docs/requirements/roadmap.md) for per-item status tracking.
 
 The workspace ships with a [`justfile`](justfile); run `just --list` for the full set of recipes.
 
-**Requirements:** Rust (edition 2024), [Node.js](https://nodejs.org/) (v20+), an OpenAI-compatible LLM endpoint (e.g. [Ollama](https://ollama.ai/) on `localhost:11434`, LM Studio, OpenRouter, or a custom provider configured in `parish.toml`).
+**Requirements:** Rust (edition 2024), [Node.js](https://nodejs.org/) (v20+), [`just`](https://github.com/casey/just) (`cargo install just` or your package manager's equivalent), and an OpenAI-compatible LLM endpoint (e.g. [Ollama](https://ollama.ai/) on `localhost:11434`, LM Studio, OpenRouter, or a custom provider configured in `parish.toml`).
 
 ```sh
 # One-time: install system deps, Rust, Node, and frontend packages
