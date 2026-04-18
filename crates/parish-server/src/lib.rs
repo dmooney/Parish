@@ -537,6 +537,10 @@ async fn get_metrics() -> String {
 ///
 /// Placed *outside* the auth guard so pre-auth floods are throttled before
 /// the JWT validation overhead is incurred.
+///
+/// Debug + loopback traffic is exempt: Playwright and local devtools make
+/// bursts of legitimate requests (status bar polls, WS reconnects, tile
+/// fetches, e2e test setup) that otherwise trip 429 and break UX.
 async fn ip_rate_limit_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::extract::State(limiter): axum::extract::State<
@@ -551,6 +555,9 @@ async fn ip_rate_limit_middleware(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    if cfg!(debug_assertions) && addr.ip().is_loopback() {
+        return Ok(next.run(req).await);
+    }
     match limiter.check_key(&addr.ip()) {
         Ok(_) => Ok(next.run(req).await),
         Err(_) => {
