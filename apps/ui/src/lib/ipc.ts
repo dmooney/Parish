@@ -121,11 +121,28 @@ async function mintSessionToken(): Promise<string | null> {
 	}
 }
 
+function isLoopbackHost(): boolean {
+	const h = window.location.hostname;
+	return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
 function ensureWebSocket(): void {
 	if (IS_TAURI || ws) return;
 
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 	const baseUrl = `${protocol}//${window.location.host}/api/ws`;
+
+	// Loopback bypass mirrors crates/parish-server/src/ws.rs — in debug
+	// builds the server accepts WS upgrades from 127.0.0.1 / localhost
+	// without a token, so we skip the /api/session-init round-trip both
+	// for developer convenience and so vitest + Playwright don't need to
+	// mock the endpoint. Any non-loopback origin (CF tunnel, prod) must
+	// mint a token first.
+	if (isLoopbackHost()) {
+		ws = new WebSocket(baseUrl);
+		attachHandlers(ws);
+		return;
+	}
 
 	void mintSessionToken().then((token) => {
 		if (ws) return; // another caller raced us
