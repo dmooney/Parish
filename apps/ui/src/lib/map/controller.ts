@@ -95,6 +95,19 @@ export class MapController {
 	private hoverLeaveHandler: (() => void) | null = null;
 	/** Current tile source, mirrored so `setTileSource` can rebuild the style. */
 	private tileSource: TileSource | undefined;
+	/** Whether layer-delegated event handlers are currently attached. MapLibre
+	 *  stores per-layer delegated listeners on the map instance itself, so
+	 *  they survive `setStyle()` — if we call `wireLayerEvents` twice without
+	 *  tearing the previous set down first, every click fires N handlers and
+	 *  the same `submitInput` runs N times. */
+	private layerEventsWired = false;
+	private layerClickHandler:
+		| ((e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => void)
+		| null = null;
+	private layerMouseEnterHandler:
+		| ((e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => void)
+		| null = null;
+	private layerMouseLeaveHandler: (() => void) | null = null;
 
 	constructor(options: MapControllerOptions) {
 		this.variant = options.variant;
@@ -217,12 +230,26 @@ export class MapController {
 
 	/**
 	 * Starts (or updates) a travel-dot animation along the given waypoints.
-	 * Creates an HTMLMarker with a pulsing dot element; on each frame the
-	 * marker's lat/lon is interpolated between consecutive waypoints.
+	 *
+	 * The dot is placed at the first waypoint and the camera animates toward
+	 * the destination over `durationMs`. Callers that pass `targetBounds`
+	 * (the minimap, typically the destination's neighborhood box) get a
+	 * `fitBounds` — so both center and zoom interpolate smoothly in-flight
+	 * and the post-travel fitBounds has nothing left to snap. Without
+	 * target bounds we fall back to a straight `easeTo` on the last waypoint,
+	 * preserving zoom (used by the full-map overlay).
+	 *
+	 * On each animation frame we sync the marker's world position to the
+	 * camera's current center so the dot reads as a follow-cam — the
+	 * traveller stays at screen center while the map tiles scroll beneath.
 	 *
 	 * Call `stopTravel()` when the animation should end.
 	 */
-	startTravel(waypoints: TravelWaypoint[], durationMs: number): void {
+	startTravel(
+		waypoints: TravelWaypoint[],
+		durationMs: number,
+		targetBounds?: Array<{ lat: number; lon: number }>
+	): void {
 		this.stopTravel();
 		if (waypoints.length < 2) return;
 		this.activeTravelEdgeKeys = buildTravelEdgeKeys(waypoints);
@@ -237,21 +264,29 @@ export class MapController {
 			.setLngLat([waypoints[0].lon, waypoints[0].lat])
 			.addTo(this.map);
 
-		const startTs = performance.now();
-		const segCount = waypoints.length - 1;
+		if (targetBounds && targetBounds.length > 0) {
+			const bounds = new LngLatBounds();
+			for (const c of targetBounds) bounds.extend([c.lon, c.lat]);
+			this.map.fitBounds(bounds, {
+				padding: 16,
+				maxZoom: 16,
+				duration: durationMs,
+				easing: (t) => t,
+				linear: true
+			});
+		} else {
+			const last = waypoints[waypoints.length - 1];
+			this.map.easeTo({
+				center: [last.lon, last.lat],
+				duration: durationMs,
+				easing: (t) => t,
+				animate: true
+			});
+		}
 
 		const tick = () => {
-			const now = performance.now();
-			const t = Math.min(1, Math.max(0, (now - startTs) / durationMs));
-			const segFloat = t * segCount;
-			const segIdx = Math.min(Math.floor(segFloat), segCount - 1);
-			const segT = segFloat - segIdx;
-			const from = waypoints[segIdx];
-			const to = waypoints[segIdx + 1];
-			const lat = from.lat + (to.lat - from.lat) * segT;
-			const lon = from.lon + (to.lon - from.lon) * segT;
-			marker.setLngLat([lon, lat]);
-			if (t < 1 && this.travelAnim) {
+			marker.setLngLat(this.map.getCenter());
+			if (this.travelAnim) {
 				this.travelAnim.rafId = requestAnimationFrame(tick);
 			}
 		};
@@ -308,12 +343,17 @@ export class MapController {
 	}
 
 	/**
-	 * Wires click & hover listeners onto the `location-circles` layer once
-	 * the map has finished loading. A single layer handles both the visual
-	 * and the hit-testing — clicks on the invisible-at-zoom labels still
-	 * fall through to this because the circle sits beneath.
+	 * Wires click & hover listeners onto the location layers.
+	 *
+	 * Called on first `load` and again after every `setStyle` (which wipes
+	 * layers but NOT MapLibre's `_delegatedListeners` map). We stash the
+	 * bound handler refs and tear them down before re-adding — otherwise
+	 * each `setTileSource` call stacks another handler and every click
+	 * fires `submitInput` N times.
 	 */
 	private wireLayerEvents(): void {
+		this.unwireLayerEvents();
+
 		const canvas = this.map.getCanvas();
 
 		const handleClick = (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
@@ -348,10 +388,33 @@ export class MapController {
 			this.hoverLeaveHandler?.();
 		};
 
+		this.layerClickHandler = handleClick;
+		this.layerMouseEnterHandler = handleMouseEnter;
+		this.layerMouseLeaveHandler = handleMouseLeave;
+
 		this.map.on('click', 'location-circles', handleClick);
 		this.map.on('click', 'location-labels', handleClick);
 		this.map.on('mouseenter', 'location-circles', handleMouseEnter);
 		this.map.on('mouseleave', 'location-circles', handleMouseLeave);
+		this.layerEventsWired = true;
+	}
+
+	private unwireLayerEvents(): void {
+		if (!this.layerEventsWired) return;
+		if (this.layerClickHandler) {
+			this.map.off('click', 'location-circles', this.layerClickHandler);
+			this.map.off('click', 'location-labels', this.layerClickHandler);
+		}
+		if (this.layerMouseEnterHandler) {
+			this.map.off('mouseenter', 'location-circles', this.layerMouseEnterHandler);
+		}
+		if (this.layerMouseLeaveHandler) {
+			this.map.off('mouseleave', 'location-circles', this.layerMouseLeaveHandler);
+		}
+		this.layerClickHandler = null;
+		this.layerMouseEnterHandler = null;
+		this.layerMouseLeaveHandler = null;
+		this.layerEventsWired = false;
 	}
 }
 
@@ -386,23 +449,26 @@ function registerLocationIcons(map: MapLibreMap): void {
 	for (const [icon, path] of Object.entries(ICON_PATHS) as Array<[LocationIcon, string]>) {
 		const imageId = `icon-${icon}`;
 		if (map.hasImage(imageId)) continue;
-		map.addImage(imageId, drawIconImage(path), { sdf: true });
+		const image = drawIconImage(path);
+		if (!image) continue;
+		map.addImage(imageId, image, { sdf: true });
 	}
 }
 
-function drawIconImage(pathData: string): ImageData {
+// Returns null when the host lacks a usable 2D canvas (jsdom in unit tests).
+// Real browsers always provide one; MapLibre then falls back to a square
+// placeholder for `icon-image: icon-…` which keeps the rest of the style
+// valid rather than hard-failing the test render.
+function drawIconImage(pathData: string): ImageData | null {
 	const size = 64;
 	const canvas = document.createElement('canvas');
 	canvas.width = size;
 	canvas.height = size;
 	const ctx = canvas.getContext('2d');
-	if (!ctx) {
-		throw new Error('Could not initialize icon canvas context');
-	}
+	if (!ctx || typeof Path2D === 'undefined') return null;
 	ctx.clearRect(0, 0, size, size);
 	ctx.fillStyle = '#ffffff';
-	ctx.translate(0, size);
-	ctx.scale(size / 256, -size / 256);
+	ctx.scale(size / 256, size / 256);
 	const path = new Path2D(pathData);
 	ctx.fill(path);
 	return ctx.getImageData(0, 0, size, size);

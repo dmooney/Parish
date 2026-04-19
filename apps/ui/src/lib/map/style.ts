@@ -218,14 +218,25 @@ export function buildStyle(
 		source: 'locations',
 		layout: {
 			'icon-image': ['concat', 'icon-', ['get', 'icon']],
+			// Icon sprites are drawn onto a 64px canvas (see drawIconImage in
+			// controller.ts), so rendered pixel size is `64 * icon-size`. The
+			// minimap runs a few points larger than the full map so locations
+			// remain readable at the panel's 240px viewport. Icons scale
+			// linearly with zoom and max out at ~3× their zoomed-out size so
+			// a fully zoomed-in view reads comfortably without dominating
+			// the map tiles.
 			'icon-size': [
 				'interpolate',
 				['linear'],
 				['zoom'],
 				10,
-				['case', ['get', 'isPlayer'], 0.09, 0.075],
+				variant === 'minimap'
+					? ['case', ['get', 'isPlayer'], 0.32, 0.26]
+					: ['case', ['get', 'isPlayer'], 0.3, 0.22],
 				18,
-				['case', ['get', 'isPlayer'], 0.12, 0.1]
+				variant === 'minimap'
+					? ['case', ['get', 'isPlayer'], 0.96, 0.78]
+					: ['case', ['get', 'isPlayer'], 0.9, 0.66]
 			],
 			'icon-allow-overlap': true,
 			'icon-ignore-placement': true
@@ -245,10 +256,15 @@ export function buildStyle(
 				'case',
 				['get', 'visited'],
 				1,
-				0.45
+				0.55
 			],
+			// Halo matches the label halo so icons read against the
+			// desaturated historic map tiles — the pre-fix 0.8 px width was
+			// invisible once the icon color sat near the parchment tones.
+			// Unvisited locations get a thinner halo so they read as softer
+			// fog-of-war hints rather than equal-weight siblings.
 			'icon-halo-color': theme.bg,
-			'icon-halo-width': 0.8,
+			'icon-halo-width': ['case', ['get', 'visited'], 1.5, 0.6],
 			'icon-halo-blur': 0.2
 		}
 	});
