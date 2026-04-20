@@ -560,17 +560,19 @@
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
-		// If dropdown is open, select the highlighted item
+		// If a mention or slash dropdown is open, Enter selects the highlighted
+		// item — there's no scenario where the player wants to submit half-typed
+		// `@P` or `/pa` literally. The model dropdown is intentionally excluded:
+		// `/model …` is itself a valid command (e.g. `/model ` shows the current
+		// model and `/model my-custom` sets a non-catalog ID), so Enter must
+		// always submit exactly what the player typed. Tab and click remain the
+		// explicit ways to pick a catalog suggestion for `/model`.
 		if (dropdownMode === 'mention' && filteredNpcs.length > 0) {
 			selectNpc(filteredNpcs[selectedIndex].name);
 			return;
 		}
 		if (dropdownMode === 'slash' && filteredCommands.length > 0) {
 			selectSlashCommand(filteredCommands[selectedIndex]);
-			return;
-		}
-		if (dropdownMode === 'model' && filteredModels.length > 0) {
-			selectModelSuggestion(filteredModels[selectedIndex]);
 			return;
 		}
 		syncEditorText();

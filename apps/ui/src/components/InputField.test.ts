@@ -340,39 +340,69 @@ describe('InputField', () => {
 			expect(options.every((o) => o.textContent?.toLowerCase().includes('claude'))).toBe(true);
 		});
 
-		it('submits `/model <name>` when a suggestion is picked via Enter', async () => {
+		it('Enter submits the typed text verbatim, not the highlighted suggestion', async () => {
+			// User types a custom model ID that has substring overlap with catalog
+			// entries (e.g. `claude-opus-99` would match `claude-opus-4-7`). Enter
+			// must submit exactly what was typed so a partial / custom ID is never
+			// silently swapped for a catalog match.
 			const { getByRole } = render(InputField);
 			const editor = getByRole('textbox');
 
-			typeIntoEditor(editor, '/model claude-opus');
+			typeIntoEditor(editor, '/model my-custom-fork');
 			await fireEvent.input(editor);
 			await fireEvent.keyDown(editor, { key: 'Enter' });
 
 			expect(mockSubmitInput).toHaveBeenCalledTimes(1);
-			const sent = mockSubmitInput.mock.calls[0][0];
-			expect(sent).toMatch(/^\/model claude-opus/);
+			expect(mockSubmitInput.mock.calls[0][0]).toBe('/model my-custom-fork');
 		});
 
-		it('preserves the per-category prefix when picking a suggestion', async () => {
+		it('Enter on `/model ` (empty query) submits the show-current command', async () => {
+			// Without this, an empty `/model ` + Enter would pick the first
+			// catalog suggestion and silently change the active model.
 			const { getByRole } = render(InputField);
 			const editor = getByRole('textbox');
 
-			typeIntoEditor(editor, '/model.dialogue claude-opus');
+			typeIntoEditor(editor, '/model ');
 			await fireEvent.input(editor);
 			await fireEvent.keyDown(editor, { key: 'Enter' });
 
 			expect(mockSubmitInput).toHaveBeenCalledTimes(1);
-			const sent = mockSubmitInput.mock.calls[0][0];
-			expect(sent).toMatch(/^\/model\.dialogue claude-opus/);
+			expect(mockSubmitInput.mock.calls[0][0]).toBe('/model');
 		});
 
-		it('clears the editor after picking a model', async () => {
+		it('Tab picks the highlighted suggestion and submits it', async () => {
 			const { getByRole } = render(InputField);
 			const editor = getByRole('textbox');
 
 			typeIntoEditor(editor, '/model claude');
 			await fireEvent.input(editor);
-			await fireEvent.keyDown(editor, { key: 'Enter' });
+			await fireEvent.keyDown(editor, { key: 'Tab' });
+
+			expect(mockSubmitInput).toHaveBeenCalledTimes(1);
+			const sent = mockSubmitInput.mock.calls[0][0];
+			expect(sent).toMatch(/^\/model claude-/);
+			expect(sent).not.toBe('/model claude');
+		});
+
+		it('Tab preserves the per-category prefix when picking a suggestion', async () => {
+			const { getByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model.dialogue claude');
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Tab' });
+
+			expect(mockSubmitInput).toHaveBeenCalledTimes(1);
+			expect(mockSubmitInput.mock.calls[0][0]).toMatch(/^\/model\.dialogue claude-/);
+		});
+
+		it('clears the editor after picking a model with Tab', async () => {
+			const { getByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model claude');
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Tab' });
 
 			expect(editor.textContent).toBe('');
 		});
