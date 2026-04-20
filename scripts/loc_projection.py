@@ -176,9 +176,15 @@ for name, desc, fn in scenarios:
     for m in MILESTONES:
         if m in results:
             day, dt = results[m]
-            weeks = day / 7
+            remaining = day - CURRENT_DAY
+            if remaining <= 0:
+                eta = "already reached"
+            elif remaining < 7:
+                eta = f"in {remaining}d"
+            else:
+                eta = f"in ~{remaining / 7:.0f} weeks"
             print(f"    {fmt_loc(m):>5s} LOC  →  {CYAN}{dt.strftime('%b %d, %Y')}{RESET}"
-                  f"  {DIM}(day {day}, ~{weeks:.0f} weeks){RESET}")
+                  f"  {DIM}({eta}){RESET}")
         else:
             print(f"    {fmt_loc(m):>5s} LOC  →  {DIM}beyond 3 years{RESET}")
     print()
