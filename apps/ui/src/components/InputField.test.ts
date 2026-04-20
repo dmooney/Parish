@@ -301,6 +301,117 @@ describe('InputField', () => {
 		});
 	});
 
+	// ── Model autocomplete (`/model …`) ─────────────────────────────────
+
+	describe('model autocomplete', () => {
+		function typeIntoEditor(editor: HTMLElement, text: string) {
+			editor.textContent = text;
+			const range = document.createRange();
+			const sel = window.getSelection();
+			if (editor.firstChild) {
+				range.setStart(editor.firstChild, text.length);
+			} else {
+				range.setStart(editor, 0);
+			}
+			range.collapse(true);
+			sel?.removeAllRanges();
+			sel?.addRange(range);
+		}
+
+		it('shows model dropdown after `/model ` is typed', async () => {
+			const { getByRole, queryByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model ');
+			await fireEvent.input(editor);
+			const listbox = queryByRole('listbox');
+			expect(listbox).toBeTruthy();
+			expect(listbox?.getAttribute('aria-label')).toBe('Model suggestions');
+		});
+
+		it('filters models by typed substring', async () => {
+			const { getByRole, queryAllByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model claude');
+			await fireEvent.input(editor);
+			const options = queryAllByRole('option');
+			expect(options.length).toBeGreaterThan(0);
+			expect(options.every((o) => o.textContent?.toLowerCase().includes('claude'))).toBe(true);
+		});
+
+		it('submits `/model <name>` when a suggestion is picked via Enter', async () => {
+			const { getByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model claude-opus');
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Enter' });
+
+			expect(mockSubmitInput).toHaveBeenCalledTimes(1);
+			const sent = mockSubmitInput.mock.calls[0][0];
+			expect(sent).toMatch(/^\/model claude-opus/);
+		});
+
+		it('preserves the per-category prefix when picking a suggestion', async () => {
+			const { getByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model.dialogue claude-opus');
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Enter' });
+
+			expect(mockSubmitInput).toHaveBeenCalledTimes(1);
+			const sent = mockSubmitInput.mock.calls[0][0];
+			expect(sent).toMatch(/^\/model\.dialogue claude-opus/);
+		});
+
+		it('clears the editor after picking a model', async () => {
+			const { getByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model claude');
+			await fireEvent.input(editor);
+			await fireEvent.keyDown(editor, { key: 'Enter' });
+
+			expect(editor.textContent).toBe('');
+		});
+
+		it('Escape dismisses the model dropdown', async () => {
+			const { getByRole, queryByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model ');
+			await fireEvent.input(editor);
+			expect(queryByRole('listbox')).toBeTruthy();
+
+			await fireEvent.keyDown(editor, { key: 'Escape' });
+			expect(queryByRole('listbox')).toBeNull();
+		});
+
+		it('does not show model dropdown for `/model` without a trailing space', async () => {
+			const { getByRole, queryByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/model');
+			await fireEvent.input(editor);
+			// Without the trailing space we still get the slash dropdown matching `/model`,
+			// but never the model-suggestions dropdown.
+			const listbox = queryByRole('listbox');
+			expect(listbox?.getAttribute('aria-label')).not.toBe('Model suggestions');
+		});
+
+		it('does not show model dropdown for unrelated commands', async () => {
+			const { getByRole, queryByRole } = render(InputField);
+			const editor = getByRole('textbox');
+
+			typeIntoEditor(editor, '/provider llama3');
+			await fireEvent.input(editor);
+			const listbox = queryByRole('listbox');
+			expect(listbox?.getAttribute('aria-label')).not.toBe('Model suggestions');
+		});
+	});
+
 	// ── Input history ───────────────────────────────────────────────────
 
 	describe('input history', () => {

@@ -2,6 +2,11 @@
 	import { streamingActive, npcsHere, mapData, pushErrorLog, formatIpcError } from '../stores/game';
 	import { submitInput } from '$lib/ipc';
 	import { filterCommands, type SlashCommand } from '$lib/slash-commands';
+	import {
+		detectModelTrigger,
+		filterModels,
+		type ModelSuggestion
+	} from '$lib/model-catalog';
 	import { knownNouns, findMatches, type KnownNoun } from '../stores/nouns';
 	import { get } from 'svelte/store';
 	import MoodIcon from './MoodIcon.svelte';
@@ -10,11 +15,15 @@
 	let editorText = $state('');
 
 	// ── Unified dropdown state ──────────────────────────────────────────────
-	type DropdownMode = 'mention' | 'slash' | null;
+	type DropdownMode = 'mention' | 'slash' | 'model' | null;
 	let dropdownMode: DropdownMode = $state(null);
 	let selectedIndex = $state(0);
 	let mentionQuery = $state('');
 	let slashQuery = $state('');
+	// `/model` autocomplete: the leading command prefix (`/model`,
+	// `/model.dialogue`, …) and the partial model name typed after it.
+	let modelPrefix = $state('/model');
+	let modelQuery = $state('');
 
 	const filteredNpcs = $derived(
 		mentionQuery === ''
@@ -25,6 +34,8 @@
 	);
 
 	const filteredCommands = $derived(filterCommands(slashQuery));
+
+	const filteredModels = $derived(filterModels(modelQuery));
 
 	// ── Input history ───────────────────────────────────────────────────────
 	const HISTORY_KEY = 'parish-input-history';
@@ -182,6 +193,9 @@
 		if (dropdownMode === 'slash' && selectedIndex >= filteredCommands.length) {
 			selectedIndex = Math.max(0, filteredCommands.length - 1);
 		}
+		if (dropdownMode === 'model' && selectedIndex >= filteredModels.length) {
+			selectedIndex = Math.max(0, filteredModels.length - 1);
+		}
 	});
 
 	// ── Editor helpers ──────────────────────────────────────────────────────
@@ -334,6 +348,29 @@
 		slashQuery = query;
 		dropdownMode = 'slash';
 		selectedIndex = 0;
+	}
+
+	// ── Model autocomplete (`/model …`, `/model.<category> …`) ──────────────
+
+	function detectModel() {
+		const trigger = detectModelTrigger(getPlainText());
+		if (trigger === null) {
+			if (dropdownMode === 'model') dropdownMode = null;
+			return;
+		}
+		modelPrefix = trigger.prefix;
+		modelQuery = trigger.query;
+		dropdownMode = 'model';
+		selectedIndex = 0;
+	}
+
+	function selectModelSuggestion(suggestion: ModelSuggestion) {
+		const command = `${modelPrefix} ${suggestion.name}`;
+		clearEditor();
+		dropdownMode = null;
+		submitInput(command).catch((err) => {
+			pushErrorLog(`Could not send "${command}": ${formatIpcError(err)}`);
+		});
 	}
 
 	// ── NPC mention chip selection ──────────────────────────────────────────
@@ -532,6 +569,10 @@
 			selectSlashCommand(filteredCommands[selectedIndex]);
 			return;
 		}
+		if (dropdownMode === 'model' && filteredModels.length > 0) {
+			selectModelSuggestion(filteredModels[selectedIndex]);
+			return;
+		}
 		syncEditorText();
 		const trimmed = editorText.trim();
 		if (!trimmed || $streamingActive) return;
@@ -557,9 +598,14 @@
 	// ── Keyboard handling ───────────────────────────────────────────────────
 
 	function handleKeydown(e: KeyboardEvent) {
-		// Dropdown navigation (mention or slash)
+		// Dropdown navigation (mention, slash, or model)
 		if (dropdownMode !== null) {
-			const items = dropdownMode === 'mention' ? filteredNpcs : filteredCommands;
+			const items =
+				dropdownMode === 'mention'
+					? filteredNpcs
+					: dropdownMode === 'slash'
+						? filteredCommands
+						: filteredModels;
 			if (items.length > 0) {
 				if (e.key === 'ArrowDown') {
 					e.preventDefault();
@@ -577,8 +623,10 @@
 					e.preventDefault();
 					if (dropdownMode === 'mention') {
 						selectNpc(filteredNpcs[selectedIndex].name);
-					} else {
+					} else if (dropdownMode === 'slash') {
 						selectSlashCommand(filteredCommands[selectedIndex]);
+					} else {
+						selectModelSuggestion(filteredModels[selectedIndex]);
 					}
 					return;
 				}
@@ -751,7 +799,10 @@
 		}
 		detectMention();
 		if (dropdownMode !== 'mention') {
-			detectSlash();
+			detectModel();
+			if (dropdownMode !== 'model') {
+				detectSlash();
+			}
 		}
 		syncEditorText();
 	}
@@ -790,7 +841,10 @@
 		if (historyIndex >= 0) historyIndex = -1;
 		if (completion.active) resetCompletion();
 		detectMention();
-		if (dropdownMode !== 'mention') detectSlash();
+		if (dropdownMode !== 'mention') {
+			detectModel();
+			if (dropdownMode !== 'model') detectSlash();
+		}
 		syncEditorText();
 	}
 </script>
@@ -828,6 +882,23 @@
 				>
 					<span class="mention-name">{cmd.command}</span>
 					<span class="mention-detail">{cmd.description}</span>
+				</li>
+			{/each}
+		</ul>
+	{/if}
+	{#if dropdownMode === 'model' && filteredModels.length > 0}
+		<ul class="mention-dropdown" role="listbox" aria-label="Model suggestions">
+			{#each filteredModels as model, i}
+				<li
+					role="option"
+					aria-selected={i === selectedIndex}
+					class="mention-item"
+					class:selected={i === selectedIndex}
+					onmousedown={(e) => { e.preventDefault(); selectModelSuggestion(model); }}
+					onmouseenter={() => (selectedIndex = i)}
+				>
+					<span class="mention-name">{model.name}</span>
+					<span class="mention-detail">{model.provider}</span>
 				</li>
 			{/each}
 		</ul>
