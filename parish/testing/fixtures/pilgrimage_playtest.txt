@@ -1,0 +1,59 @@
+# Holy Well pilgrimage play-test — demonstrates idea #11 ("Holy Well
+# Pilgrimages") from docs/design/game-ideas-brainstorm.md.
+#
+# Setup:  start in Kilteevan Village, spring morning, no pilgrims.
+# Act 1:  Establish the well is quiet on an ordinary day.
+# Act 2:  Jump to Imbolc (St. Brigid's Day, Feb 1) dawn.
+# Act 3:  Watch the pattern-day beats unfold at the well:
+#           06:00  — arrival (pilgrims gather)
+#           08:00+ — rumours from outside the parish
+#           18:00  — departure (the crowd disperses)
+# Act 4:  The next day, confirm the well is quiet again.
+
+/status
+/time
+
+# --- Act 1 — ordinary day at the well ---------------------------------
+go to the well
+look
+/time
+
+# Wait an hour — nothing pattern-day-ish should happen on March 20.
+/wait 60
+
+# --- Act 2 — jump to the pattern day ----------------------------------
+/pattern-day
+/time
+
+# --- Act 3 — the gathering ---------------------------------------------
+# The arrival beat fires on the next tick after the jump. /wait 0 is not
+# supported, so we take a single no-op tick.
+/tick
+
+# Three hours later, first rumour.
+/wait 180
+
+# Another two hours, second rumour.
+/wait 120
+
+# Another two hours — third rumour.
+/wait 120
+
+# Another two hours — fourth rumour (cap: MAX_RUMOURS_PER_DAY).
+/wait 120
+
+# Another two hours — the cap is hit, no new rumour (dusk approaches).
+/wait 120
+
+# Push to dusk (18:00) — the gathering breaks up.
+/wait 60
+
+# --- Act 4 — the well is quiet again ----------------------------------
+# Wait to the next morning. No beats should fire (wrong day).
+/wait 720
+/time
+
+# Leave and come back to confirm.
+go to the village
+go to the well
+/time

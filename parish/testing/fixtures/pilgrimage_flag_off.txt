@@ -1,0 +1,18 @@
+# Kill-switch demo: with `/flag disable pilgrimage`, the pattern day
+# should produce NO beats at the well, even on Imbolc with the player
+# standing in the ash grove. Everything else (weather, time progression,
+# NPC schedules) is unaffected.
+
+/status
+/flag disable pilgrimage
+/flag list
+
+go to the well
+/pattern-day
+/tick
+/wait 180
+/wait 120
+/wait 120
+/wait 120
+/wait 60
+/time

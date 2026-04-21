@@ -12,6 +12,7 @@ pub mod manager;
 pub mod memory;
 pub mod mood;
 pub mod overhear;
+pub mod pilgrimage;
 pub mod reactions;
 pub mod ticks;
 pub mod tier4;

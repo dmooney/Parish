@@ -129,6 +129,12 @@ pub struct NpcManager {
     /// Call `invalidate_bfs_cache` whenever the graph is replaced wholesale
     /// (e.g. after an editor live-reload or snapshot restore).
     bfs_distances_cache: Option<(LocationId, HashMap<LocationId, u32>)>,
+    /// Per-day state for the Holy Well pattern-day pilgrimage system.
+    ///
+    /// Keyed by the `NaiveDate` on which the beats fired. Keeps at most
+    /// one entry per day — stale entries are trimmed on each tick so the
+    /// map stays small across long game sessions.
+    pilgrimage_state: HashMap<chrono::NaiveDate, crate::pilgrimage::PilgrimageDayState>,
 }
 
 impl NpcManager {
@@ -146,6 +152,7 @@ impl NpcManager {
             npcs_who_know_player_name: HashSet::new(),
             recent_tier4_events: VecDeque::with_capacity(RECENT_TIER4_CAPACITY),
             bfs_distances_cache: None,
+            pilgrimage_state: HashMap::new(),
         }
     }
 
@@ -1191,6 +1198,116 @@ impl NpcManager {
                 npc.banshee_heralded = true;
             }
             report.wails.push(event);
+        }
+
+        report
+    }
+
+    /// Runs the Holy Well pattern-day pilgrimage tick.
+    ///
+    /// Checks the current game date for a configured pattern day (see
+    /// [`crate::pilgrimage`]) and, if the player is at or near the well,
+    /// emits arrival / rumour / departure beats into `world_text_log`.
+    ///
+    /// Each beat is recorded in `self.pilgrimage_state` so it cannot
+    /// fire twice for the same day. Rumours are spaced by at least
+    /// [`crate::pilgrimage::RUMOUR_INTERVAL_HOURS`] game-hours and
+    /// capped at [`crate::pilgrimage::MAX_RUMOURS_PER_DAY`].
+    ///
+    /// On the first arrival of a given pattern day, a
+    /// [`GameEvent::LifeEvent`] is published so the persistence journal
+    /// and debug panel see the event; rumours and the departure are
+    /// ambient text only.
+    ///
+    /// `_graph` is currently unused but accepted for symmetry with the
+    /// other tick methods (so wiring into each backend is uniform).
+    pub fn tick_pilgrimage(
+        &mut self,
+        clock: &GameClock,
+        _graph: &WorldGraph,
+        world_text_log: &mut Vec<String>,
+        event_bus: &parish_world::events::EventBus,
+        player_loc: LocationId,
+    ) -> crate::pilgrimage::PilgrimageReport {
+        use crate::pilgrimage::{
+            MAX_RUMOURS_PER_DAY, PatternWindow, PilgrimageBeat, PilgrimageReport, RUMOUR_END_HOUR,
+            RUMOUR_INTERVAL_HOURS, RUMOUR_START_HOUR, arrival_line, departure_line, is_near_well,
+            pattern_window, pick_rumour_index, rumour_line,
+        };
+
+        let now = clock.now();
+        let mut report = PilgrimageReport::default();
+
+        let window = pattern_window(now);
+        if matches!(window, PatternWindow::NotPatternDay) {
+            // Keep the state map small — we don't retain records for
+            // days that aren't pattern days, so there's nothing to do
+            // here. (We retain the entry from an actual pattern day
+            // until the next one, which is fine — one entry per year.)
+            return report;
+        }
+
+        let date = now.date_naive();
+        let near = is_near_well(player_loc);
+        let hour = now.hour() as u8;
+
+        let state = self.pilgrimage_state.entry(date).or_default();
+
+        // Arrival: fire once, at or after the arrival hour but only
+        // while pilgrims are still showing up. If the player stumbles on
+        // the well at dusk or later, arrival must stay silent — the
+        // crowd has already gathered without them.
+        if !state.arrival_fired
+            && near
+            && matches!(window, PatternWindow::Arrival | PatternWindow::Daytime)
+        {
+            world_text_log.push(arrival_line(near));
+            state.arrival_fired = true;
+            event_bus.publish(GameEvent::LifeEvent {
+                npc_id: NpcId(0),
+                description: format!(
+                    "Pattern day begins at {}'s well.",
+                    crate::pilgrimage::SAINT_NAME
+                ),
+                timestamp: now,
+            });
+            report.beats.push(PilgrimageBeat::Arrival);
+        }
+
+        // Rumours: only while pilgrims are present, the player is near,
+        // inside the rumour window, spaced by RUMOUR_INTERVAL_HOURS,
+        // capped at MAX_RUMOURS_PER_DAY. Arrival must have fired first —
+        // otherwise the rumour would land before the scene is set.
+        if state.arrival_fired
+            && near
+            && state.rumours_fired < MAX_RUMOURS_PER_DAY
+            && (RUMOUR_START_HOUR..=RUMOUR_END_HOUR).contains(&hour)
+        {
+            let far_enough_from_last = match state.last_rumour_hour {
+                None => true,
+                Some(last) => hour.saturating_sub(last) >= RUMOUR_INTERVAL_HOURS,
+            };
+            if far_enough_from_last {
+                let slot = state.rumours_fired;
+                let idx = pick_rumour_index(date, slot);
+                world_text_log.push(rumour_line(idx, near));
+                state.rumours_fired += 1;
+                state.last_rumour_hour = Some(hour);
+                report.beats.push(PilgrimageBeat::Rumour { index: idx });
+            }
+        }
+
+        // Departure: fires once at dusk, only if we fired arrival — we
+        // don't describe a crowd breaking up that the player never saw
+        // gather.
+        if state.arrival_fired
+            && !state.departure_fired
+            && near
+            && matches!(window, PatternWindow::Dusk | PatternWindow::PostDusk)
+        {
+            world_text_log.push(departure_line(near));
+            state.departure_fired = true;
+            report.beats.push(PilgrimageBeat::Departure);
         }
 
         report
@@ -2629,5 +2746,271 @@ mod tests {
             Some(CogTier::Tier4),
             "NPC 6 hops from player must be demoted to Tier 4"
         );
+    }
+
+    // ── Pilgrimage integration tests ─────────────────────────────────────────
+
+    /// Builds a world positioned at the Holy Well (LocationId 17) on the
+    /// morning of Imbolc (1820-02-01 06:00) — the arrival hour.
+    fn make_pattern_day_world(player_loc: LocationId) -> parish_world::WorldState {
+        use chrono::TimeZone;
+        let mut world = parish_world::WorldState::new();
+        // Use a graph wide enough to include the well id.
+        world.graph = make_chain_graph(20);
+        world.player_location = player_loc;
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 2, 1, 6, 0, 0).unwrap());
+        world
+    }
+
+    #[test]
+    fn pilgrimage_arrival_fires_at_well_on_imbolc() {
+        use crate::pilgrimage::PilgrimageBeat;
+        let mut mgr = NpcManager::new();
+        let mut world = make_pattern_day_world(crate::pilgrimage::WELL_LOCATION_ID);
+        let report = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert_eq!(report.beats.len(), 1, "arrival should fire");
+        assert!(matches!(report.beats[0], PilgrimageBeat::Arrival));
+        assert!(
+            world
+                .text_log
+                .iter()
+                .any(|l| l.contains("The pattern day has come")),
+            "arrival line should land in the text log; got: {:?}",
+            world.text_log
+        );
+    }
+
+    #[test]
+    fn pilgrimage_arrival_fires_from_adjacent_village() {
+        use crate::pilgrimage::PilgrimageBeat;
+        let mut mgr = NpcManager::new();
+        let mut world = make_pattern_day_world(crate::pilgrimage::VILLAGE_LOCATION_ID);
+        let report = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert_eq!(report.beats.len(), 1);
+        assert!(matches!(report.beats[0], PilgrimageBeat::Arrival));
+    }
+
+    #[test]
+    fn pilgrimage_silent_when_player_is_far_away() {
+        let mut mgr = NpcManager::new();
+        // Crossroads (LocationId 1) is not the well and not the village.
+        let mut world = make_pattern_day_world(LocationId(1));
+        let report = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert!(
+            report.is_empty(),
+            "no beats should fire when the player is far from the well"
+        );
+    }
+
+    #[test]
+    fn pilgrimage_silent_on_ordinary_date() {
+        use chrono::TimeZone;
+        let mut mgr = NpcManager::new();
+        let mut world = parish_world::WorldState::new();
+        world.graph = make_chain_graph(20);
+        world.player_location = crate::pilgrimage::WELL_LOCATION_ID;
+        // March 20 — no festival.
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 3, 20, 6, 0, 0).unwrap());
+        let report = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn pilgrimage_arrival_fires_only_once_per_day() {
+        let mut mgr = NpcManager::new();
+        let mut world = make_pattern_day_world(crate::pilgrimage::WELL_LOCATION_ID);
+
+        let r1 = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        let r2 = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert_eq!(r1.beats.len(), 1);
+        assert!(
+            r2.is_empty(),
+            "arrival must not fire a second time on the same day"
+        );
+    }
+
+    #[test]
+    fn pilgrimage_emits_rumours_with_spacing() {
+        use crate::pilgrimage::PilgrimageBeat;
+        use chrono::TimeZone;
+        let mut mgr = NpcManager::new();
+        let mut world = make_pattern_day_world(crate::pilgrimage::WELL_LOCATION_ID);
+
+        // Tick at 06:00 → arrival.
+        mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+
+        // 09:00 — inside the rumour window, > RUMOUR_INTERVAL_HOURS after arrival.
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 2, 1, 9, 0, 0).unwrap());
+        let r = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert_eq!(r.beats.len(), 1);
+        assert!(matches!(r.beats[0], PilgrimageBeat::Rumour { .. }));
+
+        // 10:00 — only one hour later, should NOT fire another rumour.
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 2, 1, 10, 0, 0).unwrap());
+        let r = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert!(
+            r.is_empty(),
+            "rumours must respect RUMOUR_INTERVAL_HOURS spacing"
+        );
+
+        // 11:00 — two hours after last rumour, should fire.
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 2, 1, 11, 0, 0).unwrap());
+        let r = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert_eq!(r.beats.len(), 1);
+        assert!(matches!(r.beats[0], PilgrimageBeat::Rumour { .. }));
+    }
+
+    #[test]
+    fn pilgrimage_departure_fires_at_dusk() {
+        use crate::pilgrimage::PilgrimageBeat;
+        use chrono::TimeZone;
+        let mut mgr = NpcManager::new();
+        let mut world = make_pattern_day_world(crate::pilgrimage::WELL_LOCATION_ID);
+
+        // Morning: arrival.
+        mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+
+        // 18:00 — dusk.
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 2, 1, 18, 0, 0).unwrap());
+        let r = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert!(
+            r.beats
+                .iter()
+                .any(|b| matches!(b, PilgrimageBeat::Departure)),
+            "departure beat should fire at dusk; got {:?}",
+            r.beats
+        );
+        assert!(
+            world
+                .text_log
+                .iter()
+                .any(|l| l.contains("light is going out of the ash grove")),
+            "departure line should land in the text log"
+        );
+    }
+
+    #[test]
+    fn pilgrimage_departure_does_not_fire_if_arrival_was_missed() {
+        use chrono::TimeZone;
+        // Player only shows up at dusk — the arrival scene never fired,
+        // so the departure line would be a non-sequitur. Verify it's
+        // suppressed in this case.
+        let mut mgr = NpcManager::new();
+        let mut world = parish_world::WorldState::new();
+        world.graph = make_chain_graph(20);
+        world.player_location = crate::pilgrimage::WELL_LOCATION_ID;
+        world.clock =
+            parish_world::time::GameClock::new(Utc.with_ymd_and_hms(1820, 2, 1, 18, 0, 0).unwrap());
+        let r = mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+        assert!(
+            r.is_empty(),
+            "with no prior arrival, the departure beat must not fire"
+        );
+    }
+
+    #[test]
+    fn pilgrimage_publishes_life_event_on_arrival() {
+        let mut mgr = NpcManager::new();
+        let mut world = make_pattern_day_world(crate::pilgrimage::WELL_LOCATION_ID);
+
+        let mut rx = world.event_bus.subscribe();
+        mgr.tick_pilgrimage(
+            &world.clock,
+            &world.graph,
+            &mut world.text_log,
+            &world.event_bus,
+            world.player_location,
+        );
+
+        // We should see at least one LifeEvent from the arrival.
+        let evt = rx.try_recv().expect("arrival should publish a life event");
+        assert!(matches!(
+            evt,
+            parish_world::events::GameEvent::LifeEvent { .. }
+        ));
     }
 }

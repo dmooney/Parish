@@ -219,6 +219,53 @@ impl GameTestHarness {
         // hours argument is detected by parsing the last whitespace-separated
         // token as an integer — if parsing fails, the whole remainder is the
         // name and the default lead time is used.
+        // Test-harness-only /pattern-day command: jumps the game clock to
+        // the next Imbolc (February 1) dawn, so play-test scripts can
+        // exercise the Holy Well pilgrimage system without waiting for
+        // the calendar. Resets any stale per-day pilgrimage state so the
+        // beats will fire fresh.
+        if trimmed == "/pattern-day" {
+            use chrono::{Datelike, NaiveDate, TimeZone, Timelike, Utc};
+            let now = self.app.world.clock.now();
+            let year = now.year();
+            let candidate = NaiveDate::from_ymd_opt(
+                year,
+                crate::npc::pilgrimage::PATTERN_MONTH,
+                crate::npc::pilgrimage::PATTERN_DAY,
+            )
+            .expect("feb 1 is a valid date");
+            let target_year = if now.date_naive() > candidate
+                || (now.date_naive() == candidate
+                    && now.hour() as u8 >= crate::npc::pilgrimage::ARRIVAL_HOUR)
+            {
+                year + 1
+            } else {
+                year
+            };
+            let target = Utc
+                .with_ymd_and_hms(
+                    target_year,
+                    crate::npc::pilgrimage::PATTERN_MONTH,
+                    crate::npc::pilgrimage::PATTERN_DAY,
+                    crate::npc::pilgrimage::ARRIVAL_HOUR as u32,
+                    0,
+                    0,
+                )
+                .single()
+                .expect("feb 1 06:00 is a valid timestamp");
+            let delta_minutes = (target - now).num_minutes();
+            if delta_minutes > 0 {
+                self.advance_time(delta_minutes);
+            }
+            let msg = format!(
+                "Jumped to {} dawn ({}).",
+                target.format("%B %-d"),
+                target.format("%Y-%m-%d %H:%M")
+            );
+            self.app.world.log(msg.clone());
+            return ActionResult::SystemCommand { response: msg };
+        }
+
         if let Some(rest) = trimmed.strip_prefix("/doom ") {
             let rest = rest.trim();
             let (name, hours): (&str, i64) = match rest.rsplit_once(char::is_whitespace) {
@@ -293,6 +340,22 @@ impl GameTestHarness {
                     report.wails.len(),
                     report.deaths.len()
                 ));
+            }
+        }
+
+        // Pilgrimage tick after every action; default-on unless explicitly disabled.
+        if !self.app.flags.is_disabled("pilgrimage") {
+            let player_loc = self.app.world.player_location;
+            let report = self.app.npc_manager.tick_pilgrimage(
+                &self.app.world.clock,
+                &self.app.world.graph,
+                &mut self.app.world.text_log,
+                &self.app.world.event_bus,
+                player_loc,
+            );
+            if !report.is_empty() {
+                self.app
+                    .debug_event(format!("[pilgrimage] {} beat(s)", report.beats.len()));
             }
         }
 
@@ -433,6 +496,23 @@ impl GameTestHarness {
                     report.wails.len(),
                     report.deaths.len()
                 ));
+            }
+        }
+
+        // Pilgrimage tick: pattern-day gathering at the Holy Well.
+        // Default-on; gated by the `pilgrimage` feature flag being explicitly disabled.
+        if !self.app.flags.is_disabled("pilgrimage") {
+            let player_loc = self.app.world.player_location;
+            let report = self.app.npc_manager.tick_pilgrimage(
+                &self.app.world.clock,
+                &self.app.world.graph,
+                &mut self.app.world.text_log,
+                &self.app.world.event_bus,
+                player_loc,
+            );
+            if !report.is_empty() {
+                self.app
+                    .debug_event(format!("[pilgrimage] {} beat(s)", report.beats.len()));
             }
         }
 
@@ -579,10 +659,31 @@ impl GameTestHarness {
                 // Banshee tick is handled by the post-action block in execute(),
                 // so we don't call it here to avoid processing doomed NPCs twice.
 
-                let msg = if count == 0 {
+                // Pilgrimage tick: pattern-day gathering at the Holy Well.
+                let banshee_count = 0;
+                let mut pilgrimage_count = 0;
+                if !self.app.flags.is_disabled("pilgrimage") {
+                    let player_loc = self.app.world.player_location;
+                    let report = self.app.npc_manager.tick_pilgrimage(
+                        &self.app.world.clock,
+                        &self.app.world.graph,
+                        &mut self.app.world.text_log,
+                        &self.app.world.event_bus,
+                        player_loc,
+                    );
+                    pilgrimage_count = report.beats.len();
+                }
+                let ambient_count = banshee_count + pilgrimage_count;
+
+                let msg = if count == 0 && ambient_count == 0 {
                     "No NPC activity.".to_string()
-                } else {
+                } else if ambient_count == 0 {
                     format!("{} schedule event(s) processed.", count)
+                } else {
+                    format!(
+                        "{} schedule event(s) processed, {} ambient event(s).",
+                        count, ambient_count
+                    )
                 };
                 self.app.world.log(msg.clone());
                 return ActionResult::SystemCommand { response: msg };

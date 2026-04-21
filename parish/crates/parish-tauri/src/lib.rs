@@ -1052,9 +1052,14 @@ pub fn run() {
 
                             // Banshee tick — herald and finalise doomed NPCs.
                             // Default-on; kill-switched by the `banshee` feature flag.
-                            let banshee_enabled = {
+                            // Pilgrimage tick snapshotted together for consistency
+                            // with the server backend.
+                            let (banshee_enabled, pilgrimage_enabled) = {
                                 let cfg = state_tick.config.lock().await;
-                                !cfg.flags.is_disabled("banshee")
+                                (
+                                    !cfg.flags.is_disabled("banshee"),
+                                    !cfg.flags.is_disabled("pilgrimage"),
+                                )
                             };
                             let banshee_report = if banshee_enabled {
                                 let world_ref = &mut *world;
@@ -1081,6 +1086,35 @@ pub fn run() {
                                         "{} wail(s), {} death(s)",
                                         banshee_report.wails.len(),
                                         banshee_report.deaths.len()
+                                    ),
+                                });
+                            }
+
+                            // Pilgrimage tick — pattern-day gathering at the Holy Well.
+                            let pilgrimage_report = if pilgrimage_enabled {
+                                let world_ref = &mut *world;
+                                npc_mgr.tick_pilgrimage(
+                                    &world_ref.clock,
+                                    &world_ref.graph,
+                                    &mut world_ref.text_log,
+                                    &world_ref.event_bus,
+                                    world_ref.player_location,
+                                )
+                            } else {
+                                parish_core::npc::pilgrimage::PilgrimageReport::default()
+                            };
+                            if !pilgrimage_report.is_empty() {
+                                let mut debug_events =
+                                    state_tick.debug_events.lock().await;
+                                if debug_events.len() >= crate::DEBUG_EVENT_CAPACITY {
+                                    debug_events.pop_front();
+                                }
+                                debug_events.push_back(DebugEvent {
+                                    timestamp: world.clock.now().format("%H:%M %Y-%m-%d").to_string(),
+                                    category: "pilgrimage".to_string(),
+                                    message: format!(
+                                        "{} beat(s)",
+                                        pilgrimage_report.beats.len()
                                     ),
                                 });
                             }
