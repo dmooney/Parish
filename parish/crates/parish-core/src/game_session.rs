@@ -28,6 +28,7 @@ use crate::world::encounter::check_encounter;
 use crate::world::movement::{MovementResult, resolve_movement};
 use crate::world::time::TimeOfDay;
 use crate::world::transport::TransportMode;
+use crate::world::wayfarers;
 use crate::world::{Location, LocationId, WorldState};
 
 /// Monotonically increasing request ID counter for reaction inference calls.
@@ -243,6 +244,49 @@ pub fn apply_movement(
                 ..Default::default()
             }
         }
+    }
+}
+
+/// Rolls a travel encounter for the just-completed journey and logs it to `world`.
+///
+/// Call this immediately after a successful [`apply_movement`] (i.e. when
+/// `effects.world_changed` is true). Uses the path endpoints from
+/// `effects.travel_start` to build a deterministic seed so the same journey
+/// at the same clock time always produces the same encounter.
+///
+/// Gate this behind the `travel-encounters` feature flag at the call site:
+/// ```ignore
+/// if effects.world_changed && !flags.is_disabled("travel-encounters") {
+///     apply_travel_encounter(world, &effects);
+/// }
+/// ```
+pub fn apply_travel_encounter(world: &mut WorldState, effects: &GameEffects) {
+    let Some(ts) = effects.travel_start.as_ref() else {
+        return;
+    };
+    let from_id = ts
+        .waypoints
+        .first()
+        .and_then(|w| w.id.parse::<u32>().ok())
+        .map(LocationId)
+        .unwrap_or(world.player_location);
+    let to_id = ts
+        .waypoints
+        .last()
+        .and_then(|w| w.id.parse::<u32>().ok())
+        .map(LocationId)
+        .unwrap_or(world.player_location);
+    let clock_minutes = {
+        use chrono::Timelike;
+        let now = world.clock.now();
+        now.timestamp() / 60
+    };
+    let seed = wayfarers::encounter_seed(clock_minutes, from_id, to_id);
+    let time = world.clock.time_of_day();
+    let season = world.clock.season();
+    let weather = world.weather;
+    if let Some(enc) = wayfarers::resolve_encounter(time, season, weather, seed) {
+        world.log(format!("  · {}", enc.text));
     }
 }
 

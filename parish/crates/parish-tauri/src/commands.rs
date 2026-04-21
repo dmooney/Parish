@@ -668,22 +668,35 @@ async fn handle_game_input(
 /// [`parish_core::game_session::apply_movement`], then emits the returned
 /// effects to the frontend.
 async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHandle) {
-    use parish_core::game_session::apply_movement;
+    use parish_core::game_session::{apply_movement, apply_travel_encounter};
 
     let transport = state.transport.default_mode().clone();
 
     // Apply all movement state changes within a single lock scope to prevent
     // TOCTOU races.
-    let effects = {
+    let (effects, encounter_line) = {
         let mut world = state.world.lock().await;
         let mut npc_manager = state.npc_manager.lock().await;
-        apply_movement(
+        let effects = apply_movement(
             &mut world,
             &mut npc_manager,
             &state.reaction_templates,
             target,
             &transport,
-        )
+        );
+        let enc_line = if effects.world_changed {
+            let config = state.config.lock().await;
+            if !config.flags.is_disabled("travel-encounters") {
+                let len_before = world.text_log.len();
+                apply_travel_encounter(&mut world, &effects);
+                world.text_log.get(len_before).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (effects, enc_line)
     };
 
     // Emit travel-start animation payload first
@@ -698,6 +711,11 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
             None => text_log(msg.source, &msg.text),
         };
         let _ = app.emit(EVENT_TEXT_LOG, payload);
+    }
+
+    // Emit travel encounter line if one fired
+    if let Some(line) = encounter_line {
+        let _ = app.emit(EVENT_TEXT_LOG, text_log("system", &line));
     }
 
     // Emit NPC arrival reactions — stream gradually like normal NPC dialogue
