@@ -663,7 +663,9 @@ async fn handle_game_input(raw: String, addressed_to: Vec<String>, state: &Arc<A
 /// [`parish_core::game_session::apply_movement`], then emits the returned
 /// effects over the event bus.
 async fn handle_movement(target: &str, state: &Arc<AppState>) {
-    use parish_core::game_session::{apply_movement, apply_travel_encounter};
+    use parish_core::game_session::{
+        apply_movement, enrich_travel_encounter, roll_travel_encounter,
+    };
 
     let transport = state.transport.default_mode().clone();
     let reaction_templates = state
@@ -673,7 +675,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
         .unwrap_or_default();
 
     // Apply movement within a single lock scope to prevent TOCTOU races.
-    let (effects, encounter_line) = {
+    let (effects, rolled_encounter) = {
         let mut world = state.world.lock().await;
         let mut npc_manager = state.npc_manager.lock().await;
         let effects = apply_movement(
@@ -688,14 +690,44 @@ async fn handle_movement(target: &str, state: &Arc<AppState>) {
             let cfg = state.config.lock().await;
             !cfg.flags.is_disabled("travel-encounters")
         };
-        let enc_line = if effects.world_changed && encounters_enabled {
-            let len_before = world.text_log.len();
-            apply_travel_encounter(&mut world, &effects);
-            world.text_log.get(len_before).cloned()
+        let rolled = if effects.world_changed && encounters_enabled {
+            roll_travel_encounter(&world, &effects)
         } else {
             None
         };
-        (effects, enc_line)
+        (effects, rolled)
+    };
+
+    // Resolve the encounter text — LLM-enriched if a reaction client is
+    // available and the `travel-encounters-llm` flag is not disabled.
+    // Falls back to canned text on any error/timeout.
+    let encounter_line: Option<String> = if let Some(rolled) = rolled_encounter.as_ref() {
+        let llm_enabled = {
+            let cfg = state.config.lock().await;
+            !cfg.flags.is_disabled("travel-encounters-llm")
+        };
+        let (reaction_client, reaction_model) = if llm_enabled {
+            let config = state.config.lock().await;
+            let base_client = state.client.lock().await;
+            config.resolve_category_client(InferenceCategory::Reaction, base_client.as_ref())
+        } else {
+            (None, String::new())
+        };
+        let text = if let Some(client) = reaction_client.as_ref() {
+            enrich_travel_encounter(rolled, client, &reaction_model, 15).await
+        } else {
+            rolled.canned.text.clone()
+        };
+        // Log the (possibly enriched) line into the world text log so
+        // persistence and debug panels see exactly one encounter line.
+        let formatted = format!("  · {text}");
+        {
+            let mut world = state.world.lock().await;
+            world.log(formatted.clone());
+        }
+        Some(formatted)
+    } else {
+        None
     };
 
     // Emit travel-start animation payload before text messages

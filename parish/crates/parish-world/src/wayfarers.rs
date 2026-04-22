@@ -49,8 +49,8 @@ fn pick<'a, T>(rng: &mut StdRng, items: &'a [T]) -> &'a T {
     &items[idx]
 }
 
-/// Lines keyed by (time, weather-bucket, season). Each function returns
-/// a slice of candidates; the caller picks one deterministically.
+// Lines keyed by (time, weather-bucket, season). Each function returns
+// a slice of candidates; the caller picks one deterministically.
 
 fn dawn_lines(season: Season, weather: Weather) -> &'static [&'static str] {
     match (season, weather) {
@@ -216,6 +216,100 @@ pub fn encounter_seed(clock_minutes: i64, from: LocationId, to: LocationId) -> u
         .wrapping_add(c.wrapping_mul(16777619))
 }
 
+/// Collect inspiration lines for a given (time, season, weather) across *all*
+/// season/weather variants for that time of day, not just the matching one.
+/// This gives the LLM a broader sense of tone without locking it into the
+/// exact canned bucket for the current conditions.
+fn inspiration_pool(time: TimeOfDay) -> Vec<&'static str> {
+    let seasons = [
+        Season::Spring,
+        Season::Summer,
+        Season::Autumn,
+        Season::Winter,
+    ];
+    let weathers = [
+        Weather::Clear,
+        Weather::Fog,
+        Weather::LightRain,
+        Weather::Storm,
+        Weather::HeavyRain,
+    ];
+    let mut out: Vec<&'static str> = Vec::new();
+    for s in seasons {
+        for w in weathers {
+            let lines = match time {
+                TimeOfDay::Dawn => dawn_lines(s, w),
+                TimeOfDay::Morning => morning_lines(s, w),
+                TimeOfDay::Midday => midday_lines(s, w),
+                TimeOfDay::Afternoon => afternoon_lines(s, w),
+                TimeOfDay::Dusk => dusk_lines(s, w),
+                TimeOfDay::Night => night_lines(s, w),
+                TimeOfDay::Midnight => midnight_lines(s, w),
+            };
+            for l in lines {
+                if !out.contains(l) {
+                    out.push(l);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Prompt pair (system, context) for an LLM travel-encounter generation call.
+///
+/// The canned line is passed as the seed-variant and 4 other lines from the
+/// same time-of-day are drawn (deterministically, using the seed) as
+/// inspirations. The LLM is asked to write a single new line in the same
+/// register — short, sensory, period-correct for 1820 rural Ireland, and
+/// without stage-direction bullets or NPC dialogue.
+pub fn build_enrichment_prompt(
+    canned: &WayfarerEncounter,
+    time: TimeOfDay,
+    season: Season,
+    weather: Weather,
+    seed: u64,
+) -> (String, String) {
+    let system = "You are writing one line of ambient narration for a walking \
+scene in rural Ireland, 1820. Output a single sentence — at most two — \
+describing something sensory the player notices on the road. Examples of \
+tone will be provided; match them in length, rhythm, and register. \
+Do not use quotation marks, stage directions, or bullet points. Do not \
+name specific NPCs. Do not refer to the player as 'you' more than once. \
+Do not use anachronistic vocabulary (no cars, bikes, watches, minutes). \
+Write one line only, no preamble, no explanation."
+        .to_string();
+
+    let pool = inspiration_pool(time);
+    let mut rng = StdRng::seed_from_u64(seed ^ 0x9E3779B97F4A7C15);
+    // Pick up to 4 distinct inspiration lines other than the canned one.
+    let mut picks: Vec<&'static str> = Vec::new();
+    let mut attempts = 0;
+    while picks.len() < 4 && attempts < 40 && !pool.is_empty() {
+        let idx = rng.gen_range(0..pool.len());
+        let line = pool[idx];
+        if line != canned.text && !picks.contains(&line) {
+            picks.push(line);
+        }
+        attempts += 1;
+    }
+
+    let mut context = String::new();
+    context.push_str(&format!(
+        "Conditions: {time} on a {season:?} {weather} day.\n\n"
+    ));
+    context.push_str("Example lines in the right register:\n");
+    for p in &picks {
+        context.push_str(&format!("- {p}\n"));
+    }
+    context.push_str(&format!("- {}\n", canned.text));
+    context.push_str(
+        "\nWrite ONE new line in the same register. \
+Do not copy any of the examples. Just the line — no quotes, no explanation.\n",
+    );
+    (system, context)
+}
+
 /// Resolve a travel encounter.
 ///
 /// Returns `Some(encounter)` if the dice roll triggers, `None` otherwise.
@@ -314,6 +408,58 @@ mod tests {
         }
         // Morning+storm prob = 0.30; should be well below normal 60
         assert!(hits < 55, "Storm hits={hits}, should suppress encounters");
+    }
+
+    #[test]
+    fn inspiration_pool_is_nonempty_for_all_times() {
+        let times = [
+            TimeOfDay::Dawn,
+            TimeOfDay::Morning,
+            TimeOfDay::Midday,
+            TimeOfDay::Afternoon,
+            TimeOfDay::Dusk,
+            TimeOfDay::Night,
+            TimeOfDay::Midnight,
+        ];
+        for t in times {
+            let pool = inspiration_pool(t);
+            assert!(pool.len() >= 3, "Pool too small for {t:?}: {}", pool.len());
+        }
+    }
+
+    #[test]
+    fn enrichment_prompt_contains_canned_and_conditions() {
+        let canned = WayfarerEncounter {
+            text: "CANNED_SEED_LINE".to_string(),
+        };
+        let (system, context) = build_enrichment_prompt(
+            &canned,
+            TimeOfDay::Morning,
+            Season::Summer,
+            Weather::Clear,
+            12345,
+        );
+        assert!(system.to_lowercase().contains("1820"));
+        assert!(context.contains("CANNED_SEED_LINE"));
+        assert!(context.contains("Morning"));
+        // Four inspirations + canned = 5 "- " prefixed lines minimum
+        let hyphen_lines = context
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count();
+        assert!(hyphen_lines >= 4, "Too few examples: {hyphen_lines}");
+    }
+
+    #[test]
+    fn enrichment_prompt_examples_are_deterministic() {
+        let canned = WayfarerEncounter {
+            text: "SEED".to_string(),
+        };
+        let (_, ctx1) =
+            build_enrichment_prompt(&canned, TimeOfDay::Dusk, Season::Autumn, Weather::Fog, 42);
+        let (_, ctx2) =
+            build_enrichment_prompt(&canned, TimeOfDay::Dusk, Season::Autumn, Weather::Fog, 42);
+        assert_eq!(ctx1, ctx2);
     }
 
     #[test]

@@ -28,7 +28,6 @@ use crate::world::encounter::check_encounter;
 use crate::world::movement::{MovementResult, resolve_movement};
 use crate::world::time::TimeOfDay;
 use crate::world::transport::TransportMode;
-use crate::world::wayfarers;
 use crate::world::{Location, LocationId, WorldState};
 
 /// Monotonically increasing request ID counter for reaction inference calls.
@@ -247,6 +246,102 @@ pub fn apply_movement(
     }
 }
 
+/// Rolled but not yet logged/committed travel encounter, returned from
+/// [`roll_travel_encounter`] so backends can optionally enrich the text via
+/// an LLM before committing.
+#[derive(Debug, Clone)]
+pub struct RolledEncounter {
+    /// The canned encounter — safe fallback if LLM enrichment fails.
+    pub canned: parish_world::wayfarers::WayfarerEncounter,
+    /// Deterministic seed derived from clock + path (stable for this journey).
+    pub seed: u64,
+    /// Current time of day (drives pool selection + prompt context).
+    pub time: TimeOfDay,
+    /// Current season.
+    pub season: crate::world::time::Season,
+    /// Current weather.
+    pub weather: parish_world::Weather,
+}
+
+/// Rolls a travel encounter without logging it.
+///
+/// Returns `Some(RolledEncounter)` if the dice roll triggers for this
+/// journey, `None` otherwise. Backends can then either log
+/// [`RolledEncounter::canned`] directly or await
+/// [`enrich_travel_encounter`] to upgrade the line via an LLM call.
+pub fn roll_travel_encounter(world: &WorldState, effects: &GameEffects) -> Option<RolledEncounter> {
+    let ts = effects.travel_start.as_ref()?;
+    let from_id = ts
+        .waypoints
+        .first()
+        .and_then(|w| w.id.parse::<u32>().ok())
+        .map(LocationId)
+        .unwrap_or(world.player_location);
+    let to_id = ts
+        .waypoints
+        .last()
+        .and_then(|w| w.id.parse::<u32>().ok())
+        .map(LocationId)
+        .unwrap_or(world.player_location);
+    let clock_minutes = world.clock.now().timestamp() / 60;
+    let seed = parish_world::wayfarers::encounter_seed(clock_minutes, from_id, to_id);
+    let time = world.clock.time_of_day();
+    let season = world.clock.season();
+    let weather = world.weather;
+    let canned = parish_world::wayfarers::resolve_encounter(time, season, weather, seed)?;
+    Some(RolledEncounter {
+        canned,
+        seed,
+        time,
+        season,
+        weather,
+    })
+}
+
+/// Upgrades a rolled encounter via an LLM call, using the canned text as a
+/// few-shot seed. Falls back to the canned line on timeout, empty output,
+/// or any error. Always returns a single formatted line ready to log.
+pub async fn enrich_travel_encounter(
+    rolled: &RolledEncounter,
+    client: &AnyClient,
+    model: &str,
+    timeout_secs: u64,
+) -> String {
+    let (system, context) = parish_world::wayfarers::build_enrichment_prompt(
+        &rolled.canned,
+        rolled.time,
+        rolled.season,
+        rolled.weather,
+        rolled.seed,
+    );
+
+    let timeout = Duration::from_secs(timeout_secs);
+    let result = tokio::time::timeout(
+        timeout,
+        client.generate(model, &context, Some(&system), Some(80), None),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(text)) => {
+            let trimmed = text.trim();
+            let cleaned = trimmed.split("---").next().unwrap_or(trimmed).trim();
+            // Strip leading "- " / "* " if the model returned a bullet anyway.
+            let cleaned = cleaned.trim_start_matches(['-', '*', ' ']).trim();
+            // Strip surrounding quotes if the model added them.
+            let cleaned = cleaned.trim_matches(|c: char| c == '"' || c == '\'').trim();
+            // Keep only the first line — some models add follow-ups.
+            let first_line = cleaned.lines().next().unwrap_or("").trim();
+            if first_line.is_empty() {
+                rolled.canned.text.clone()
+            } else {
+                first_line.to_string()
+            }
+        }
+        _ => rolled.canned.text.clone(),
+    }
+}
+
 /// Rolls a travel encounter for the just-completed journey and logs it to `world`.
 ///
 /// Call this immediately after a successful [`apply_movement`] (i.e. when
@@ -261,32 +356,8 @@ pub fn apply_movement(
 /// }
 /// ```
 pub fn apply_travel_encounter(world: &mut WorldState, effects: &GameEffects) {
-    let Some(ts) = effects.travel_start.as_ref() else {
-        return;
-    };
-    let from_id = ts
-        .waypoints
-        .first()
-        .and_then(|w| w.id.parse::<u32>().ok())
-        .map(LocationId)
-        .unwrap_or(world.player_location);
-    let to_id = ts
-        .waypoints
-        .last()
-        .and_then(|w| w.id.parse::<u32>().ok())
-        .map(LocationId)
-        .unwrap_or(world.player_location);
-    let clock_minutes = {
-        use chrono::Timelike;
-        let now = world.clock.now();
-        now.timestamp() / 60
-    };
-    let seed = wayfarers::encounter_seed(clock_minutes, from_id, to_id);
-    let time = world.clock.time_of_day();
-    let season = world.clock.season();
-    let weather = world.weather;
-    if let Some(enc) = wayfarers::resolve_encounter(time, season, weather, seed) {
-        world.log(format!("  · {}", enc.text));
+    if let Some(rolled) = roll_travel_encounter(world, effects) {
+        world.log(format!("  · {}", rolled.canned.text));
     }
 }
 
