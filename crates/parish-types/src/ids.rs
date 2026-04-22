@@ -432,10 +432,7 @@ mod tests {
     #[test]
     fn extract_dialogue_empty_string() {
         let buf = r#"{"dialogue": ""}"#;
-        assert_eq!(
-            extract_dialogue_from_partial_json(buf),
-            Some(String::new())
-        );
+        assert_eq!(extract_dialogue_from_partial_json(buf), Some(String::new()));
     }
 
     // ── LanguageHint serde ───────────────────────────────────────────────────

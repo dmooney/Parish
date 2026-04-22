@@ -1035,6 +1035,7 @@ async fn handle_headless_game_input(
                             None,
                             Some(0.7),
                             parish_core::inference::InferencePriority::Interactive,
+                            true,
                         )
                         .await
                     {

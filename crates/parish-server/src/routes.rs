@@ -783,6 +783,7 @@ async fn run_npc_turn(
             None,
             Some(0.7),
             parish_core::inference::InferencePriority::Interactive,
+            true,
         )
         .await;
 
