@@ -35,72 +35,33 @@ fn authed_router_with_email(email: &str, router: Router) -> Router {
 
 // ── #332 — Admin-command gate ─────────────────────────────────────────────────
 
-/// Shim that mirrors the admin-command guard from `submit_input`.
-///
-/// We cannot call the real handler without a full `AppState`, so we test the
-/// `is_admin_command` + `check_admin` logic via a thin inline shim.
+/// Thin handler that delegates to the real `is_admin_command` + `check_admin`
+/// from `parish_server::routes`, matching the flow in `submit_input`.
 mod admin_guard {
     use axum::Json;
     use axum::extract::Extension;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
+    use parish_core::input::{InputResult, classify_input};
     use parish_server::cf_auth::AuthContext;
+    use parish_server::routes::{check_admin, is_admin_command};
 
     #[derive(serde::Deserialize)]
     pub struct Req {
         pub text: String,
     }
 
-    pub fn is_admin_command(text: &str) -> bool {
-        let lower = text.trim().to_ascii_lowercase();
-        const PREFIXES: &[&str] = &[
-            "/key",
-            "/provider",
-            "/model",
-            "/cloud",
-            "/key.",
-            "/model.",
-            "/provider.",
-        ];
-        PREFIXES.iter().any(|p| {
-            if p.ends_with('.') {
-                lower.starts_with(*p)
-            } else {
-                lower == *p || lower.starts_with(&format!("{} ", p))
-            }
-        })
-    }
-
-    pub fn check_admin(email: &str, cmd: &str) -> Result<(), StatusCode> {
-        match std::env::var("PARISH_ADMIN_EMAILS") {
-            Ok(list) => {
-                if list.split(',').any(|e| e.trim() == email) {
-                    Ok(())
-                } else {
-                    tracing::warn!(user = %email, command = %cmd, "admin command rejected");
-                    Err(StatusCode::FORBIDDEN)
-                }
-            }
-            Err(_) => {
-                if cfg!(debug_assertions) {
-                    Ok(())
-                } else {
-                    tracing::warn!(user = %email, command = %cmd, "admin command rejected");
-                    Err(StatusCode::FORBIDDEN)
-                }
-            }
-        }
-    }
-
     pub async fn handler(
         Extension(auth): Extension<AuthContext>,
         Json(body): Json<Req>,
     ) -> impl IntoResponse {
-        if is_admin_command(&body.text)
-            && let Err(status) = check_admin(&auth.email, &body.text)
-        {
-            return status;
+        if let InputResult::SystemCommand(cmd) = classify_input(&body.text) {
+            if is_admin_command(&cmd)
+                && let Err(status) = check_admin(&auth.email, &body.text)
+            {
+                return status;
+            }
         }
         StatusCode::OK
     }
@@ -337,26 +298,15 @@ async fn create_branch_65_char_name_is_400() {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
+    use parish_server::routes::validate_branch_name;
+
     #[derive(serde::Deserialize)]
     struct Req {
         name: String,
     }
 
-    fn validate(name: &str) -> Result<(), StatusCode> {
-        if name.is_empty() || name.len() > 64 {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ' ')
-        {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        Ok(())
-    }
-
     async fn handler(Json(body): Json<Req>) -> impl IntoResponse {
-        match validate(&body.name) {
+        match validate_branch_name(&body.name) {
             Ok(()) => StatusCode::OK,
             Err(s) => s,
         }
@@ -386,26 +336,15 @@ async fn create_branch_valid_name_passes_validation() {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
+    use parish_server::routes::validate_branch_name;
+
     #[derive(serde::Deserialize)]
     struct Req {
         name: String,
     }
 
-    fn validate(name: &str) -> Result<(), StatusCode> {
-        if name.is_empty() || name.len() > 64 {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ' ')
-        {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        Ok(())
-    }
-
     async fn handler(Json(body): Json<Req>) -> impl IntoResponse {
-        match validate(&body.name) {
+        match validate_branch_name(&body.name) {
             Ok(()) => StatusCode::OK,
             Err(s) => s,
         }
