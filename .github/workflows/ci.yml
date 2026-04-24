@@ -1,5 +1,12 @@
 name: Parish CI
 
+# Jobs run on the self-hosted [macOS, ARM64] runner `parish-mac-arm64`.
+# The `if: runner.os == 'Linux'` branches are intentionally dead on
+# production CI — they exist so `just act-*` (act via Linux container,
+# `-P self-hosted=…` in .actrc) reproduces the workflow faithfully.
+# Real Linux-regression coverage is a known gap; see docs/agent/act-local.md
+# if we ever register a Linux self-hosted runner to close it.
+
 on:
   pull_request:
   push:
@@ -22,7 +29,7 @@ permissions:
 jobs:
   rust-quality-gate:
     name: Rust quality gate (fmt, clippy, tests)
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,7 +67,7 @@ jobs:
 
   rust-multi-channel:
     name: Rust channel matrix
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS, ARM64]
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +100,7 @@ jobs:
 
   game-harness:
     name: Full game harness fixture sweep
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,7 +134,7 @@ jobs:
 
   ui-quality:
     name: UI quality (build, check, unit)
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS, ARM64]
     defaults:
       run:
         working-directory: apps/ui
@@ -156,7 +163,7 @@ jobs:
 
   ui-e2e:
     name: UI Playwright e2e
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS, ARM64]
     defaults:
       run:
         working-directory: apps/ui
