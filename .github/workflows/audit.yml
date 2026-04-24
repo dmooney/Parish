@@ -27,7 +27,6 @@ jobs:
   cargo-audit:
     name: cargo audit
     runs-on: self-hosted
-    container: catthehacker/ubuntu:full-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
