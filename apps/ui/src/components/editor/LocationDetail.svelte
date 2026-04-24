@@ -145,6 +145,15 @@
 		}
 	}
 
+	// Track the last selection we animated to, so locations-array updates
+	// that don't change the selected location can refresh the GeoJSON
+	// sources without triggering another easeTo animation (#410). Without
+	// this, every keystroke in a text field would dispatch a full camera
+	// pan — persistLocations swaps a new `locations` array into the store,
+	// re-firing the reactive statement below even though the map center
+	// hasn't actually moved.
+	let lastAnimatedSelectedId: number | null = null;
+
 	function setMapData(nextLocations: LocationData[], nextSelectedId: number | null, preview?: { id: number; lat: number; lon: number }) {
 		if (!map || !mapLoaded) return;
 		const { features, edgeFeatures } = buildEditorMapData(nextLocations, nextSelectedId, preview);
@@ -156,10 +165,21 @@
 			type: 'FeatureCollection',
 			features: edgeFeatures
 		});
+		// Animate the camera only when the selection changes or a drag
+		// preview is active; unrelated field edits that bumped the
+		// locations array must not cause camera jitter.
+		const selectionChanged = nextSelectedId !== lastAnimatedSelectedId;
+		if (!selectionChanged && !preview) return;
 		const center = getEditorMapCenter(features, nextSelectedId, preview);
 		if (!center) return;
 		const [lon, lat] = center;
 		map.easeTo({ center: [lon, lat], duration: 250 });
+		if (!preview) {
+			// Preview frames stream continuously during a drag; don't mark
+			// the selection as "animated" from them or we'd suppress the
+			// final settle-on-release animation.
+			lastAnimatedSelectedId = nextSelectedId;
+		}
 	}
 
 	function destroyMap() {
