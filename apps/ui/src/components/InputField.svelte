@@ -468,8 +468,19 @@
 
 	async function quickTravel(locationName: string) {
 		if ($streamingActive) return;
+		// #354: if the player is mid-composition, don't clobber their
+		// draft. The quick-travel chip is an explicit nav action, but
+		// losing work silently (and without saving to history so ArrowUp
+		// can't recover it) is worse than forcing the user to either
+		// send or clear their draft first. Surface a clear reminder and
+		// bail out.
+		if (!isEditorEmpty()) {
+			pushErrorLog(
+				`Send or clear the draft in the input before travelling to ${locationName}.`
+			);
+			return;
+		}
 		selectedNpcRealNames = [];
-		clearEditor();
 		try {
 			await submitInput(`go to ${locationName}`);
 		} catch (err) {
