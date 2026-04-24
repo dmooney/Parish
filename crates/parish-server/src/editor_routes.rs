@@ -304,23 +304,57 @@ pub async fn editor_update_npcs(
         }
     }
 
-    let mut sessions = state.editor_sessions.lock().await;
-    let session = sessions.get_mut(&email).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "no mod is open in the editor".to_string(),
-        )
-    })?;
-    let snap = session.snapshot.as_mut().ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "no mod is open in the editor".to_string(),
-        )
-    })?;
-    snap.npcs = npcs;
-    parish_core::editor::validate::validate_snapshot(snap);
-    let validation = snap.validation.clone();
-    session.version = session.version.wrapping_add(1);
+    // Offload the CPU-bound validate_snapshot to a blocking thread so
+    // the editor_sessions lock isn't held across the O(NPCs × locations)
+    // work (#464). We clone the current snapshot out under a brief
+    // lock, mutate the clone's npcs field + run validate on the clone
+    // inside spawn_blocking, then re-acquire the lock and atomically
+    // overlay only the npcs + validation fields onto the current
+    // session snapshot. Overlaying (rather than wholesale replacing)
+    // preserves any concurrent edits to *other* fields (e.g. locations)
+    // so we don't regress Tauri's last-write-wins-per-field semantics.
+    let snapshot_clone = {
+        let sessions = state.editor_sessions.lock().await;
+        sessions
+            .get(&email)
+            .and_then(|s| s.snapshot.clone())
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "no mod is open in the editor".to_string(),
+                )
+            })?
+    };
+    let validated = tokio::task::spawn_blocking(move || {
+        let mut s = snapshot_clone;
+        s.npcs = npcs;
+        parish_core::editor::validate::validate_snapshot(&mut s);
+        s
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let validation = validated.validation.clone();
+
+    {
+        let mut sessions = state.editor_sessions.lock().await;
+        let session = sessions.get_mut(&email).ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "no mod is open in the editor".to_string(),
+            )
+        })?;
+        let snap = session.snapshot.as_mut().ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "no mod is open in the editor".to_string(),
+            )
+        })?;
+        snap.npcs = validated.npcs;
+        snap.validation = validated.validation;
+        session.version = session.version.wrapping_add(1);
+    }
+
     Ok(Json(validation))
 }
 
@@ -380,23 +414,52 @@ pub async fn editor_update_locations(
         }
     }
 
-    let mut sessions = state.editor_sessions.lock().await;
-    let session = sessions.get_mut(&email).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "no mod is open in the editor".to_string(),
-        )
-    })?;
-    let snap = session.snapshot.as_mut().ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "no mod is open in the editor".to_string(),
-        )
-    })?;
-    snap.locations = locations;
-    parish_core::editor::validate::validate_snapshot(snap);
-    let validation = snap.validation.clone();
-    session.version = session.version.wrapping_add(1);
+    // Same clone-validate-overlay pattern as editor_update_npcs (#464):
+    // offload the CPU-bound validate to spawn_blocking so the session
+    // lock isn't held across it, then overlay only the locations +
+    // validation fields so concurrent edits to other fields survive.
+    let snapshot_clone = {
+        let sessions = state.editor_sessions.lock().await;
+        sessions
+            .get(&email)
+            .and_then(|s| s.snapshot.clone())
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "no mod is open in the editor".to_string(),
+                )
+            })?
+    };
+    let validated = tokio::task::spawn_blocking(move || {
+        let mut s = snapshot_clone;
+        s.locations = locations;
+        parish_core::editor::validate::validate_snapshot(&mut s);
+        s
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let validation = validated.validation.clone();
+
+    {
+        let mut sessions = state.editor_sessions.lock().await;
+        let session = sessions.get_mut(&email).ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "no mod is open in the editor".to_string(),
+            )
+        })?;
+        let snap = session.snapshot.as_mut().ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "no mod is open in the editor".to_string(),
+            )
+        })?;
+        snap.locations = validated.locations;
+        snap.validation = validated.validation;
+        session.version = session.version.wrapping_add(1);
+    }
+
     Ok(Json(validation))
 }
 
