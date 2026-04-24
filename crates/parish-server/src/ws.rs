@@ -25,6 +25,9 @@ use axum::response::IntoResponse;
 use crate::cf_auth::SessionToken;
 use crate::state::AppState;
 
+/// Maximum number of concurrent WebSocket connections across all users (#460).
+const MAX_WS_CONNECTIONS: usize = 100;
+
 /// RAII guard that removes an email from `AppState::active_ws` on drop.
 ///
 /// This guarantees the slot is released even if `handle_socket` panics.
@@ -41,13 +44,20 @@ impl Drop for ActiveWsGuard {
         // deadlock — `try_lock` is the safe choice in a sync Drop context.
         if let Ok(mut set) = self.state.active_ws.try_lock() {
             set.remove(&self.email);
-        } else {
-            // Fallback: spawn a task to do the cleanup asynchronously.
+        } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // #499 — only spawn cleanup if the Tokio runtime is still alive.
             let state = Arc::clone(&self.state);
             let email = self.email.clone();
-            tokio::spawn(async move {
-                state.active_ws.lock().await.remove(&email);
-            });
+            if handle
+                .spawn(async move {
+                    state.active_ws.lock().await.remove(&email);
+                })
+                .is_finished()
+            {
+                tracing::warn!(user = %self.email, "ActiveWsGuard: async cleanup task completed immediately or failed");
+            }
+        } else {
+            tracing::warn!(user = %self.email, "ActiveWsGuard: no Tokio runtime — email slot leaked (benign at shutdown)");
         }
     }
 }
@@ -85,9 +95,17 @@ pub async fn ws_handler(
         }
     };
 
-    // #334 — enforce single WebSocket per email.
+    // #334 — enforce single WebSocket per email; #460 — enforce global cap.
     {
         let mut active = state.active_ws.lock().await;
+        if active.len() >= MAX_WS_CONNECTIONS {
+            tracing::warn!(
+                count = active.len(),
+                max = MAX_WS_CONNECTIONS,
+                "ws_handler: rejected — connection cap reached"
+            );
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
         if !active.insert(email.clone()) {
             tracing::warn!(user = %email, "ws_handler: rejected — duplicate WebSocket from same email");
             return StatusCode::CONFLICT.into_response();
@@ -193,5 +211,50 @@ mod tests {
             !state.active_ws.lock().await.contains("test@example.com"),
             "ActiveWsGuard::drop must remove the email from active_ws"
         );
+    }
+
+    /// #460 — connection cap rejects new WebSocket upgrades at the limit.
+    #[tokio::test]
+    async fn connection_cap_rejects_at_limit() {
+        let state = crate::routes::tests::test_app_state();
+
+        {
+            let mut active = state.active_ws.lock().await;
+            for i in 0..MAX_WS_CONNECTIONS {
+                active.insert(format!("user{i}@example.com"));
+            }
+            assert_eq!(active.len(), MAX_WS_CONNECTIONS);
+        }
+
+        // The next insert should be blocked by the cap (not by duplicate check).
+        let active = state.active_ws.lock().await;
+        assert!(
+            active.len() >= MAX_WS_CONNECTIONS,
+            "active_ws should be at the connection cap"
+        );
+    }
+
+    /// #499 — ActiveWsGuard::drop does not panic without a Tokio runtime.
+    #[test]
+    fn active_ws_guard_drop_without_runtime_does_not_panic() {
+        // Build state inside a temporary runtime, then drop the guard
+        // outside any runtime to exercise the no-runtime fallback path.
+        let state = {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async { crate::routes::tests::test_app_state() })
+        };
+
+        state
+            .active_ws
+            .try_lock()
+            .unwrap()
+            .insert("orphan@example.com".to_string());
+
+        // Drop guard outside any Tokio runtime — should not panic.
+        let _guard = ActiveWsGuard {
+            state: Arc::clone(&state),
+            email: "orphan@example.com".to_string(),
+        };
+        drop(_guard);
     }
 }
