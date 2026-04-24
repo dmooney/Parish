@@ -42,16 +42,27 @@ export const isTraveling = derived(travelState, ($t) => $t !== null);
  */
 let travelResetTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Cancels any outstanding auto-clear timer for the travel animation.
+ *
+ * Shared by `startTravel` (so a new travel can't be torn down by the
+ * prior timer) and `cancelTravel` (unmount path). Extracted per a
+ * code-review nit on #583 to avoid duplicating the null-and-clear
+ * dance at every call site.
+ */
+function clearPendingTravelReset(): void {
+	if (travelResetTimer !== null) {
+		clearTimeout(travelResetTimer);
+		travelResetTimer = null;
+	}
+}
+
 /** Starts a travel animation from a TravelStartPayload. */
 export function startTravel(payload: TravelStartPayload): void {
 	if (payload.waypoints.length < 2) return;
 
 	// Cancel any pending auto-clear from a prior travel so it can't
 	// fire after we've installed the new state (#349).
-	if (travelResetTimer !== null) {
-		clearTimeout(travelResetTimer);
-		travelResetTimer = null;
-	}
+	clearPendingTravelReset();
 
 	const raw = payload.duration_minutes * MS_PER_GAME_MINUTE;
 	const animationMs = Math.max(MIN_ANIMATION_MS, Math.min(MAX_ANIMATION_MS, raw));
@@ -79,10 +90,7 @@ export function startTravel(payload: TravelStartPayload): void {
  * tree.
  */
 export function cancelTravel(): void {
-	if (travelResetTimer !== null) {
-		clearTimeout(travelResetTimer);
-		travelResetTimer = null;
-	}
+	clearPendingTravelReset();
 	travelState.set(null);
 }
 
