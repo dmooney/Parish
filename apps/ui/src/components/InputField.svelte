@@ -474,6 +474,13 @@
 		// can't recover it) is worse than forcing the user to either
 		// send or clear their draft first. Surface a clear reminder and
 		// bail out.
+		//
+		// codex P2 on #573: isEditorEmpty() reads the cached editorText,
+		// which can be stale when the DOM was modified programmatically
+		// (e.g. insertNpcMention drops in chips without firing input
+		// events that re-sync). Pull a fresh plain-text view first so a
+		// non-empty draft can't sneak past this guard.
+		syncEditorText();
 		if (!isEditorEmpty()) {
 			pushErrorLog(
 				`Send or clear the draft in the input before travelling to ${locationName}.`
