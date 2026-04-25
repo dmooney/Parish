@@ -21,6 +21,11 @@ use parish_world::events::GameEvent;
 use parish_world::graph::WorldGraph;
 use parish_world::time::GameClock;
 
+/// Maximum capacity of the recent_tier4_events ring buffer.
+/// Limits the number of Tier 4 life events (deaths, major transitions)
+/// retained for quick access without consuming unbounded memory.
+const RECENT_TIER4_EVENTS_CAPACITY: usize = 5;
+
 /// An event produced by NPC schedule ticking.
 #[derive(Debug, Clone)]
 pub struct ScheduleEvent {
@@ -131,7 +136,7 @@ impl NpcManager {
             last_tier4_game_time: None,
             introduced_npcs: HashSet::new(),
             npcs_who_know_player_name: HashSet::new(),
-            recent_tier4_events: VecDeque::with_capacity(5),
+            recent_tier4_events: VecDeque::with_capacity(RECENT_TIER4_EVENTS_CAPACITY),
         }
     }
 
@@ -1025,9 +1030,9 @@ impl NpcManager {
             }
         }
 
-        // Push descriptions into the ring buffer (capacity 5).
+        // Push descriptions into the ring buffer (capacity RECENT_TIER4_EVENTS_CAPACITY).
         for desc in life_descriptions {
-            if self.recent_tier4_events.len() >= 5 {
+            if self.recent_tier4_events.len() >= RECENT_TIER4_EVENTS_CAPACITY {
                 self.recent_tier4_events.pop_front();
             }
             self.recent_tier4_events.push_back(desc);
@@ -1105,7 +1110,7 @@ impl NpcManager {
                     description: desc,
                     timestamp: now,
                 });
-                if self.recent_tier4_events.len() >= 5 {
+                if self.recent_tier4_events.len() >= RECENT_TIER4_EVENTS_CAPACITY {
                     self.recent_tier4_events.pop_front();
                 }
                 self.recent_tier4_events
