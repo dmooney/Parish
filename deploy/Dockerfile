@@ -29,15 +29,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Download cloudflared at a pinned version and verify against an inline SHA-256.
 # Cloudflare does not publish per-asset .sha256 files, so we pin the digest here
 # and verify locally. Bump CLOUDFLARED_VERSION and CLOUDFLARED_SHA256 together.
+# TARGETARCH is set automatically by BuildKit (amd64, arm64).
+# The SHA below matches the amd64 binary; for arm64 builds, override via:
+#   docker build --build-arg CLOUDFLARED_SHA256=<arm64-digest> ...
+ARG TARGETARCH
 ARG CLOUDFLARED_VERSION=2026.3.0
 ARG CLOUDFLARED_SHA256=4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30
 RUN cd /tmp \
  && curl -fsSL \
-      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" \
-      -o cloudflared-linux-amd64 \
- && echo "${CLOUDFLARED_SHA256}  cloudflared-linux-amd64" | sha256sum -c - \
- && install -m 0755 cloudflared-linux-amd64 /usr/local/bin/cloudflared \
- && rm cloudflared-linux-amd64
+      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${TARGETARCH}" \
+      -o cloudflared \
+ && echo "${CLOUDFLARED_SHA256}  cloudflared" | sha256sum -c - \
+ && install -m 0755 cloudflared /usr/local/bin/cloudflared \
+ && rm cloudflared
 
 WORKDIR /app
 COPY --from=builder /build/target/release/parish ./
