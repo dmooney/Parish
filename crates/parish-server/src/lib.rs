@@ -711,16 +711,89 @@ fn extract_real_ip(headers: &axum::http::HeaderMap) -> Option<std::net::IpAddr> 
         return Some(ip);
     }
 
-    // Generic reverse proxy: leftmost entry is the original client.
-    let xff = headers
-        .get(axum::http::header::FORWARDED)
-        .or_else(|| headers.get(HeaderName::from_static("x-forwarded-for")));
-    if let Some(v) = xff
+    // RFC 7239 `Forwarded` header: syntax is `for=<node>;proto=http`, possibly
+    // comma-separated for multiple hops.  Extract the `for=` parameter from the
+    // first (leftmost) directive, then strip optional port and bracket notation
+    // used for IPv6 (e.g. `[::1]:8080` → `::1`).
+    if let Some(v) = headers.get(axum::http::header::FORWARDED)
+        && let Ok(s) = v.to_str()
+        && let Some(ip) = parse_forwarded_for(s)
+    {
+        return Some(ip);
+    }
+
+    // Generic `X-Forwarded-For`: leftmost entry is the original client.
+    if let Some(v) = headers.get(HeaderName::from_static("x-forwarded-for"))
         && let Ok(s) = v.to_str()
         && let Some(first) = s.split(',').next()
         && let Ok(ip) = first.trim().parse()
     {
         return Some(ip);
+    }
+
+    None
+}
+
+/// Parse an IP address from the `for=` parameter of an RFC 7239 `Forwarded`
+/// header value.  Returns `None` if the header is missing, malformed, or
+/// contains no valid IP address so the caller can fall through to
+/// `X-Forwarded-For`.
+///
+/// Accepted `for=` node forms:
+/// - bare IPv4:        `for=192.0.2.60`
+/// - quoted IPv4:      `for="192.0.2.60"`
+/// - bracketed IPv6:   `for="[::1]"` or `for=[::1]`
+/// - IPv6 with port:   `for="[::1]:8080"`
+/// - quoted with port: `for="192.0.2.60:1234"` (port stripped)
+fn parse_forwarded_for(header: &str) -> Option<std::net::IpAddr> {
+    // Only look at the first (leftmost/client) directive.
+    let first_directive = header.split(',').next()?;
+
+    // Each directive is a semicolon-separated list of parameters.
+    for param in first_directive.split(';') {
+        let param = param.trim();
+        let lower = param.to_ascii_lowercase();
+        let value = if lower.starts_with("for=") {
+            &param[4..]
+        } else {
+            continue;
+        };
+
+        // Strip surrounding double quotes if present.
+        let value = if value.starts_with('"') && value.ends_with('"') {
+            &value[1..value.len() - 1]
+        } else {
+            value
+        };
+
+        // Bracketed IPv6: `[::1]` or `[::1]:port`
+        if let Some(inner) = value.strip_prefix('[') {
+            let addr_str = if let Some(pos) = inner.find(']') {
+                &inner[..pos]
+            } else {
+                inner
+            };
+            if let Ok(ip) = addr_str.parse::<std::net::IpAddr>() {
+                return Some(ip);
+            }
+            // Bracketed but unparseable — fall through to next param / give up.
+            continue;
+        }
+
+        // Plain value: could be IPv4, IPv4:port, or bare IPv6.
+        // Try direct parse first (handles bare IPv4 and bare IPv6).
+        if let Ok(ip) = value.parse::<std::net::IpAddr>() {
+            return Some(ip);
+        }
+
+        // IPv4 with port: strip the trailing `:port`.
+        if let Some(pos) = value.rfind(':')
+            && let Ok(ip) = value[..pos].parse::<std::net::IpAddr>()
+        {
+            return Some(ip);
+        }
+
+        // Unrecognisable — keep looking at other parameters (unusual) then give up.
     }
 
     None
@@ -866,6 +939,95 @@ mod tests {
     fn extract_real_ip_trims_whitespace_around_address() {
         let headers = make_headers(&[("x-forwarded-for", "  198.51.100.7 , 10.0.0.2")]);
         let ip = extract_real_ip(&headers).expect("should parse trimmed address");
+        assert_eq!(ip, "198.51.100.7".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    // ── RFC 7239 Forwarded header tests (#629) ──────────────────────────────
+
+    #[test]
+    fn parse_forwarded_for_bare_ipv4() {
+        let ip =
+            parse_forwarded_for("for=192.0.2.60;proto=http").expect("should parse bare IPv4 for=");
+        assert_eq!(ip, "192.0.2.60".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_forwarded_for_quoted_ipv4() {
+        let ip = parse_forwarded_for("for=\"192.0.2.60\";proto=http")
+            .expect("should parse quoted IPv4 for=");
+        assert_eq!(ip, "192.0.2.60".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_forwarded_for_ipv6_in_brackets() {
+        let ip = parse_forwarded_for("for=\"[2001:db8::1]\";proto=http")
+            .expect("should parse bracketed IPv6");
+        assert_eq!(ip, "2001:db8::1".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_forwarded_for_ipv6_brackets_with_port() {
+        // RFC 7239 §6: IPv6 with port looks like [::1]:8080
+        let ip =
+            parse_forwarded_for("for=\"[::1]:8080\"").expect("should strip port and parse IPv6");
+        assert_eq!(ip, "::1".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_forwarded_for_multiple_hops_uses_leftmost() {
+        // Only the first (client) directive should be used.
+        let ip = parse_forwarded_for("for=203.0.113.1, for=10.0.0.1")
+            .expect("should pick leftmost directive");
+        assert_eq!(ip, "203.0.113.1".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn parse_forwarded_for_returns_none_when_no_for_param() {
+        // `by=` only — no `for=` present.
+        assert_eq!(parse_forwarded_for("by=203.0.113.43;proto=https"), None);
+    }
+
+    #[test]
+    fn parse_forwarded_for_returns_none_for_invalid_ip() {
+        assert_eq!(parse_forwarded_for("for=not-an-ip"), None);
+    }
+
+    #[test]
+    fn extract_real_ip_uses_forwarded_header_rfc7239() {
+        let headers = make_headers(&[("forwarded", "for=203.0.113.5;proto=https")]);
+        let ip = extract_real_ip(&headers).expect("should parse RFC 7239 Forwarded");
+        assert_eq!(ip, "203.0.113.5".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn extract_real_ip_forwarded_ipv6_brackets() {
+        let headers = make_headers(&[("forwarded", "for=\"[2001:db8::cafe]\";proto=https")]);
+        let ip = extract_real_ip(&headers).expect("should parse bracketed IPv6 in Forwarded");
+        assert_eq!(ip, "2001:db8::cafe".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn extract_real_ip_malformed_forwarded_falls_back_to_xff() {
+        // Forwarded header present but malformed (no `for=`) — must fall through
+        // to X-Forwarded-For rather than returning None.
+        let headers = make_headers(&[
+            ("forwarded", "proto=https;host=example.com"),
+            ("x-forwarded-for", "198.51.100.42, 10.0.0.1"),
+        ]);
+        let ip = extract_real_ip(&headers)
+            .expect("should fall back to X-Forwarded-For when Forwarded has no for=");
+        assert_eq!(ip, "198.51.100.42".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn extract_real_ip_invalid_ip_in_forwarded_falls_back_to_xff() {
+        // `for=` present but its value is not a valid IP — fall back to XFF.
+        let headers = make_headers(&[
+            ("forwarded", "for=not-an-ip"),
+            ("x-forwarded-for", "198.51.100.7"),
+        ]);
+        let ip = extract_real_ip(&headers)
+            .expect("should fall back to X-Forwarded-For when Forwarded for= is invalid");
         assert_eq!(ip, "198.51.100.7".parse::<std::net::IpAddr>().unwrap());
     }
 }
