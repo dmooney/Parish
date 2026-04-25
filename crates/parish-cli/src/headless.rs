@@ -5,7 +5,9 @@
 //! Runs by default or with `--headless` on the command line.
 
 use crate::app::App;
-use crate::config::{CategoryConfig, CloudConfig, InferenceCategory, ProviderConfig};
+use crate::config::{
+    CategoryConfig, CloudConfig, InferenceCategory, InferenceConfig, ProviderConfig,
+};
 use crate::inference::{self, AnyClient, InferenceClients, InferenceQueue};
 use crate::input::{Command, InputResult, classify_input, extract_mention, parse_intent};
 use crate::loading::LoadingAnimation;
@@ -37,6 +39,7 @@ pub async fn run_headless(
     improv: bool,
     game_mod: Option<parish_core::game_mod::GameMod>,
     data_dir: Option<std::path::PathBuf>,
+    inference_config: InferenceConfig, // (#417) TOML-configured timeouts
 ) -> Result<()> {
     println!("=== Parish — Headless Mode ===");
     println!(
@@ -89,6 +92,7 @@ pub async fn run_headless(
     app.base_url = provider_config.base_url.clone();
     app.api_key = provider_config.api_key.clone();
     app.improv_enabled = improv;
+    app.inference_config = inference_config; // (#417) store TOML-configured timeouts
 
     // Load feature flags from disk
     let flags_path = data_dir.map(|d| d.join("parish-flags.json"));
@@ -595,7 +599,7 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
                         &provider,
                         &app.base_url,
                         app.api_key.as_deref(),
-                        &parish_core::config::InferenceConfig::default(),
+                        &app.inference_config, // (#417) use TOML-configured timeouts
                     ));
                 }
                 rebuild = true;
@@ -614,7 +618,7 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
                     &provider,
                     base_url,
                     app.cloud_api_key.as_deref(),
-                    &parish_core::config::InferenceConfig::default(),
+                    &app.inference_config, // (#417) use TOML-configured timeouts
                 ));
                 rebuild = true;
             }

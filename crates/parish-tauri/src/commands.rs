@@ -309,7 +309,7 @@ async fn rebuild_inference(state: &Arc<AppState>, app: &tauri::AppHandle) {
             &provider_enum,
             &base_url,
             api_key.as_deref(),
-            &parish_core::config::InferenceConfig::default(),
+            &state.inference_config, // (#417) use TOML-configured timeouts
         );
         let mut client_guard = state.client.lock().await;
         *client_guard = Some(built.clone());
@@ -400,7 +400,7 @@ async fn handle_system_command(
                     &provider_enum,
                     &base_url,
                     api_key.as_deref(),
-                    &parish_core::config::InferenceConfig::default(),
+                    &state.inference_config, // (#417) use TOML-configured timeouts
                 ));
             }
             CommandEffect::Quit => {

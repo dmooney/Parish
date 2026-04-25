@@ -242,6 +242,10 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Load engine config (parish.toml) for TOML-configured inference timeouts.
+    // Missing file falls back to compiled-in defaults. (#417)
+    let engine_config = parish_core::config::load_engine_config(None);
+
     // Headless REPL mode (default)
     let headless_data_dir = find_data_dir();
     let result = headless::run_headless(
@@ -252,6 +256,7 @@ async fn main() -> Result<()> {
         cli.improv,
         game_mod,
         Some(headless_data_dir),
+        engine_config.inference,
     )
     .await;
     ollama_process.stop();

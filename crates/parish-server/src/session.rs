@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
 
+use parish_core::config::InferenceConfig;
 use parish_core::game_mod::{GameMod, PronunciationEntry};
 use parish_core::inference::{AnyClient, InferenceQueue, spawn_inference_worker};
 use parish_core::ipc::{GameConfig, ThemePalette};
@@ -57,6 +58,11 @@ pub struct GlobalState {
     pub transport: TransportConfig,
     /// Template game config cloned into each new session.
     pub template_config: GameConfig,
+    /// TOML-configured inference timeouts loaded from `parish.toml` at boot.
+    /// Threaded to every `build_client` call so runtime rebuilds (e.g. after
+    /// `/provider`) honour the operator-configured values instead of falling
+    /// back to the compiled-in defaults. (#417)
+    pub inference_config: InferenceConfig,
     /// Child `ollama serve` process handle (no-op for non-Ollama providers).
     /// Held for the server's lifetime so dropping `GlobalState` stops the
     /// server. Wrapped in a `Mutex` so the struct stays `Sync`.
@@ -430,6 +436,7 @@ async fn create_session(global: &Arc<GlobalState>, session_id: &str) -> Arc<Sess
         global.data_dir.clone(),
         game_mod,
         flags_path,
+        global.inference_config.clone(), // (#417) propagate TOML-configured timeouts
     );
 
     if let Some(ref c) = client {
@@ -525,6 +532,7 @@ async fn restore_session(
         global.data_dir.clone(),
         game_mod,
         flags_path,
+        global.inference_config.clone(), // (#417) propagate TOML-configured timeouts
     );
 
     if let Some(ref c) = client {
@@ -830,7 +838,7 @@ fn build_session_client(global: &GlobalState) -> (Option<AnyClient>, GameConfig)
             &provider_enum,
             &config.base_url,
             config.api_key.as_deref(),
-            &parish_core::config::InferenceConfig::default(),
+            &global.inference_config, // (#417) use TOML-configured timeouts
         ))
     };
     (client, config)
@@ -851,7 +859,7 @@ fn build_session_cloud_client(global: &GlobalState) -> Option<AnyClient> {
                 .as_deref()
                 .unwrap_or("https://openrouter.ai/api"),
             Some(key),
-            &parish_core::config::InferenceConfig::default(),
+            &global.inference_config, // (#417) use TOML-configured timeouts
         )
     })
 }
