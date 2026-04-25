@@ -28,12 +28,12 @@ describe('drawIconImage', () => {
 		translateArgs = [];
 		pixels = new Uint8ClampedArray(SIZE * SIZE * 4);
 
-		// Provide Path2D in the jsdom global if it is missing.
+		// Provide Path2D in the jsdom global if it is missing, using vi.stubGlobal
+		// so Vitest can auto-clean it up rather than permanently polluting globalThis.
 		if (typeof globalThis.Path2D === 'undefined') {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(globalThis as any).Path2D = class {
+			vi.stubGlobal('Path2D', class {
 				constructor(_d?: string) {}
-			};
+			});
 		}
 
 		// Inject a fake canvas that records transform calls.
@@ -80,6 +80,7 @@ describe('drawIconImage', () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 	});
 
 	it('returns non-null when a canvas context is available', () => {
@@ -102,7 +103,8 @@ describe('drawIconImage', () => {
 
 	it('fills top-row pixels, not bottom-row, for a top-anchored icon path', () => {
 		const result = drawIconImage(TOP_LEFT_SQUARE);
-		if (!result) return;
+		expect(result).not.toBeNull();
+		if (!result) return; // type narrowing only — assertion above ensures this is reached
 
 		// Top-left pixel (row 0) should be opaque.
 		expect(result.data[3]).toBe(255);
