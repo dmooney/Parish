@@ -87,8 +87,8 @@ jobs:
 
             await summary.write();
 
-            if (lackingPriority.length > 0) {
-              core.warning(`${lackingPriority.length} open issues need triage`);
+            if (lackingPriority.length > 0 || lackingTheme.length > 0) {
+              core.warning(`${lackingPriority.length} open issues lack a priority, ${lackingTheme.length} lack a theme — run /triage-backlog`);
             }
 
   check-new-issue:
