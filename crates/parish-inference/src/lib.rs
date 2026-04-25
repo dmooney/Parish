@@ -1223,8 +1223,10 @@ mod tests {
         // Use a 1-second timeout — short but long enough that the simulator
         // (which answers instantly) will succeed; the test verifies the
         // happy-path *and* that the queue is not wedged after an error.
-        let mut cfg = InferenceConfig::default();
-        cfg.timeout_secs = 1;
+        let cfg = InferenceConfig {
+            timeout_secs: 1,
+            ..Default::default()
+        };
 
         let (interactive_tx, interactive_rx) = mpsc::channel::<InferenceRequest>(4);
         let (_btx, background_rx) = mpsc::channel::<InferenceRequest>(4);
