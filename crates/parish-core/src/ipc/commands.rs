@@ -483,6 +483,12 @@ pub fn handle_command(
         }
         Command::Flag(FlagSubcommand::Disable(name)) => {
             config.flags.disable(&name);
+            // When disabling a flag that has associated cached state, clear
+            // that state immediately so the next render sees the correct value
+            // without requiring the player to run another command first.
+            if name == "reveal-unexplored" {
+                config.reveal_unexplored_locations = false;
+            }
             CommandResult::with_effect(
                 format!("Feature '{}' disabled.", name),
                 CommandEffect::SaveFlags,
@@ -1186,6 +1192,27 @@ mod tests {
         );
         assert!(result.effects.contains(&CommandEffect::SaveFlags));
         assert!(result.response.contains("disabled"));
+    }
+
+    #[test]
+    fn flag_disable_reveal_unexplored_clears_active_reveal_state() {
+        let (mut world, mut npc, mut config) = default_state();
+        // Simulate: reveal mode is active (e.g. player ran `/unexplored reveal`).
+        config.reveal_unexplored_locations = true;
+        // Operator runs `/flag disable reveal-unexplored` — this must immediately
+        // clear the cached reveal state, not wait for the next `/unexplored` call.
+        let result = handle_command(
+            Command::Flag(FlagSubcommand::Disable("reveal-unexplored".to_string())),
+            &mut world,
+            &mut npc,
+            &mut config,
+        );
+        assert!(result.effects.contains(&CommandEffect::SaveFlags));
+        assert!(result.response.contains("disabled"));
+        assert!(
+            !config.reveal_unexplored_locations,
+            "reveal_unexplored_locations must be cleared immediately when the flag is disabled"
+        );
     }
 
     #[test]
