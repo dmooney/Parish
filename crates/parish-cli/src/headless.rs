@@ -1270,9 +1270,11 @@ async fn emit_headless_npc_reactions(app: &mut App, player_input: &str) {
         if let Some(ref emoji) = emoji {
             // Persist to reaction_log so NPC memory is maintained (#403).
             if let Some(npc_mut) = app.npc_manager.get_mut(npc.id) {
-                npc_mut
-                    .reaction_log
-                    .add(emoji, player_input, chrono::Utc::now());
+                npc_mut.reaction_log.add_player_message_reaction(
+                    emoji,
+                    player_input,
+                    chrono::Utc::now(),
+                );
             }
             println!("{} {}", capitalize_first(&npc.name), emoji);
         }

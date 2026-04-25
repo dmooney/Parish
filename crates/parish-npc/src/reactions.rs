@@ -88,9 +88,10 @@ pub struct ReactionLog {
 const MAX_ENTRIES: usize = 10;
 
 impl ReactionLog {
-    /// Adds a player reaction, evicting the oldest if at capacity.
+    /// Adds a player→NPC reaction (player reacts to something the NPC said).
     ///
-    /// Only adds the reaction if the emoji is in the canonical palette.
+    /// Evicts the oldest entry if at capacity. Only adds when the emoji is in
+    /// the canonical palette. `context` is what the NPC said.
     pub fn add(&mut self, emoji: &str, context: &str, timestamp: DateTime<Utc>) {
         if let Some(desc) = reaction_description(emoji) {
             self.entries.push(ReactionEntry {
@@ -105,8 +106,33 @@ impl ReactionLog {
         }
     }
 
-    /// Formats the `n` most recent reactions as prompt context.
+    /// Adds an NPC→player-message reaction (NPC reacts to a player's spoken line).
     ///
+    /// Evicts the oldest entry if at capacity. Only adds when the emoji is in
+    /// the canonical palette. `player_message` is the player's message that
+    /// triggered the reaction.
+    pub fn add_player_message_reaction(
+        &mut self,
+        emoji: &str,
+        player_message: &str,
+        timestamp: DateTime<Utc>,
+    ) {
+        if let Some(desc) = reaction_description(emoji) {
+            self.entries.push(ReactionEntry {
+                emoji: emoji.to_string(),
+                description: desc.to_string(),
+                context: player_message.chars().take(80).collect(),
+                timestamp,
+            });
+            if self.entries.len() > MAX_ENTRIES {
+                self.entries.remove(0);
+            }
+        }
+    }
+
+    /// Formats the `n` most recent player→NPC reactions as prompt context.
+    ///
+    /// Each line reads: "- The player [description] when you said [context]".
     /// Returns an empty string if there are no reactions.
     pub fn context_string(&self, n: usize) -> String {
         if self.entries.is_empty() {
@@ -126,6 +152,32 @@ impl ReactionLog {
             .collect();
         format!(
             "Recent nonverbal reactions from the player:\n{}",
+            lines.join("\n")
+        )
+    }
+
+    /// Formats the `n` most recent NPC→player-message reactions as prompt context.
+    ///
+    /// Each line reads: "- You [description] in response to the player saying [message]".
+    /// Returns an empty string if there are no entries.
+    pub fn npc_context_string(&self, n: usize) -> String {
+        if self.entries.is_empty() {
+            return String::new();
+        }
+        let lines: Vec<String> = self
+            .entries
+            .iter()
+            .rev()
+            .take(n)
+            .map(|e| {
+                format!(
+                    "- You {} in response to the player saying \"{}\"",
+                    e.description, e.context
+                )
+            })
+            .collect();
+        format!(
+            "Recent nonverbal reactions you showed to the player:\n{}",
             lines.join("\n")
         )
     }
@@ -1712,5 +1764,82 @@ mod tests {
         assert!(generate_rule_reaction_deterministic("rent and landlord").is_some());
         assert!(generate_rule_reaction_deterministic("strange ghost").is_some());
         assert!(generate_rule_reaction_deterministic("perfectly normal day").is_none());
+    }
+
+    // ── NPC→player-message reaction log context string (fix: gemini high) ────
+
+    /// `add_player_message_reaction` stores an entry and `npc_context_string`
+    /// renders it with the correct "You [described] in response to the player
+    /// saying [message]" format — not the player→NPC "The player [described]
+    /// when you said [msg]" format.
+    #[test]
+    fn npc_reaction_log_context_string_correct_format() {
+        let mut log = ReactionLog::default();
+        log.add_player_message_reaction(
+            "😠",
+            "The rent is too high",
+            Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap(),
+        );
+
+        let ctx = log.npc_context_string(5);
+        // Must name the NPC's action, not the player's action.
+        assert!(
+            ctx.contains("You looked angry"),
+            "npc_context_string should say 'You looked angry', got: {ctx}"
+        );
+        assert!(
+            ctx.contains("the player saying"),
+            "npc_context_string should contain 'the player saying', got: {ctx}"
+        );
+        assert!(
+            ctx.contains("The rent is too high"),
+            "npc_context_string should contain the player message, got: {ctx}"
+        );
+        // Must NOT use the player→NPC phrasing.
+        assert!(
+            !ctx.contains("The player"),
+            "npc_context_string must not use 'The player' phrasing, got: {ctx}"
+        );
+    }
+
+    /// `context_string` (player→NPC path) is unaffected — it still uses the
+    /// "The player [described] when you said [msg]" format.
+    #[test]
+    fn player_reaction_log_context_string_unchanged() {
+        let mut log = ReactionLog::default();
+        log.add(
+            "😊",
+            "Good morning to you",
+            Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap(),
+        );
+
+        let ctx = log.context_string(5);
+        assert!(
+            ctx.contains("The player smiled warmly"),
+            "context_string should say 'The player smiled warmly', got: {ctx}"
+        );
+        assert!(
+            ctx.contains("when you said"),
+            "context_string should contain 'when you said', got: {ctx}"
+        );
+    }
+
+    /// `add_player_message_reaction` ignores unknown emoji (same guard as `add`).
+    #[test]
+    fn npc_reaction_log_ignores_unknown_emoji() {
+        let mut log = ReactionLog::default();
+        log.add_player_message_reaction(
+            "💀",
+            "some message",
+            Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap(),
+        );
+        assert!(log.is_empty());
+    }
+
+    /// `npc_context_string` returns empty string when there are no entries.
+    #[test]
+    fn npc_reaction_log_context_string_empty() {
+        let log = ReactionLog::default();
+        assert_eq!(log.npc_context_string(5), "");
     }
 }

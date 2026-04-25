@@ -24,6 +24,7 @@ use parish_core::npc::NpcId;
 use parish_core::npc::parse_npc_stream_response;
 use parish_core::npc::reactions;
 use parish_core::npc::ticks::apply_tier1_response_with_config;
+use parish_core::world::LocationId;
 use parish_core::world::transport::TransportMode;
 
 use crate::events::{
@@ -261,9 +262,17 @@ pub async fn submit_input(
             let player_msg_id = player_msg.id.clone();
             let _ = app.emit(EVENT_TEXT_LOG, player_msg);
             let raw_for_reactions = raw.clone();
+            // Capture location before handle_game_input (which may move the player).
+            let reaction_location = state.world.lock().await.player_location;
             handle_game_input(raw, addressed_to, state.clone(), app.clone()).await;
             // Generate NPC reactions to the player's message in the background.
-            emit_npc_reactions(&player_msg_id, &raw_for_reactions, &state, &app);
+            emit_npc_reactions(
+                &player_msg_id,
+                &raw_for_reactions,
+                reaction_location,
+                &state,
+                &app,
+            );
         }
     }
 
@@ -1898,6 +1907,11 @@ pub async fn react_to_message(
 
 /// Generates NPC reactions to a player message and emits events.
 ///
+/// `location` must be the player's location **at the time the message was
+/// sent**, captured before any `handle_game_input` call that might move the
+/// player. This prevents a race where the player moves between spawn and
+/// execution, causing reactions to be attributed to NPCs at the wrong location.
+///
 /// Runs as a detached background task so player input handling remains
 /// responsive. When the `npc-llm-reactions` flag is enabled (default) and an
 /// LLM client is configured, each NPC at the player's location gets an
@@ -1907,6 +1921,7 @@ pub async fn react_to_message(
 fn emit_npc_reactions(
     player_msg_id: &str,
     player_input: &str,
+    location: LocationId,
     state: &Arc<AppState>,
     app: &tauri::AppHandle,
 ) {
@@ -1917,13 +1932,14 @@ fn emit_npc_reactions(
 
     tokio::spawn(async move {
         let (npcs_here, llm_enabled, reaction_client, reaction_model) = {
-            let world = state.world.lock().await;
             let npc_manager = state.npc_manager.lock().await;
             let config = state.config.lock().await;
             let base_client = state.client.lock().await;
 
+            // Use the pre-captured location — do not read world.player_location
+            // here, as the player may have moved since the message was sent.
             let npcs = npc_manager
-                .npcs_at(world.player_location)
+                .npcs_at(location)
                 .iter()
                 .map(|npc| (*npc).clone())
                 .collect::<Vec<_>>();
@@ -1964,9 +1980,11 @@ fn emit_npc_reactions(
                 {
                     let mut npc_manager = state.npc_manager.lock().await;
                     if let Some(npc_mut) = npc_manager.find_by_name_mut(&npc.name) {
-                        npc_mut
-                            .reaction_log
-                            .add(&emoji, &player_input, chrono::Utc::now());
+                        npc_mut.reaction_log.add_player_message_reaction(
+                            &emoji,
+                            &player_input,
+                            chrono::Utc::now(),
+                        );
                     }
                 }
 
