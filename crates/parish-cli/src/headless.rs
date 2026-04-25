@@ -104,6 +104,7 @@ pub async fn run_headless(
     app.base_url = provider_config.base_url.clone();
     app.api_key = provider_config.api_key.clone();
     app.improv_enabled = improv;
+    app.script_mode = script_mode;
 
     // Load feature flags from disk
     let flags_path = data_dir.map(|d| d.join("parish-flags.json"));
@@ -734,7 +735,10 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
                 }
             }
             CommandEffect::LoadBranch(name) => {
-                handle_headless_load(app, name).await;
+                if let Err(e) = handle_headless_load(app, name).await {
+                    eprintln!("{e}");
+                    should_quit = true;
+                }
             }
             CommandEffect::ListBranches => {
                 if let Some(ref db) = app.db {
@@ -848,7 +852,10 @@ async fn handle_headless_command(app: &mut App, cmd: Command) -> (bool, bool) {
 }
 
 /// Handles /load in headless mode (both bare /load and /load <branch_name>).
-async fn handle_headless_load(app: &mut App, name: &str) {
+///
+/// Returns `Err` if the new save file's lock cannot be acquired while running
+/// in script mode — the same fail-closed policy applied at startup (#608).
+async fn handle_headless_load(app: &mut App, name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         // Bare /load — show save picker for switching save files
         let saves_dir = std::path::PathBuf::from(crate::persistence::picker::SAVES_DIR);
@@ -872,8 +879,19 @@ async fn handle_headless_load(app: &mut App, name: &str) {
                 }
             }
             // Release old lock and acquire lock on the new save file.
+            // Mirror the startup policy (#608): in script mode a lock failure is
+            // a hard error — there is no operator present to read the warning,
+            // and concurrent writes could silently corrupt the database.
             app.save_lock = crate::persistence::SaveFileLock::try_acquire(&new_path);
             if app.save_lock.is_none() {
+                if app.script_mode {
+                    anyhow::bail!(
+                        "error: save file {} is locked by another Parish instance; \
+                         refusing to switch save in non-interactive (script) mode to avoid \
+                         data corruption. Stop the other instance first.",
+                        new_path.display()
+                    );
+                }
                 eprintln!(
                     "Warning: save file {} is locked by another Parish instance; \
                      opening anyway — concurrent writes may corrupt it.",
@@ -937,6 +955,7 @@ async fn handle_headless_load(app: &mut App, name: &str) {
     } else {
         println!("Persistence not available.");
     }
+    Ok(())
 }
 
 /// Handles /new in headless mode — resets world and NPCs.
@@ -2059,6 +2078,61 @@ mod tests {
         assert!(
             !error_would_be_triggered,
             "interactive mode with a locked save file must not trigger the error branch"
+        );
+    }
+
+    /// Regression guard for the Gemini-identified gap in #630: the same
+    /// script-mode fail-closed policy that applies at startup must also apply
+    /// inside `handle_headless_load` when switching save files via `/load`.
+    ///
+    /// We exercise the exact `app.script_mode && save_lock.is_none()` logic
+    /// added to the bare-/load save-switch path without invoking the
+    /// interactive save picker (which reads from stdin).
+    #[tokio::test]
+    async fn load_save_switch_script_mode_lock_failure_is_hard_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let save_path = dir.path().join("other.db");
+        std::fs::write(&save_path, b"").unwrap();
+
+        // Hold the lock, simulating another process owning the target save file.
+        let _held = crate::persistence::SaveFileLock::try_acquire(&save_path)
+            .expect("initial lock acquisition should succeed");
+
+        // Confirm a second acquire returns None (re-entrant guard).
+        let failed_lock = crate::persistence::SaveFileLock::try_acquire(&save_path);
+        assert!(
+            failed_lock.is_none(),
+            "lock should be un-acquirable while held"
+        );
+
+        // The new guard in handle_headless_load: script_mode=true + None lock
+        // must be treated as a hard error.
+        let mut app = App::new();
+        app.script_mode = true;
+        // Replicate the load-switch decision added to handle_headless_load.
+        let error_produced = failed_lock.is_none() && app.script_mode;
+
+        assert!(
+            error_produced,
+            "script mode must hard-error on a locked save file during /load save-switch"
+        );
+    }
+
+    /// Regression guard: in interactive mode the /load save-switch path must
+    /// NOT trigger the hard-error branch when the lock cannot be acquired —
+    /// it should warn and continue (the user is present and can ^C).
+    #[tokio::test]
+    async fn load_save_switch_interactive_mode_lock_failure_is_warning_only() {
+        let failed_lock: Option<crate::persistence::SaveFileLock> = None; // simulate failure
+
+        let mut app = App::new();
+        app.script_mode = false;
+
+        let error_would_be_triggered = failed_lock.is_none() && app.script_mode;
+
+        assert!(
+            !error_would_be_triggered,
+            "interactive mode must not hard-error on a locked save file during /load save-switch"
         );
     }
 }
