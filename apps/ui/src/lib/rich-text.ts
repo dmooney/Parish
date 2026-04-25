@@ -40,7 +40,7 @@ export function segmentText(
   // Reduces regex compilations from O(words) to O(1) and content scans
   // from O(words) to O(1) per category.
   const addMatches = (words: string[], kind: SegmentKind) => {
-    const filtered = words.filter(Boolean);
+    const filtered = words.map((w) => w.trim()).filter(Boolean);
     if (filtered.length === 0) return;
     // Sort longest-first so alternation matches greedily
     filtered.sort((a, b) => b.length - a.length);
