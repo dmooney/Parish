@@ -772,6 +772,7 @@ pub fn run() {
                             background_rx,
                             batch_rx,
                             state_setup.inference_log.clone(),
+                            state_setup.inference_config.clone(),
                         );
                         let queue =
                             InferenceQueue::new(interactive_tx, background_tx, batch_tx);

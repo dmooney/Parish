@@ -72,6 +72,7 @@ pub async fn run_headless(
         background_rx,
         batch_rx,
         inference_log.clone(),
+        inference_config.clone(),
     );
     let queue = InferenceQueue::new(interactive_tx, background_tx, batch_tx);
 
@@ -243,6 +244,7 @@ pub async fn run_headless(
                             background_rx,
                             batch_rx,
                             inference_log.clone(),
+                            app.inference_config.clone(),
                         );
                         app.inference_queue =
                             Some(InferenceQueue::new(interactive_tx, background_tx, batch_tx));

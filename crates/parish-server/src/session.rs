@@ -580,6 +580,7 @@ async fn init_inference_queue(app_state: &Arc<AppState>, client: AnyClient) {
         background_rx,
         batch_rx,
         app_state.inference_log.clone(),
+        app_state.inference_config.clone(),
     );
     let queue = InferenceQueue::new(interactive_tx, background_tx, batch_tx);
     *app_state.inference_queue.lock().await = Some(queue);

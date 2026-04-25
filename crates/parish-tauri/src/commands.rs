@@ -335,6 +335,7 @@ async fn rebuild_inference(state: &Arc<AppState>, app: &tauri::AppHandle) {
         background_rx,
         batch_rx,
         state.inference_log.clone(),
+        state.inference_config.clone(),
     );
     let queue = InferenceQueue::new(interactive_tx, background_tx, batch_tx);
     let mut iq = state.inference_queue.lock().await;
