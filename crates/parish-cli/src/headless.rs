@@ -31,6 +31,7 @@ const AUTOSAVE_INTERVAL_SECS: u64 = 45;
 /// Sets up the inference pipeline with dual-client routing: cloud client
 /// for dialogue, local client for intent parsing. Falls back to local
 /// for everything if no cloud provider is configured.
+#[allow(clippy::too_many_arguments)] // all params are semantically distinct startup settings
 pub async fn run_headless(
     clients: InferenceClients,
     provider_config: &ProviderConfig,
