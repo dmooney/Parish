@@ -88,6 +88,7 @@ pub fn handle_editor_open_mod(
     };
     let mut s = session.lock().map_err(|e| e.to_string())?;
     s.snapshot = Some(snapshot);
+    s.generation = s.generation.wrapping_add(1);
     Ok(response)
 }
 
@@ -178,22 +179,34 @@ pub fn handle_editor_save(
 /// inside the session — a concurrent `editor_close` would set `snapshot`
 /// to `None`, and the write-back guard below returns an error in that
 /// case rather than silently installing a stale snapshot.
+///
+/// An additional generation-token check guards against the close+open race
+/// on the **same** mod_path: because `handle_editor_open_mod` bumps
+/// `EditorSession::generation`, a reload that started before the close will
+/// detect the counter change on Phase 3 re-lock and return an error even
+/// when the path is unchanged (codex P1 on #624/#627).
 pub fn handle_editor_reload(session: &Mutex<EditorSession>) -> Result<EditorModSnapshot, String> {
-    // Phase 1: clone the path out under a brief lock, then release it.
-    let mod_path = {
+    // Phase 1: clone the path and capture the generation token under a brief
+    // lock, then release it.  The generation counter is bumped by every
+    // snapshot-replacement event (open, reload, save, close), so it uniquely
+    // identifies the current session lineage even when a close+open cycle
+    // reuses the same mod_path (codex P1 on #624/#627).
+    let (mod_path, original_generation) = {
         let s = session.lock().map_err(|e| e.to_string())?;
-        s.snapshot
+        let snap = s
+            .snapshot
             .as_ref()
-            .map(|snap| snap.mod_path.clone())
-            .ok_or_else(|| "no mod is open in the editor".to_string())?
+            .ok_or_else(|| "no mod is open in the editor".to_string())?;
+        (snap.mod_path.clone(), s.generation)
     };
 
     // Phase 2: disk I/O runs without holding the lock.
     let snapshot = mod_io::load_mod_snapshot(&mod_path).map_err(|e| e.to_string())?;
 
-    // Phase 3: swap the snapshot in — error if a concurrent close cleared
-    // the session, or if a concurrent close+open redirected it to a
-    // different mod_path while we were doing disk I/O (codex P1).
+    // Phase 3: swap the snapshot in — error if a concurrent close cleared the
+    // session, if a concurrent operation changed the mod_path, or if the
+    // generation token changed (catches a close+open of the *same* mod_path
+    // that would otherwise slip through the path-equality check).
     {
         let mut s = session.lock().map_err(|e| e.to_string())?;
         match s.snapshot.as_ref() {
@@ -201,7 +214,10 @@ pub fn handle_editor_reload(session: &Mutex<EditorSession>) -> Result<EditorModS
                 return Err("editor session was closed during reload".to_string());
             }
             Some(current) if current.mod_path != mod_path => {
-                return Err("editor session was reopened during reload".to_string());
+                return Err("editor session was modified during reload".to_string());
+            }
+            Some(_) if s.generation != original_generation => {
+                return Err("editor session was modified during reload".to_string());
             }
             Some(_) => {}
         }
@@ -405,12 +421,19 @@ mod tests {
         // Phase 3 simulation: the write-back path that handle_editor_reload
         // now executes on re-lock.  A stale snap_a (from disk) is about to be
         // written into a session bound to snap_b's mod_path.
+        //
+        // Note: we also pass the original_generation here, mirroring the real
+        // implementation (but the path check fires first in this scenario).
+        let original_generation = 0u64; // EditorSession::default() starts at 0
         let write_back_result: Result<(), String> = {
             let mut s = session.lock().unwrap();
             match s.snapshot.as_ref() {
                 None => Err("editor session was closed during reload".to_string()),
                 Some(current) if current.mod_path != cloned_path => {
-                    Err("editor session was reopened during reload".to_string())
+                    Err("editor session was modified during reload".to_string())
+                }
+                Some(_) if s.generation != original_generation => {
+                    Err("editor session was modified during reload".to_string())
                 }
                 Some(_) => {
                     s.snapshot = Some(snap_a);
@@ -426,8 +449,8 @@ mod tests {
         );
         let err = write_back_result.unwrap_err();
         assert!(
-            err.contains("reopened during reload"),
-            "expected 'reopened during reload' error, got: {err}"
+            err.contains("modified during reload"),
+            "expected 'modified during reload' error, got: {err}"
         );
 
         // The session must still hold snap_b's mod_path (not the stale snap_a).
@@ -437,6 +460,86 @@ mod tests {
             stored_path,
             Some(snap_b.mod_path),
             "session must remain bound to the new mod_path after a concurrent re-open"
+        );
+    }
+
+    /// Regression test for codex P1 (#624/#627):
+    ///
+    /// A concurrent close+open of the **same** mod_path must be detected even
+    /// though the path comparison in Phase 3 would pass.  The generation token
+    /// is bumped by `handle_editor_open_mod`, so an in-flight reload that
+    /// captured the pre-open generation must fail with an error rather than
+    /// silently overwriting the freshly-opened snapshot.
+    #[test]
+    fn editor_reload_rejects_stale_snapshot_same_path_same_generation_bumped() {
+        let root = std::path::PathBuf::from("../../mods/rundale");
+        if !root.exists() {
+            return;
+        }
+
+        // Load the snapshot as if a reload were in-flight.
+        let snap_original = mod_io::load_mod_snapshot(&root).expect("load snap_original");
+
+        // Seed a session that looks exactly as it would after handle_editor_open_mod:
+        // generation = 1, snapshot path = root.
+        let session = Mutex::new(EditorSession {
+            snapshot: Some(snap_original.clone()),
+            generation: 1,
+            ..EditorSession::default()
+        });
+
+        // Phase 1 (reload simulation): capture path + generation under lock.
+        let (cloned_path, original_generation) = {
+            let s = session.lock().unwrap();
+            let snap = s.snapshot.as_ref().unwrap();
+            (snap.mod_path.clone(), s.generation)
+        };
+        assert_eq!(original_generation, 1);
+
+        // Concurrent close+open of the SAME path: generation increments to 2.
+        // (Mirrors what handle_editor_open_mod now does.)
+        {
+            let mut s = session.lock().unwrap();
+            let new_snap = snap_original.clone(); // same path, fresh snapshot
+            s.snapshot = Some(new_snap);
+            s.generation = s.generation.wrapping_add(1); // 1 → 2
+        }
+
+        // Phase 3 simulation: stale reload tries to write back.
+        // mod_path is the SAME, but generation changed — must be rejected.
+        let write_back_result: Result<(), String> = {
+            let mut s = session.lock().unwrap();
+            match s.snapshot.as_ref() {
+                None => Err("editor session was closed during reload".to_string()),
+                Some(current) if current.mod_path != cloned_path => {
+                    Err("editor session was modified during reload".to_string())
+                }
+                Some(_) if s.generation != original_generation => {
+                    Err("editor session was modified during reload".to_string())
+                }
+                Some(_) => {
+                    s.snapshot = Some(snap_original);
+                    s.generation = s.generation.wrapping_add(1);
+                    Ok(())
+                }
+            }
+        };
+
+        assert!(
+            write_back_result.is_err(),
+            "write-back must fail when session was reopened (same path, generation changed)"
+        );
+        let err = write_back_result.unwrap_err();
+        assert!(
+            err.contains("modified during reload"),
+            "expected 'modified during reload' error, got: {err}"
+        );
+
+        // Session generation must remain at 2 (not bumped to 3 by the stale write-back).
+        let s = session.lock().unwrap();
+        assert_eq!(
+            s.generation, 2,
+            "generation must not be bumped by the rejected stale write-back"
         );
     }
 }
