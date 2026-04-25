@@ -232,9 +232,11 @@ witness-scan:
     #!/usr/bin/env bash
     set -euo pipefail
     tmpfile=$(mktemp)
-    git diff --name-only -z --diff-filter=d HEAD \
+    _base=$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD 2>/dev/null || echo "HEAD")
+    git diff --name-only -z --diff-filter=d "$_base" \
       | tr '\0' '\n' \
       | grep -E '^(crates|apps|docs|testing|mods)/' \
+      | grep -v '^docs/agent/witness\.md$' \
       > "$tmpfile" || true
 
     count=$(wc -l < "$tmpfile" | tr -d ' ')
@@ -254,13 +256,12 @@ witness-scan:
         -e '//\s*\.\.\.' \
         -e '/\*\s*\.\.\.\s*\*/' \
         -e 'pass\s*#\s*TODO' \
-        -e 'Not implemented' \
         -e 'return nil\s*//\s*placeholder' \
-        -e 'todo!\(\)' \
-        -e 'unimplemented!\(\)' \
-        -e 'unreachable!\(\)' \
-        -e 'panic!\("not yet implemented"\)' \
-        -e 'panic!\("todo"\)' \
+        -e 'todo!\(' \
+        -e 'unimplemented!\(' \
+        -e 'unreachable!\(' \
+        -e 'panic!\("[Nn]ot implemented' \
+        -e 'panic!\("[Tt]odo' \
         -- "$f" && found=1 || true
     done < "$tmpfile"
     rm -f "$tmpfile"

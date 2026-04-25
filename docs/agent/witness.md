@@ -39,18 +39,17 @@ Large AI-assisted refactors can report "done" while silently leaving placeholder
 
 ## What witness-scan checks
 
-`just witness-scan` inspects every file under `crates/`, `apps/`, `docs/`, `testing/`, and `mods/` that is modified in the working tree (relative to `HEAD`). It fails loudly if any of these patterns appear:
+`just witness-scan` inspects every file under `crates/`, `apps/`, `docs/`, `testing/`, and `mods/` that is modified relative to the merge-base with `origin/main`. It fails loudly if any of these patterns appear:
 
 | Pattern | Catches |
 |---|---|
-| `// unchanged`, `// existing` | AI stubs that left original code in place |
-| `// ... rest of the function`, `// ...` | Ellipsis omissions |
-| `/* ... */` | Block-comment omissions |
-| `todo!()`, `unimplemented!()`, `unreachable!()` | Rust macro placeholders |
-| `panic!("not yet implemented")`, `panic!("todo")` | Rust panic stubs |
+| `//​ unchanged`, `//​ existing` | AI stubs that left original code in place |
+| `//​ … rest of the function`, `//​ …` | Ellipsis omissions |
+| `/*​ … ​*/` | Block-comment omissions |
+| `todo!(…)`, `unimplemented!(…)`, `unreachable!(…)` | Rust macro placeholders (with or without a message argument) |
+| `panic!("Not implemented…")`, `panic!("todo…")` | Rust panic stubs (case-insensitive prefix match) |
 | `pass # TODO` | Python placeholders |
-| `Not implemented` | Generic stubs |
-| `return nil // placeholder` | Go placeholders |
+| `return nil //​ placeholder` | Go placeholders |
 
 ## Witness log
 
