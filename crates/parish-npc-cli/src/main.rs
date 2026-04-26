@@ -319,7 +319,6 @@ fn generate_parish(conn: &Connection, parish: &str, pop: u32, seed: Option<u64>)
     // Matches the pattern used by `import_npcs`.
     let tx = conn.unchecked_transaction()?;
 
-
     tx.execute(
         "INSERT OR IGNORE INTO parishes(county_id, name) VALUES (?, ?)",
         params![county_id, parish],

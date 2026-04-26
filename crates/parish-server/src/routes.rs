@@ -212,7 +212,7 @@ pub async fn submit_input(
         InputResult::SystemCommand(cmd) => {
             // #332 — admin command gate: provider/key/model commands are operator-only.
             if is_admin_command(&cmd)
-                && let Err(status) = check_admin(&auth.email, &text)
+                && let Err(status) = check_admin(&auth.email, &text, admin_emails())
             {
                 return status;
             }

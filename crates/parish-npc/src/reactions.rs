@@ -1033,60 +1033,6 @@ pub async fn resolve_llm_greeting(
     }
 }
 
-// ── Player-message reaction prompt (LLM emoji selection) ────────────────────
-
-/// Structured response from an LLM asked to pick a reaction emoji for a
-/// player message.
-///
-/// The `emoji` field is optional: the LLM may return `null` (no visible
-/// reaction) or omit the field entirely.  Both are treated as "no reaction".
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmReactionDecision {
-    #[serde(default)]
-    pub emoji: Option<String>,
-}
-
-/// Builds the (system, user) prompt pair for asking an LLM to pick a reaction
-/// emoji in response to a player message.
-///
-/// The system prompt describes the palette, the `null` option, and the legacy
-/// keyword cues that the rule-based path already handles (so the LLM can be
-/// consistent).  The user prompt includes the NPC name and the verbatim player
-/// message.
-///
-/// The LLM is expected to return JSON: `{"emoji": "😊"}` or `{"emoji": null}`.
-pub fn build_player_message_reaction_prompt(npc: &Npc, player_message: &str) -> (String, String) {
-    let palette_lines: String = REACTION_PALETTE
-        .iter()
-        .map(|(emoji, desc)| format!("  {emoji}: {desc}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let system = format!(
-        "You are {name}, a {occupation} in rural Ireland, 1820.\n\n\
-         A player has just said something to you. Choose a single emoji reaction \
-         from the palette below, or return null if no visible reaction is appropriate.\n\n\
-         Available palette:\n{palette}\n  null: no visible reaction\n\n\
-         Legacy keyword cues (rule-based fallback — prefer the palette):\n\
-         - rent/landlord/evict → 😠\n\
-         - fairy/púca/banshee → ✝️\n\
-         - drink/whiskey/ale → 🍺\n\
-         - death/died/killed → 😢\n\n\
-         Return JSON only: {{\"emoji\": \"<choice>\"}} or {{\"emoji\": null}}.",
-        name = npc.name,
-        occupation = npc.occupation,
-        palette = palette_lines,
-    );
-
-    let user = format!(
-        "NPC: {name}\nPlayer message: {message}",
-        name = npc.name,
-        message = player_message,
-    );
-
-    (system, user)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1812,18 +1758,6 @@ mod tests {
             .next()
             .unwrap_or("");
         assert!(after_personality.chars().count() <= 300);
-    }
-
-    #[test]
-    fn llm_reaction_decision_allows_null() {
-        let parsed: LlmReactionDecision = serde_json::from_str(r#"{"emoji":null}"#).unwrap();
-        assert!(parsed.emoji.is_none());
-    }
-
-    #[test]
-    fn llm_reaction_decision_parses_valid_emoji() {
-        let parsed: LlmReactionDecision = serde_json::from_str(r#"{"emoji":"😊"}"#).unwrap();
-        assert_eq!(parsed.emoji.as_deref(), Some("😊"));
     }
 
     /// End-to-end: simulator returns a valid palette emoji → reaction emitted.
