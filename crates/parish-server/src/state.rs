@@ -134,6 +134,7 @@ impl ConversationRuntimeState {
 ///                             → current_branch_name
 ///                               → worker_handle
 ///                                 → save_lock
+///                                   → save_db
 /// ```
 ///
 /// Pair-by-pair rationale — every pair above is attested by at least
@@ -240,6 +241,16 @@ pub struct AppState {
     /// creation.  Stored here so runtime rebuilds (e.g. after `/provider`) use
     /// the operator-configured values instead of the compiled-in defaults. (#417)
     pub inference_config: InferenceConfig,
+    /// Cached async database handle for the currently active save file.
+    ///
+    /// Opened lazily by the autosave tick and reused across ticks to avoid
+    /// re-running `migrate()` and re-opening the WAL file on every 60-second
+    /// interval (#230).  Stored as `(path, db)` so the tick can detect when
+    /// `save_path` has changed and reopen accordingly.
+    ///
+    /// Lock ordering: acquired after `save_lock`.
+    pub save_db:
+        tokio::sync::Mutex<Option<(std::path::PathBuf, parish_core::persistence::AsyncDatabase)>>,
 }
 
 // GameConfig is now shared across all backends via parish-core.
@@ -356,6 +367,7 @@ pub fn build_app_state(
         active_ws: tokio::sync::Mutex::new(HashSet::new()),
         save_lock: Mutex::new(None),
         inference_config,
+        save_db: tokio::sync::Mutex::new(None),
     })
 }
 

@@ -189,6 +189,8 @@ pub struct App {
     /// Used by rebuild paths so `/provider` switches honour the configured
     /// timeouts instead of falling back to compiled-in defaults. (#417)
     pub inference_config: InferenceConfig,
+    /// True when stdin is not a terminal — lock failures are hard errors.
+    pub script_mode: bool,
 }
 
 impl App {
@@ -248,6 +250,7 @@ impl App {
             flags_path: None,
             save_lock: None,
             inference_config: InferenceConfig::default(),
+            script_mode: false,
         }
     }
 
