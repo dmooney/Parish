@@ -199,6 +199,10 @@ fn find_toplevel_dialogue_key(buffer: &str) -> Option<usize> {
 /// Uses depth-aware scanning via [`find_toplevel_dialogue_key`] so that
 /// `"dialogue"` embedded inside another field's string value cannot hijack
 /// extraction.
+///
+/// # Unicode (fix #655)
+/// JSON `\uXXXX` surrogate pairs (0xD800–0xDBFF followed by 0xDC00–0xDFFF)
+/// are combined into the correct non-BMP code point rather than silently dropped.
 pub fn extract_dialogue_from_partial_json(buffer: &str) -> Option<String> {
     let key = b"\"dialogue\"";
     let key_pos = find_toplevel_dialogue_key(buffer)?;
@@ -237,18 +241,60 @@ pub fn extract_dialogue_from_partial_json(buffer: &str) -> Option<String> {
                     b't' => result.push('\t'),
                     b'/' => result.push('/'),
                     b'u' => {
-                        if i + 5 < value_bytes.len() {
-                            if let Ok(hex) = std::str::from_utf8(&value_bytes[i + 2..i + 6])
-                                && let Ok(code) = u32::from_str_radix(hex, 16)
-                                && let Some(c) = char::from_u32(code)
-                            {
-                                result.push(c);
-                            }
-                            i += 6;
-                            continue;
-                        } else {
+                        // Need at least \uXXXX (6 bytes total from i).
+                        if i + 5 >= value_bytes.len() {
+                            // Incomplete \u escape at end of buffer — stop here.
                             return Some(result);
                         }
+                        let hex1 = match std::str::from_utf8(&value_bytes[i + 2..i + 6])
+                            .ok()
+                            .and_then(|s| u32::from_str_radix(s, 16).ok())
+                        {
+                            Some(v) => v,
+                            None => {
+                                i += 6;
+                                continue;
+                            }
+                        };
+                        // Check for surrogate pair: high surrogate 0xD800–0xDBFF.
+                        if (0xD800..=0xDBFF).contains(&hex1) {
+                            // Expect a low surrogate immediately following: \uXXXX.
+                            // Total offset from i: 6 (first \uXXXX) + 2 (\\u) + 4 (hex) = 12.
+                            if i + 11 < value_bytes.len()
+                                && value_bytes[i + 6] == b'\\'
+                                && value_bytes[i + 7] == b'u'
+                            {
+                                let hex2 = std::str::from_utf8(&value_bytes[i + 8..i + 12])
+                                    .ok()
+                                    .and_then(|s| u32::from_str_radix(s, 16).ok());
+                                if let Some(low) = hex2
+                                    && (0xDC00..=0xDFFF).contains(&low)
+                                {
+                                    // Combine surrogate pair into a scalar value.
+                                    let code_point =
+                                        0x10000 + ((hex1 - 0xD800) << 10) + (low - 0xDC00);
+                                    if let Some(c) = char::from_u32(code_point) {
+                                        result.push(c);
+                                    }
+                                    i += 12;
+                                    continue;
+                                }
+                            } else if i + 11 >= value_bytes.len() {
+                                // Low surrogate not yet in buffer — stop here and wait
+                                // for the next chunk.
+                                return Some(result);
+                            }
+                            // Malformed: high surrogate without a valid low surrogate.
+                            // Skip the high surrogate silently.
+                            i += 6;
+                            continue;
+                        }
+                        // Normal BMP code point.
+                        if let Some(c) = char::from_u32(hex1) {
+                            result.push(c);
+                        }
+                        i += 6;
+                        continue;
                     }
                     _ => {
                         result.push('\\');
@@ -576,6 +622,50 @@ mod tests {
             None,
             "must return None when 'dialogue' only appears inside a nested object"
         );
+    }
+
+    // ── Issue #655: surrogate pair handling for non-BMP characters ──────────
+
+    #[test]
+    fn extract_dialogue_surrogate_pair_emoji() {
+        // U+1F600 GRINNING FACE is encoded in JSON as 😀.
+        let buf = r#"{"dialogue": "Hello 😀!"}"#;
+        assert_eq!(
+            extract_dialogue_from_partial_json(buf),
+            Some("Hello 😀!".to_string()),
+            "surrogate pair must be decoded to the correct non-BMP code point"
+        );
+    }
+
+    #[test]
+    fn extract_dialogue_surrogate_pair_ancient_script() {
+        // U+10000 LINEAR B SYLLABLE B008 A = 𐀀.
+        let buf = r#"{"dialogue": "𐀀"}"#;
+        let result = extract_dialogue_from_partial_json(buf).unwrap();
+        let mut chars = result.chars();
+        let ch = chars.next().expect("should have one character");
+        assert_eq!(ch as u32, 0x10000, "must decode to U+10000");
+        assert!(chars.next().is_none());
+    }
+
+    #[test]
+    fn extract_dialogue_bmp_unicode_escape_still_works() {
+        // Regression: ordinary \uXXXX BMP escapes must still work after the
+        // surrogate-pair changes.
+        let buf = r#"{"dialogue": "élève"}"#;
+        assert_eq!(
+            extract_dialogue_from_partial_json(buf),
+            Some("élève".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_dialogue_incomplete_surrogate_pair_at_chunk_boundary() {
+        // Buffer ends after the high surrogate — must stop cleanly and not panic.
+        let buf = r#"{"dialogue": "Hi \uD83D"#;
+        let result = extract_dialogue_from_partial_json(buf);
+        // Must return Some("Hi ") — stops before the incomplete surrogate.
+        assert_eq!(result, Some("Hi ".to_string()));
     }
 
     // ── LanguageHint serde ───────────────────────────────────────────────────
