@@ -10,6 +10,7 @@ Start with the detailed agent docs in [docs/agent/README.md](docs/agent/README.m
 - [gotchas.md](docs/agent/gotchas.md) — Tokio, SQLite, Ollama, mode parity pitfalls
 - [git-workflow.md](docs/agent/git-workflow.md) — commits, tests, and PR standards
 - [skills.md](docs/agent/skills.md) — `/check`, `/verify`, `/prove`, `/play`, etc.
+- [harness.md](docs/agent/harness.md) — one-page map of every sensor, skill, and gate (start here when something fails)
 
 **Rundale** is the game (Irish living world, 1820). **Parish** is the engine (Rust workspace + frontends).
 
