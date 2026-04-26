@@ -661,8 +661,7 @@ pub fn spawn_inference_worker(
 
             let streaming_timeout =
                 std::time::Duration::from_secs(timeout_config.streaming_timeout_secs);
-            let blocking_timeout =
-                std::time::Duration::from_secs(timeout_config.timeout_secs);
+            let blocking_timeout = std::time::Duration::from_secs(timeout_config.timeout_secs);
 
             let result = match (request.token_tx, request.json_mode) {
                 (Some(token_tx), true) => {
@@ -1331,6 +1330,7 @@ mod tests {
                 prompt: "ping".to_string(),
                 system: None,
                 token_tx: None,
+                json_mode: false,
                 response_tx: resp_tx,
                 max_tokens: None,
                 temperature: None,
@@ -1355,6 +1355,7 @@ mod tests {
                 prompt: "pong".to_string(),
                 system: None,
                 token_tx: None,
+                json_mode: false,
                 response_tx: resp_tx2,
                 max_tokens: None,
                 temperature: None,
