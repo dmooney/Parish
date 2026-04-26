@@ -10,6 +10,7 @@ members = [
     "crates/parish-config",
     "crates/parish-inference",
     "crates/parish-world",
+    "crates/parish-palette",
     "crates/parish-npc",
     "crates/parish-npc-tool",
     "crates/parish-persistence",

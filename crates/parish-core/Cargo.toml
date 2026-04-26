@@ -9,6 +9,7 @@ parish-types = { path = "../parish-types" }
 parish-config = { path = "../parish-config" }
 parish-inference = { path = "../parish-inference" }
 parish-world = { path = "../parish-world" }
+parish-palette = { path = "../parish-palette" }
 parish-npc = { path = "../parish-npc" }
 parish-persistence = { path = "../parish-persistence" }
 parish-input = { path = "../parish-input" }
