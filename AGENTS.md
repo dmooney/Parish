@@ -27,8 +27,10 @@ Start with the detailed agent docs in [docs/agent/README.md](docs/agent/README.m
 
 ## Non-negotiable engineering rules
 
-1. **Module ownership:** Shared logic belongs in a leaf crate (`parish-config`, `parish-inference`, `parish-input`, `parish-npc`, `parish-persistence`, `parish-world`, `parish-types`). `parish-core` composes them. Do not duplicate leaf-crate logic in `crates/parish-cli/src/`.
-2. **Mode parity:** Tauri, headless CLI, and web server must share behavior.
+Rules marked **(enforced)** are checked mechanically by `cargo test` / CI — see `crates/parish-core/tests/architecture_fitness.rs`. The rest are still convention.
+
+1. **Module ownership (enforced):** Shared logic belongs in a leaf crate (`parish-config`, `parish-inference`, `parish-input`, `parish-npc`, `parish-persistence`, `parish-world`, `parish-types`). `parish-core` composes them. Do not duplicate leaf-crate logic in `crates/parish-cli/src/`. Orphaned source files (present on disk but not declared as `mod`) are also rejected.
+2. **Mode parity (partially enforced):** Tauri, headless CLI, and web server must share behavior. The architecture-fitness test forbids backend-agnostic crates from depending on `tauri` / `axum` / `tower*` / `wry` / `tao`, so runtime-specific code can't leak into shared logic. Wiring parity (every IPC handler called from every entry point) is still convention.
 3. **Tests with behavior changes:** Add/adjust tests for every behavior change.
 4. **Gameplay proof:** For gameplay features, run `/prove <feature>` (unit tests alone are not sufficient).
 5. **No unexplained `#[allow]`:** Only with explicit justification.
