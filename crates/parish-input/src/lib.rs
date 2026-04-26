@@ -21,7 +21,7 @@ pub use parser::{classify_input, parse_system_command};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{validate_branch_name, validate_flag_name};
+    use crate::commands::validate_branch_name;
     use crate::intent_llm::IntentResponse;
     use parish_config::InferenceCategory;
     use parish_types::GameSpeed;
