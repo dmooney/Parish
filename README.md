@@ -75,6 +75,7 @@ A four-tier simulation that scales hundreds of NPCs at varying fidelity based on
 - **Debug panel** (F12) — eight tabs (Overview, NPCs, World, Weather, Gossip, Conversations, Events, Inference) dockable to the side or bottom.
 - **Save picker** (F5) with a DAG visualization of branches and inline fork form.
 - **Keyboard shortcuts** — F5 saves, F12 debug, M map, Up/Down history, Tab autocomplete, Esc cancels travel.
+- **Parish Designer** — integrated GUI editor at `/editor` for authoring NPCs, locations, schedules, and mod data without touching JSON directly; see the [Parish Designer](#parish-designer-gui-editor) section below.
 - **Accessibility** — ARIA-labelled controls, visible focus rings, semantic HTML, WCAG-AA contrast across all theme variants.
 
 ### Web server
