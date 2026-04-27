@@ -7,6 +7,27 @@
 		selectedNpcId
 	} from '../stores/debug';
 	import type { NpcDebug, ScheduleVariantDebug } from '$lib/types';
+	import { submitInput } from '$lib/ipc';
+
+	/** Providers exposed as one-click preset buttons in the Inference tab.
+	 * Other providers (xai, deepseek, together, vllm) remain available via
+	 * `/preset <name>` typed into the input field. */
+	const PRESET_PROVIDERS = [
+		'anthropic',
+		'openai',
+		'google',
+		'openrouter',
+		'groq',
+		'mistral',
+		'ollama',
+		'lmstudio'
+	] as const;
+
+	function applyPreset(provider: string) {
+		submitInput(`/preset ${provider}`).catch((err) => {
+			console.error(`failed to apply preset ${provider}:`, err);
+		});
+	}
 
 	const tabs = [
 		'Overview',
@@ -519,6 +540,15 @@
 						{/if}
 					</div>
 					<div class="section">
+						<h4>Quick Presets</h4>
+						<div class="preset-row">
+							{#each PRESET_PROVIDERS as provider}
+								<button class="preset-btn" type="button" onclick={() => applyPreset(provider)}>{provider}</button>
+							{/each}
+						</div>
+						<div class="field muted">Sets a sensible model per inference role; API keys are not changed.</div>
+					</div>
+					<div class="section">
 						<div class="field muted">Reaction req id: {snap.inference.reaction_req_id}</div>
 					</div>
 					<div class="section">
@@ -767,6 +797,30 @@
 	.back-btn:focus-visible {
 		color: var(--color-fg);
 		border-color: var(--color-accent);
+	}
+
+	.preset-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		margin-bottom: 0.25rem;
+	}
+
+	.preset-btn {
+		background: none;
+		border: 1px solid var(--color-border);
+		color: var(--color-fg);
+		cursor: pointer;
+		padding: 0.15rem 0.5rem;
+		font-size: 0.7rem;
+		font-family: inherit;
+	}
+
+	.preset-btn:hover,
+	.preset-btn:focus-visible {
+		color: var(--color-fg);
+		border-color: var(--color-accent);
+		background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 	}
 
 	.player-here {
