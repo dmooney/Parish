@@ -300,6 +300,7 @@ fn find_eligible_couples(npcs: &[&mut Npc]) -> Vec<(NpcId, NpcId)> {
             if rel.kind != RelationshipKind::Romantic {
                 continue;
             }
+            // Canonical pair ordering to avoid duplicates
             let pair = if npc.id.0 < partner_id.0 {
                 (npc.id, *partner_id)
             } else {
@@ -316,6 +317,7 @@ fn find_eligible_couples(npcs: &[&mut Npc]) -> Vec<(NpcId, NpcId)> {
                 continue;
             }
 
+            // At least one must be of childbearing age (18-45)
             let npc_eligible = (18..=45).contains(&npc.age);
             let partner_eligible = (18..=45).contains(&partner_age);
 
