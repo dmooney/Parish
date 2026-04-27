@@ -139,6 +139,6 @@ dot variant as its own token): **41 tokens**.
    `testing/fixtures/test_provider_settings.txt` exercising the show → set →
    show round-trip plus the per-category variants, then baseline it via
    `eval_baselines.rs`.
-4. **Generalise show/set into a table-driven test (P1).** Replace the per-pair
-   tests with a parameterised loop so adding a new show/set command auto-fails
+4. **Generalize show/set into a table-driven test (P1).** Replace the per-pair
+   tests with a parameterized loop so adding a new show/set command auto-fails
    if the show form is missing — closes the "next provider category" trap.
