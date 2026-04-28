@@ -969,7 +969,7 @@ tier2_system = "prompts/tier2_system.txt"
         let mod_dir = outer.path().join("mod");
         fs::create_dir_all(&mod_dir).unwrap();
 
-        // Re-use the canonical fixture's contents but point world at a traversal.
+        // Re-use the canonical fixture's contents but point a manifest path at a traversal.
         let inner_tmp = create_test_mod();
         for entry in fs::read_dir(inner_tmp.path()).unwrap() {
             let entry = entry.unwrap();
