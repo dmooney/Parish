@@ -43,6 +43,11 @@ impl Provider {
         //   Simulation→ mid-tier / sonnet-tier (balanced quality/throughput)
         //   Intent    → small  / haiku-tier    (cheap, low-latency JSON)
         //   Reaction  → mid-tier / sonnet-tier (same as simulation)
+        //
+        // All cloud IDs were verified against each provider's docs in
+        // April 2026. Dated IDs are used where the `-latest` alias points
+        // at a stale version (notably Mistral, where `mistral-large-latest`
+        // still resolves to the 2024-era model).
         match self {
             Provider::Anthropic => [
                 Some("claude-opus-4-7"),
@@ -50,53 +55,64 @@ impl Provider {
                 Some("claude-haiku-4-5"),
                 Some("claude-sonnet-4-6"),
             ],
-            // OpenAI: GPT-5 flagship → mini → nano.
+            // OpenAI: GPT-5.5 is the current flagship (Apr 2026); the
+            // 5.4 mini/nano variants superseded the original 5-mini/nano
+            // in March 2026.
             Provider::OpenAi => [
-                Some("gpt-5"),
-                Some("gpt-5-mini"),
-                Some("gpt-5-nano"),
-                Some("gpt-5-mini"),
+                Some("gpt-5.5"),
+                Some("gpt-5.4-mini"),
+                Some("gpt-5.4-nano"),
+                Some("gpt-5.4-mini"),
             ],
             // Google: 2.5 Pro flagship → Flash mid → Flash-Lite small.
+            // (Gemini 3 not yet generally available; 2.5 family is current.)
             Provider::Google => [
                 Some("gemini-2.5-pro"),
                 Some("gemini-2.5-flash"),
                 Some("gemini-2.5-flash-lite"),
                 Some("gemini-2.5-flash"),
             ],
-            // Groq: Llama 3.3 70B flagship → Llama 3.3 70B mid (Groq has
-            // no true sonnet-tier; the 8B instant is the best haiku-tier).
+            // Groq: GPT-OSS 120B is the largest open-weight flagship hosted
+            // (replaced Llama-4 Maverick in Feb 2026); Llama 3.3 70B for
+            // the mid tier; Llama 3.1 8B Instant for haiku-tier.
             Provider::Groq => [
-                Some("llama-3.3-70b-versatile"),
+                Some("openai/gpt-oss-120b"),
                 Some("llama-3.3-70b-versatile"),
                 Some("llama-3.1-8b-instant"),
                 Some("llama-3.3-70b-versatile"),
             ],
-            // xAI: Grok 4 flagship → Grok 4 Fast mid+small (no nano tier).
+            // xAI: Grok 4.20 reasoning for top quality, Grok 4.20
+            // non-reasoning for the balanced tier, Grok 4.1 Fast for the
+            // cheap/fast tier.
             Provider::Xai => [
-                Some("grok-4"),
-                Some("grok-4-fast"),
-                Some("grok-4-fast"),
-                Some("grok-4-fast"),
+                Some("grok-4.20-reasoning"),
+                Some("grok-4.20-non-reasoning"),
+                Some("grok-4.1-fast-non-reasoning"),
+                Some("grok-4.20-non-reasoning"),
             ],
-            // Mistral: Large flagship → Medium mid → Ministral 3B small.
+            // Mistral: Large 3 (2512) flagship, Medium 3.1 (2508) mid,
+            // Ministral 3 3B (2512) small. Dated IDs because
+            // `mistral-large-latest` still resolves to the 2024-02 build.
             Provider::Mistral => [
-                Some("mistral-large-latest"),
-                Some("mistral-medium-latest"),
-                Some("ministral-3b-latest"),
-                Some("mistral-medium-latest"),
+                Some("mistral-large-2512"),
+                Some("mistral-medium-2508"),
+                Some("ministral-3-3b-2512"),
+                Some("mistral-medium-2508"),
             ],
-            // DeepSeek: Reasoner (R1) opus-tier → Chat (V3) sonnet-tier.
-            // No haiku-tier; intent reuses Chat.
+            // DeepSeek: V4 Pro flagship (1.6T params), V4 Flash mid (284B);
+            // the older `deepseek-chat` / `deepseek-reasoner` aliases are
+            // scheduled for deprecation 2026-07-24.
             Provider::DeepSeek => [
-                Some("deepseek-reasoner"),
-                Some("deepseek-chat"),
-                Some("deepseek-chat"),
-                Some("deepseek-chat"),
+                Some("deepseek-v4-pro"),
+                Some("deepseek-v4-flash"),
+                Some("deepseek-v4-flash"),
+                Some("deepseek-v4-flash"),
             ],
-            // Together: 405B flagship → 70B mid → 8B small.
+            // Together: Qwen 3.5 397B-A17B for the flagship tier (the
+            // 405B Llama is no longer on serverless); Llama 3.3 70B
+            // Turbo for mid, Llama 3.1 8B Turbo for small.
             Provider::Together => [
-                Some("meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo"),
+                Some("Qwen/Qwen3.5-397B-A17B"),
                 Some("meta-llama/Llama-3.3-70B-Instruct-Turbo"),
                 Some("meta-llama/Llama-3.1-8B-Instruct-Turbo"),
                 Some("meta-llama/Llama-3.3-70B-Instruct-Turbo"),
@@ -108,10 +124,9 @@ impl Provider {
                 Some("anthropic/claude-haiku-4-5"),
                 Some("anthropic/claude-sonnet-4-6"),
             ],
-            // Local providers (Ollama / LM Studio / vLLM): pick the best
-            // open-weights tier for each role. 32B is the flagship size that
-            // still fits modern consumer hardware; 14B is the balanced
-            // mid-tier; 4B is the small/fast tier.
+            // Local providers (Ollama / LM Studio / vLLM): qwen3 32B is
+            // the largest size that still fits modern consumer hardware;
+            // 14B is the balanced mid-tier; 4B is the fast tier.
             Provider::Ollama => [
                 Some("qwen3:32b"),
                 Some("qwen3:14b"),
