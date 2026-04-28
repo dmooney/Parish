@@ -536,11 +536,15 @@ mod tests {
     fn test_festival_range_does_not_loop_at_naive_date_max() {
         // succ_opt() returns None at NaiveDate::MAX; the previous code used
         // .unwrap_or(date) which caused an infinite loop. Verify it terminates.
-        use chrono::{NaiveDate, NaiveTime, TimeZone};
+        use chrono::NaiveDate;
         let max = NaiveDate::MAX;
-        let t = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        let from = Utc.from_utc_datetime(&max.pred_opt().unwrap().and_time(t));
-        let to = Utc.from_utc_datetime(&max.and_time(t));
+        let from = max
+            .pred_opt()
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let to = max.and_hms_opt(0, 0, 0).unwrap().and_utc();
         // Should return in finite time (no festival on these distant dates)
         let result = check_festival_in_range(from, to);
         assert!(result.is_none());
