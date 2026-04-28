@@ -5,9 +5,9 @@
 //! dialogue, Sonnet for background simulation and arrival reactions, and
 //! Haiku for low-latency intent parsing.
 //!
-//! Local providers reference Ollama-style tags (`gemma4:e4b`, `qwen3:8b`,
-//! `ministral3:3b`) per the recommendations in
-//! `docs/design/inference-pipeline.md`. `Custom` and `Simulator` declare no
+//! Local providers reference Ollama/HuggingFace-style tags
+//! (`qwen3:32b`, `qwen3:14b`, `qwen3:4b`) sized to match the
+//! flagship/mid/small tier mapping. `Custom` and `Simulator` declare no
 //! preset — `Custom` because the endpoint shape is unknown, `Simulator`
 //! because it ignores the model name entirely.
 
@@ -38,56 +38,68 @@ impl Provider {
     /// (the user must know their own endpoint's model ids) and `Simulator`
     /// runs offline without a real model.
     pub fn preset_models(&self) -> PresetModels {
+        // Tier mapping (matches the Anthropic example — see crate docs):
+        //   Dialogue  → flagship / opus-tier   (highest quality reasoning)
+        //   Simulation→ mid-tier / sonnet-tier (balanced quality/throughput)
+        //   Intent    → small  / haiku-tier    (cheap, low-latency JSON)
+        //   Reaction  → mid-tier / sonnet-tier (same as simulation)
         match self {
-            // Dialogue: Opus (highest quality), Sim/Reaction: Sonnet (balanced),
-            // Intent: Haiku (cheap + low-latency JSON).
             Provider::Anthropic => [
                 Some("claude-opus-4-7"),
                 Some("claude-sonnet-4-6"),
                 Some("claude-haiku-4-5"),
                 Some("claude-sonnet-4-6"),
             ],
+            // OpenAI: GPT-5 flagship → mini → nano.
             Provider::OpenAi => [
-                Some("gpt-4o"),
-                Some("gpt-4o-mini"),
-                Some("gpt-4o-mini"),
-                Some("gpt-4o-mini"),
+                Some("gpt-5"),
+                Some("gpt-5-mini"),
+                Some("gpt-5-nano"),
+                Some("gpt-5-mini"),
             ],
+            // Google: 2.5 Pro flagship → Flash mid → Flash-Lite small.
             Provider::Google => [
                 Some("gemini-2.5-pro"),
                 Some("gemini-2.5-flash"),
                 Some("gemini-2.5-flash-lite"),
                 Some("gemini-2.5-flash"),
             ],
+            // Groq: Llama 3.3 70B flagship → Llama 3.3 70B mid (Groq has
+            // no true sonnet-tier; the 8B instant is the best haiku-tier).
             Provider::Groq => [
                 Some("llama-3.3-70b-versatile"),
+                Some("llama-3.3-70b-versatile"),
                 Some("llama-3.1-8b-instant"),
-                Some("llama-3.1-8b-instant"),
-                Some("llama-3.1-8b-instant"),
+                Some("llama-3.3-70b-versatile"),
             ],
+            // xAI: Grok 4 flagship → Grok 4 Fast mid+small (no nano tier).
             Provider::Xai => [
                 Some("grok-4"),
                 Some("grok-4-fast"),
                 Some("grok-4-fast"),
                 Some("grok-4-fast"),
             ],
+            // Mistral: Large flagship → Medium mid → Ministral 3B small.
             Provider::Mistral => [
                 Some("mistral-large-latest"),
-                Some("mistral-small-latest"),
+                Some("mistral-medium-latest"),
                 Some("ministral-3b-latest"),
-                Some("mistral-small-latest"),
+                Some("mistral-medium-latest"),
             ],
+            // DeepSeek: Reasoner (R1) opus-tier → Chat (V3) sonnet-tier.
+            // No haiku-tier; intent reuses Chat.
             Provider::DeepSeek => [
-                Some("deepseek-chat"),
+                Some("deepseek-reasoner"),
                 Some("deepseek-chat"),
                 Some("deepseek-chat"),
                 Some("deepseek-chat"),
             ],
+            // Together: 405B flagship → 70B mid → 8B small.
             Provider::Together => [
+                Some("meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo"),
                 Some("meta-llama/Llama-3.3-70B-Instruct-Turbo"),
                 Some("meta-llama/Llama-3.1-8B-Instruct-Turbo"),
-                Some("meta-llama/Llama-3.1-8B-Instruct-Turbo"),
-                Some("meta-llama/Llama-3.1-8B-Instruct-Turbo"),
+                Some("meta-llama/Llama-3.3-70B-Instruct-Turbo"),
             ],
             // OpenRouter: cross-provider IDs mirror the Anthropic preset.
             Provider::OpenRouter => [
@@ -96,25 +108,27 @@ impl Provider {
                 Some("anthropic/claude-haiku-4-5"),
                 Some("anthropic/claude-sonnet-4-6"),
             ],
-            // Local providers: 9-14B for dialogue, 7-8B for sim/reaction,
-            // 3B for intent (per docs/design/inference-pipeline.md).
+            // Local providers (Ollama / LM Studio / vLLM): pick the best
+            // open-weights tier for each role. 32B is the flagship size that
+            // still fits modern consumer hardware; 14B is the balanced
+            // mid-tier; 4B is the small/fast tier.
             Provider::Ollama => [
-                Some("gemma4:e4b"),
-                Some("qwen3:8b"),
-                Some("ministral3:3b"),
-                Some("qwen3:8b"),
+                Some("qwen3:32b"),
+                Some("qwen3:14b"),
+                Some("qwen3:4b"),
+                Some("qwen3:14b"),
             ],
             Provider::LmStudio => [
+                Some("qwen3:32b"),
                 Some("qwen3:14b"),
-                Some("qwen3:8b"),
-                Some("ministral3:3b"),
-                Some("qwen3:8b"),
+                Some("qwen3:4b"),
+                Some("qwen3:14b"),
             ],
             Provider::Vllm => [
+                Some("Qwen/Qwen3-32B"),
                 Some("Qwen/Qwen3-14B"),
-                Some("Qwen/Qwen3-8B"),
-                Some("mistralai/Ministral-3B-Instruct"),
-                Some("Qwen/Qwen3-8B"),
+                Some("Qwen/Qwen3-4B"),
+                Some("Qwen/Qwen3-14B"),
             ],
             Provider::Custom | Provider::Simulator => [None, None, None, None],
         }
@@ -221,11 +235,8 @@ mod tests {
         let p = Provider::Ollama;
         assert_eq!(
             p.preset_model(InferenceCategory::Dialogue),
-            Some("gemma4:e4b")
+            Some("qwen3:32b")
         );
-        assert_eq!(
-            p.preset_model(InferenceCategory::Intent),
-            Some("ministral3:3b")
-        );
+        assert_eq!(p.preset_model(InferenceCategory::Intent), Some("qwen3:4b"));
     }
 }

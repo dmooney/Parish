@@ -332,6 +332,10 @@ pub fn handle_command(
             Ok(provider) => {
                 config.base_url = provider.default_base_url().to_string();
                 config.provider_name = format!("{:?}", provider).to_lowercase();
+                // Auto-fill any unset model fields with the provider's preset
+                // (base + per-role) so users who only set the provider get
+                // sensible defaults.
+                config.fill_missing_models_from_presets();
                 CommandResult::with_effect(
                     format!("Provider changed to {}.", config.provider_name),
                     CommandEffect::RebuildInference,
@@ -416,6 +420,9 @@ pub fn handle_command(
                 let provider_name = format!("{:?}", provider).to_lowercase();
                 config.category_provider[idx] = Some(provider_name.clone());
                 config.category_base_url[idx] = Some(provider.default_base_url().to_string());
+                // Auto-fill the model for this category if unset, using the
+                // new provider's preset for this role.
+                config.fill_missing_models_from_presets();
                 CommandResult::with_effect(
                     format!("{} provider changed to {}.", cat.name(), provider_name),
                     CommandEffect::RebuildInference,
@@ -1259,7 +1266,7 @@ mod tests {
             &mut npc,
             &mut config,
         );
-        assert_eq!(config.category_model[idx].as_deref(), Some("gemma4:e4b"));
+        assert_eq!(config.category_model[idx].as_deref(), Some("qwen3:32b"));
     }
 
     #[test]
@@ -1332,6 +1339,61 @@ mod tests {
         assert!(result.response.contains("No preset"));
         assert!(!result.effects.contains(&CommandEffect::RebuildInference));
         assert_eq!(config.provider_name, prior_provider);
+    }
+
+    #[test]
+    fn set_provider_fills_missing_models_from_preset() {
+        let (mut world, mut npc, mut config) = default_state();
+        let result = handle_command(
+            Command::SetProvider("anthropic".to_string()),
+            &mut world,
+            &mut npc,
+            &mut config,
+        );
+        assert!(result.effects.contains(&CommandEffect::RebuildInference));
+        assert_eq!(config.provider_name, "anthropic");
+        assert_eq!(config.model_name, "claude-opus-4-7");
+        // All four per-category slots should be filled from the Anthropic preset.
+        assert_eq!(
+            config.category_model[InferenceCategory::Intent.idx()].as_deref(),
+            Some("claude-haiku-4-5"),
+        );
+        assert_eq!(
+            config.category_model[InferenceCategory::Simulation.idx()].as_deref(),
+            Some("claude-sonnet-4-6"),
+        );
+    }
+
+    #[test]
+    fn set_provider_does_not_overwrite_existing_model() {
+        let mut config = GameConfig {
+            model_name: "preferred-model".to_string(),
+            ..GameConfig::default()
+        };
+        let mut world = WorldState::new();
+        let mut npc = NpcManager::new();
+        handle_command(
+            Command::SetProvider("anthropic".to_string()),
+            &mut world,
+            &mut npc,
+            &mut config,
+        );
+        assert_eq!(config.model_name, "preferred-model");
+    }
+
+    #[test]
+    fn set_category_provider_fills_missing_model_from_preset() {
+        let (mut world, mut npc, mut config) = default_state();
+        handle_command(
+            Command::SetCategoryProvider(InferenceCategory::Intent, "anthropic".to_string()),
+            &mut world,
+            &mut npc,
+            &mut config,
+        );
+        assert_eq!(
+            config.category_model[InferenceCategory::Intent.idx()].as_deref(),
+            Some("claude-haiku-4-5"),
+        );
     }
 
     #[test]
