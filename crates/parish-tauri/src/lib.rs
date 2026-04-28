@@ -7,10 +7,7 @@ pub mod commands;
 pub mod editor_commands;
 pub mod events;
 
-/// How often the Tauri autosave task snapshots the active session (seconds).
-/// Must match parish-server AUTOSAVE_INTERVAL_SECS — both represent the same
-/// player-visible save cadence.
-const AUTOSAVE_INTERVAL_SECS: u64 = 60;
+use parish_core::AUTOSAVE_INTERVAL_SECS;
 
 use std::path::PathBuf;
 use std::sync::Arc;

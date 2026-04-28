@@ -25,9 +25,9 @@ use crate::state::{AppState, UiConfigSnapshot, build_app_state};
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
-/// How often the server-side autosave task snapshots active sessions (seconds).
-/// Changing this risks silent data loss on crash — update tests accordingly.
-pub const AUTOSAVE_INTERVAL_SECS: u64 = 60;
+/// Re-export so the test in this module can reference the canonical constant
+/// without importing from parish_core directly.
+pub use parish_core::AUTOSAVE_INTERVAL_SECS;
 
 /// Google OAuth credentials (optional — feature disabled when absent).
 pub struct OAuthConfig {
