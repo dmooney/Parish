@@ -183,12 +183,12 @@ pub fn apply_movement(
             });
 
             // En-route encounter (fires ~20% of traversals, see encounter.rs)
-            if let Some(ref text) = encounter_msg {
+            if let Some(text) = encounter_msg {
                 world.log(text.clone());
                 messages.push(GameMessage {
                     source: "system",
                     subtype: Some("encounter"),
-                    text: text.clone(),
+                    text,
                 });
             }
 
