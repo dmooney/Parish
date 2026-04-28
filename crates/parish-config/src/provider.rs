@@ -961,7 +961,7 @@ model = "toml-model"
             provider: Some("nvidia-nim".to_string()),
             base_url: None,
             api_key: None,
-            model: Some("meta/llama-3.3-70b-instruct".to_string()),
+            model: Some("nvidia/nemotron-3-nano-30b-a3b".to_string()),
         };
         let result = resolve_config(Some(Path::new("/nonexistent")), &cli);
         assert!(result.is_err());
@@ -987,7 +987,7 @@ model = "toml-model"
         assert_eq!(config.base_url, "https://integrate.api.nvidia.com");
         assert_eq!(
             config.model.as_deref(),
-            Some("meta/llama-3.1-405b-instruct")
+            Some("nvidia/nemotron-3-super-120b-a12b")
         );
     }
 

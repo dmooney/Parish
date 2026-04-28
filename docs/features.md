@@ -204,7 +204,7 @@ Categories are `dialogue`, `simulation`, `intent`, or `reaction`.
 | **Mistral** | Cloud |
 | **DeepSeek** | Cloud |
 | **Together AI** | Cloud |
-| **NVIDIA NIM** | Cloud — OpenAI-compatible; ships with a Llama 3.1 405B / 3.3 70B / 3.1 8B preset triple via `/preset nvidia-nim` |
+| **NVIDIA NIM** | Cloud — OpenAI-compatible; ships with a Nemotron 3 Super 120B / Nemotron 3 Nano 30B / Nemotron Nano 9B preset triple via `/preset nvidia-nim` |
 | **Custom** | User-provided OpenAI-compatible endpoint |
 
 ### Inference Categories
