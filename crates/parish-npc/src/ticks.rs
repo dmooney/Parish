@@ -2014,14 +2014,18 @@ mod tests {
 
     #[test]
     fn test_spoke_with_npc_memory_records_partner_not_self() {
+        const PADRAIG: NpcId = NpcId(1);
+        const TOMMY: NpcId = NpcId(5);
+        const LOCATION: LocationId = LocationId(2);
+
         let mut npcs: HashMap<NpcId, Npc> = HashMap::new();
-        npcs.insert(NpcId(1), make_test_npc(1, "Padraig", 2));
-        npcs.insert(NpcId(5), make_test_npc(5, "Tommy", 2));
+        npcs.insert(PADRAIG, make_test_npc(1, "Padraig", 2));
+        npcs.insert(TOMMY, make_test_npc(5, "Tommy", 2));
 
         let event = Tier2Event {
-            location: LocationId(2),
+            location: LOCATION,
             summary: "Padraig and Tommy exchanged news".to_string(),
-            participants: vec![NpcId(1), NpcId(5)],
+            participants: vec![PADRAIG, TOMMY],
             mood_changes: vec![],
             relationship_changes: vec![],
         };
@@ -2029,18 +2033,18 @@ mod tests {
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 14, 0, 0).unwrap();
         apply_tier2_event(&event, &mut npcs, game_time);
 
-        let padraig_mem = npcs.get(&NpcId(1)).unwrap().memory.recent(1);
-        let tommy_mem = npcs.get(&NpcId(5)).unwrap().memory.recent(1);
+        let padraig_mem = npcs.get(&PADRAIG).unwrap().memory.recent(1);
+        let tommy_mem = npcs.get(&TOMMY).unwrap().memory.recent(1);
 
         assert_eq!(
             padraig_mem[0].kind,
-            Some(crate::memory::MemoryKind::SpokeWithNpc(NpcId(5))),
-            "Padraig's memory should reference Tommy (5), not himself (1)"
+            Some(crate::memory::MemoryKind::SpokeWithNpc(TOMMY)),
+            "Padraig's memory should reference Tommy, not himself"
         );
         assert_eq!(
             tommy_mem[0].kind,
-            Some(crate::memory::MemoryKind::SpokeWithNpc(NpcId(1))),
-            "Tommy's memory should reference Padraig (1), not himself (5)"
+            Some(crate::memory::MemoryKind::SpokeWithNpc(PADRAIG)),
+            "Tommy's memory should reference Padraig, not himself"
         );
     }
 }
