@@ -23,7 +23,14 @@ pub fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 /// Converts a real-world distance in meters to game traversal minutes at a given speed.
 ///
 /// Returns at least 1 minute and at most 120 minutes (2-hour cap).
+///
+/// Panics in debug builds if `speed_m_per_s` is not positive; returns the
+/// cap (120 min) in release builds so callers always get a valid travel time.
 pub fn meters_to_minutes(meters: f64, speed_m_per_s: f64) -> u16 {
+    debug_assert!(speed_m_per_s > 0.0, "speed_m_per_s must be positive");
+    if speed_m_per_s <= 0.0 {
+        return 120;
+    }
     let speed_m_per_min = speed_m_per_s * 60.0;
     (meters / speed_m_per_min).ceil().clamp(1.0, 120.0) as u16
 }

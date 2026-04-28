@@ -172,7 +172,8 @@ pub fn parse_system_command(input: &str) -> Option<Command> {
             .unwrap_or("")
             .trim()
             .parse::<u64>()
-            .unwrap_or(30);
+            .unwrap_or(30)
+            .min(300);
         Some(Command::Spinner(secs))
     } else if lower == "/debug" {
         Some(Command::Debug(None))
