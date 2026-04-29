@@ -806,6 +806,7 @@ struct TurnOutcome {
     hints: Vec<parish_core::npc::IrishWordHint>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_npc_turn(
     state: &Arc<AppState>,
     queue: &InferenceQueue,
