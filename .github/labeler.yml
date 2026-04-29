@@ -1,68 +1,88 @@
-# PR Labeler Configuration
+# PR Labeler Configuration (v5+ format)
 #
 # Maps modified paths to labels. Used by .github/workflows/label.yml
 
 frontend:
-  - apps/ui/**/*
+  - changed-files:
+      - any-glob-to-any-file: apps/ui/**/*
 
 infra:
-  - .github/**/*
-  - deploy/**/*
-  - .claude/**/*
-  - justfile
-  - Cargo.toml
-  - Cargo.lock
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**/*
+          - deploy/**/*
+          - .claude/**/*
+          - justfile
+          - Cargo.toml
+          - Cargo.lock
 
 docs:
-  - docs/**/*
-  - README.md
-  - LICENSE
-  - NOTICE
-  - THIRD_PARTY_NOTICES.md
-  - AGENTS.md
-  - CLAUDE.md
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**/*
+          - README.md
+          - LICENSE
+          - NOTICE
+          - THIRD_PARTY_NOTICES.md
+          - AGENTS.md
+          - CLAUDE.md
 
 rundale:
-  - mods/rundale/**/*
+  - changed-files:
+      - any-glob-to-any-file: mods/rundale/**/*
 
 parish-core:
-  - crates/parish-core/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-core/**/*
 
 parish-cli:
-  - crates/parish-cli/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-cli/**/*
 
 parish-server:
-  - crates/parish-server/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-server/**/*
 
 parish-tauri:
-  - crates/parish-tauri/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-tauri/**/*
 
 parish-geo-tool:
-  - crates/parish-geo-tool/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-geo-tool/**/*
 
 parish-npc-tool:
-  - crates/parish-npc-tool/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-npc-tool/**/*
 
 parish-config:
-  - crates/parish-config/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-config/**/*
 
 parish-inference:
-  - crates/parish-inference/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-inference/**/*
 
 parish-world:
-  - crates/parish-world/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-world/**/*
 
 parish-palette:
-  - crates/parish-palette/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-palette/**/*
 
 parish-npc:
-  - crates/parish-npc/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-npc/**/*
 
 parish-persistence:
-  - crates/parish-persistence/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-persistence/**/*
 
 parish-input:
-  - crates/parish-input/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-input/**/*
 
 parish-types:
-  - crates/parish-types/**/*
+  - changed-files:
+      - any-glob-to-any-file: crates/parish-types/**/*
