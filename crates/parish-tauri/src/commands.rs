@@ -1396,8 +1396,8 @@ async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
     {
         let mut conversation = state.conversation.lock().await;
         conversation.last_spoken_at = std::time::Instant::now();
+        conversation.conversation_in_progress = false;
     }
-    set_conversation_running(state, false).await;
     emit_world_update(state, app).await;
 
     let _ = app.emit(

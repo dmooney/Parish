@@ -1296,8 +1296,8 @@ async fn run_idle_banter(state: &Arc<AppState>) {
     {
         let mut conversation = state.conversation.lock().await;
         conversation.last_spoken_at = std::time::Instant::now();
+        conversation.conversation_in_progress = false;
     }
-    set_conversation_running(state, false).await;
     emit_world_update(state).await;
 
     // Single stream-end after the entire idle-banter sequence (see comment
