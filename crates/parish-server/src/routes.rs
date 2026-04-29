@@ -1289,6 +1289,14 @@ async fn run_idle_banter(state: &Arc<AppState>) {
         let mut world = state.world.lock().await;
         world.clock.inference_resume();
     }
+    // Update last_spoken_at regardless of whether inference succeeded so a
+    // failed banter attempt creates a cooldown. Without this, the 1s
+    // tick_inactivity loop immediately re-fires run_idle_banter on every tick
+    // while inference is down, spamming failure messages until auto-pause.
+    {
+        let mut conversation = state.conversation.lock().await;
+        conversation.last_spoken_at = std::time::Instant::now();
+    }
     set_conversation_running(state, false).await;
     emit_world_update(state).await;
 

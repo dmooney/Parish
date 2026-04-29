@@ -1391,6 +1391,12 @@ async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
         let mut world = state.world.lock().await;
         world.clock.inference_resume();
     }
+    // Update last_spoken_at regardless of success so a failed banter attempt
+    // creates a cooldown and does not spam failure messages on every 1s tick.
+    {
+        let mut conversation = state.conversation.lock().await;
+        conversation.last_spoken_at = std::time::Instant::now();
+    }
     set_conversation_running(state, false).await;
     emit_world_update(state, app).await;
 
