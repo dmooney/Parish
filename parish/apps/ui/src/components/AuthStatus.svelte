@@ -11,6 +11,9 @@
 	let status = $state<AuthStatus | null>(null);
 
 	onMount(async () => {
+		// Skip fetch if in Tauri (no /api server running)
+		if ((window as any).__TAURI_INTERNALS__) return;
+
 		try {
 			const resp = await fetch('/api/auth/status');
 			if (resp.ok) status = await resp.json();
