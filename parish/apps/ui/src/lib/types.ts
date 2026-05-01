@@ -480,3 +480,7 @@ export interface SaveState {
 	branch_id: number | null;
 	branch_name: string | null;
 }
+
+export interface DemoTurnContext {
+	brief: string;
+}

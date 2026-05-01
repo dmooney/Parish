@@ -280,6 +280,64 @@ pub async fn submit_input(
     Ok(())
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct DemoTurnContext {
+    pub brief: String,
+}
+
+#[tauri::command]
+pub async fn build_demo_turn_context(
+    map_image_data_url: String,
+    extra_instructions: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<DemoTurnContext, String> {
+    let world = state.world.lock().await;
+    let now = world.clock.now();
+    let location_name = world
+        .graph
+        .get(world.player_location)
+        .map(|l| l.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let brief = format!(
+        "You are the player in Rundale (1820 rural Ireland living-world sim). Output exactly one next player input line.\n\n- Time: {}\n- Day: {}\n- Location: {}\n- Weather: {}\n- Season: {}\n- Festival: {}\n- Map image (data URL PNG): {}\n{}",
+        now.format("%H:%M"),
+        now.format("%A %Y-%m-%d"),
+        location_name,
+        world.weather,
+        world.season,
+        world.festival.clone().unwrap_or_else(|| "none".to_string()),
+        map_image_data_url,
+        extra_instructions.unwrap_or_default(),
+    );
+    Ok(DemoTurnContext { brief })
+}
+
+#[tauri::command]
+pub async fn generate_demo_player_input(
+    prompt: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let (client, model) = {
+        let config = state.config.lock().await;
+        let base_client = state.client.lock().await;
+        config.resolve_category_client(InferenceCategory::Intent, base_client.as_ref())
+    };
+    let Some(client) = client else {
+        return Err("No inference client configured for demo mode".to_string());
+    };
+    let out = client
+        .generate(
+            &model,
+            &prompt,
+            Some("Return one player command only."),
+            Some(120),
+            Some(0.7),
+        )
+        .await
+        .map_err(|e| format!("demo mode generation failed: {e}"))?;
+    Ok(out.lines().next().unwrap_or("").trim().to_string())
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Rebuilds the inference pipeline after a provider/key/client change.

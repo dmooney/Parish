@@ -48,7 +48,9 @@
 		onNpcReaction,
 		onTravelStart,
 		submitInput,
-		disposeTransport
+		disposeTransport,
+		buildDemoTurnContext,
+		generateDemoPlayerInput
 	} from '$lib/ipc';
 	import { createAutoPauseTracker } from '$lib/auto-pause';
 	import { getStreamChunkDelayMs, takeNextStreamChunk } from '$lib/stream-pacing';
@@ -57,6 +59,26 @@
 	const AUTO_PAUSE_MS = 300_000;
 	const MOUSEMOVE_THROTTLE_MS = 1000;
 	const STREAM_WAIT_FOR_WORD_MS = 70;
+	let demoMode = $state(false);
+	let demoPauseMs = $state(800);
+	let demoExtraInstructions = $state('');
+	let demoBusy = $state(false);
+	async function runDemoTurn() {
+		if (!demoMode || demoBusy || $streamingActive) return;
+		demoBusy = true;
+		try {
+			const canvas = document.querySelector('.maplibregl-canvas') as HTMLCanvasElement | null;
+			const mapImage = canvas?.toDataURL('image/png') ?? '';
+			const ctx = await buildDemoTurnContext(mapImage, demoExtraInstructions || undefined);
+			const cmd = await generateDemoPlayerInput(ctx.brief);
+			if (cmd.trim().length > 0) await submitInput(cmd.trim());
+		} catch (e) {
+			console.warn('demo turn failed', e);
+		} finally {
+			demoBusy = false;
+		}
+	}
+
 
 	type PendingNpcTurn = {
 		turnId: number;
@@ -427,6 +449,7 @@
 			finalizeStreamingEntry(turnId);
 			pendingNpcTurns.delete(turnId);
 			maybeFinishNpcStream();
+			if (demoMode) { setTimeout(() => { void runDemoTurn(); }, demoPauseMs); }
 		}
 
 		function startTurnPumpIfNeeded(turn: PendingNpcTurn) {
@@ -529,6 +552,7 @@
 			listeners.push(await onStreamEnd((payload) => {
 				pendingStreamEndHints = payload.hints;
 				maybeFinishNpcStream();
+			if (demoMode) { setTimeout(() => { void runDemoTurn(); }, demoPauseMs); }
 			}));
 
 			listeners.push(await onLoading((payload) => {
@@ -604,7 +628,14 @@
 	<StatusBar />
 
 	<!-- Mobile-only toggle toolbar -->
-	<div class="mobile-toolbar">
+	<div class="demo-toolbar">
+	<label><input type="checkbox" bind:checked={demoMode} /> Demo mode</label>
+	<input placeholder="extra demo instructions" bind:value={demoExtraInstructions} />
+	<input type="number" min="0" step="100" bind:value={demoPauseMs} />
+	<button type="button" onclick={() => void runDemoTurn()} disabled={!demoMode || demoBusy}>Run demo turn</button>
+</div>
+
+<div class="mobile-toolbar">
 		<button
 			type="button"
 			class="mobile-btn"

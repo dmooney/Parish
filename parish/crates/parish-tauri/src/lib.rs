@@ -677,6 +677,8 @@ pub fn run() {
             commands::get_ui_config,
             commands::get_debug_snapshot,
             commands::submit_input,
+            commands::build_demo_turn_context,
+            commands::generate_demo_player_input,
             commands::discover_save_files,
             commands::save_game,
             commands::load_branch,

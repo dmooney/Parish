@@ -17,6 +17,7 @@ import type {
 	StreamEndPayload,
 	TextLogPayload,
 	NpcReactionPayload,
+	DemoTurnContext,
 	WorldUpdatePayload,
 	LoadingPayload,
 	TravelStartPayload,
@@ -297,3 +298,10 @@ export const onNpcReaction = (cb: (payload: NpcReactionPayload) => void) =>
 
 export const onTravelStart = (cb: (payload: TravelStartPayload) => void) =>
 	onEvent<TravelStartPayload>('travel-start', cb);
+
+
+export const buildDemoTurnContext = (mapImageDataUrl: string, extraInstructions?: string) =>
+	command<DemoTurnContext>('build_demo_turn_context', { mapImageDataUrl, extraInstructions });
+
+export const generateDemoPlayerInput = (prompt: string) =>
+	command<string>('generate_demo_player_input', { prompt });
