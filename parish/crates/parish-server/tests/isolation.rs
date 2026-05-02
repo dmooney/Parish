@@ -6,7 +6,8 @@
 use axum::http::StatusCode;
 
 use parish_server::routes::{
-    check_admin_against, is_admin_command, validate_addressed_to, validate_branch_name,
+    check_admin_against, check_admin_no_config, is_admin_command, validate_addressed_to,
+    validate_branch_name,
 };
 use parish_server::session::is_valid_session_id;
 
@@ -101,6 +102,33 @@ fn check_admin_against_different_admin_sets_are_independent() {
 fn check_admin_against_none_config_is_deterministic() {
     let result = check_admin_against("any@example.com", "/key sk-x", None);
     // In test/debug builds, cfg!(debug_assertions) is true → Ok(()).
+    assert_eq!(
+        result,
+        Ok(()),
+        "debug build with no admin config must allow (fail-open for local dev)"
+    );
+}
+
+/// Covers the release-mode fail-closed branch of `check_admin_against`.
+///
+/// `cfg!(debug_assertions)` is always `true` under `cargo test`, so the
+/// release path is exercised via `check_admin_no_config(is_debug = false)`.
+/// This is the testable helper extracted specifically to cover issue #763.
+#[test]
+fn check_admin_no_config_release_mode_is_fail_closed() {
+    // Simulate release build: is_debug = false → must be FORBIDDEN.
+    let result = check_admin_no_config("any@example.com", "/key sk-x", false);
+    assert_eq!(
+        result,
+        Err(StatusCode::FORBIDDEN),
+        "release build with no admin config must deny (fail-closed)"
+    );
+}
+
+/// Confirm the debug-mode path of `check_admin_no_config` allows any user.
+#[test]
+fn check_admin_no_config_debug_mode_is_fail_open() {
+    let result = check_admin_no_config("any@example.com", "/key sk-x", true);
     assert_eq!(
         result,
         Ok(()),
@@ -461,6 +489,61 @@ fn create_branch_65_char_name_is_400() {
 #[test]
 fn create_branch_valid_name_passes_validation() {
     assert_eq!(validate_branch_name("valid name"), Ok(()));
+}
+
+// ── #753 — /api/debug-snapshot admin gate ────────────────────────────────────
+//
+// `check_admin_against` is the testable variant of the production `check_admin`
+// call that now guards `get_debug_snapshot`.  These tests mirror the isolation
+// tests for admin commands (#332, #605) above: they supply an explicit admin
+// email rather than touching the `PARISH_ADMIN_EMAILS` OnceCell cache, so
+// they remain fully self-contained and order-independent regardless of how
+// other tests set the env var.
+
+/// Non-admin authenticated user must be rejected (403) from `/api/debug-snapshot`.
+#[test]
+fn debug_snapshot_non_admin_is_403() {
+    assert_eq!(
+        check_admin_against(
+            "attacker@example.com",
+            "debug-snapshot",
+            Some("operator@example.com"),
+        ),
+        Err(StatusCode::FORBIDDEN),
+        "non-admin user must receive 403 from debug-snapshot gate"
+    );
+}
+
+/// Admin user must be allowed through the gate (Ok(())).
+#[test]
+fn debug_snapshot_admin_is_ok() {
+    assert_eq!(
+        check_admin_against(
+            "operator@example.com",
+            "debug-snapshot",
+            Some("operator@example.com"),
+        ),
+        Ok(()),
+        "admin user must be allowed through the debug-snapshot gate"
+    );
+}
+
+/// Unauthenticated requests (no CF JWT) are rejected upstream by
+/// `cf_access_guard` with 401 before the handler is even reached.
+///
+/// That path is covered by `tests/auth_guard.rs`; this test confirms
+/// that the admin gate is independent from the auth gate: a completely
+/// un-configured admin list (`None`) behaves consistently with the
+/// rest of the admin-gate tests (fail-open in debug, fail-closed in release).
+#[test]
+fn debug_snapshot_no_admin_config_is_deterministic() {
+    let result = check_admin_against("any@example.com", "debug-snapshot", None);
+    // Debug builds (tests) are fail-open for local dev.
+    assert_eq!(
+        result,
+        Ok(()),
+        "debug build with no admin config must allow (fail-open for local dev)"
+    );
 }
 
 // ── #785 — Session cookie format validation ──────────────────────────────────
