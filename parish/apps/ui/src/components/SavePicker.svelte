@@ -693,7 +693,8 @@
 	}
 
 	.node-branch-btn {
-		display: none;
+		opacity: 0;
+		pointer-events: none;
 		position: absolute;
 		bottom: 100%;
 		left: 50%;
@@ -711,8 +712,15 @@
 		margin-bottom: 4px;
 		z-index: 5;
 	}
-	.dag-node:hover .node-branch-btn {
-		display: block;
+	.dag-node:hover .node-branch-btn,
+	.dag-node:focus-within .node-branch-btn {
+		opacity: 1;
+		pointer-events: auto;
+	}
+	.dag-node:hover .node-branch-btn:disabled,
+	.dag-node:focus-within .node-branch-btn:disabled {
+		opacity: 0.4;
+		pointer-events: none;
 	}
 	.node-branch-btn:hover {
 		color: var(--color-accent);
