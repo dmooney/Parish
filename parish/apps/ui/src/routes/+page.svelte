@@ -10,6 +10,7 @@
 	import InputField from '../components/InputField.svelte';
 	import DebugPanel from '../components/DebugPanel.svelte';
 	import SavePicker from '../components/SavePicker.svelte';
+	import SetupOverlay from '../components/SetupOverlay.svelte';
 
 	import { worldState, mapData, npcsHere, textLog, streamingActive, loadingSpinner, loadingPhrase, loadingColor, languageHints, nameHints, uiConfig, fullMapOpen, focailOpen, addReaction, trimTextLog, messageHints, pushErrorLog, formatIpcError } from '../stores/game';
 
@@ -661,6 +662,7 @@
 
 <DebugPanel />
 <SavePicker />
+<SetupOverlay />
 
 <style>
 	.app-shell {
