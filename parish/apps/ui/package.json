@@ -11,7 +11,6 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"check:e2e": "tsc -p tsconfig.e2e.json --noEmit",
 		"test:e2e": "playwright test",
 		"test:e2e:update": "playwright test --update-snapshots",
 		"notices": "npx --yes license-checker-rseidelsohn --production --excludePrivatePackages --clarificationsFile ./license-clarifications.json --markdown --out ../../THIRD_PARTY_NOTICES.ui.md"
