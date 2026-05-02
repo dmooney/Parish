@@ -25,12 +25,26 @@ function waitForFalse(store: Readable<boolean>, timeoutMs = 30_000): Promise<voi
 			if (timer !== undefined) clearTimeout(timer);
 		};
 
+		// Use a `resolved` flag so the synchronous Svelte subscription case
+		// (store already false → callback fires before `unsub` is assigned)
+		// is handled correctly: skip cleanup in the callback, then clean up
+		// immediately after the subscribe call returns.
+		let resolved = false;
 		unsub = store.subscribe((v) => {
 			if (!v) {
-				cleanup();
-				resolve();
+				resolved = true;
+				if (unsub) {
+					cleanup();
+					resolve();
+				}
 			}
 		});
+
+		if (resolved) {
+			cleanup();
+			resolve();
+			return;
+		}
 
 		// Safety net: if stream-end never arrives, don't hang forever.
 		timer = setTimeout(() => {

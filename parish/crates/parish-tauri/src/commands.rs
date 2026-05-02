@@ -2327,7 +2327,9 @@ pub async fn get_demo_context(
 ///    and JSON-parse from there.
 /// 3. Fallback: no JSON at all — strip thinking preamble, take last line.
 fn extract_action_from_response(text: &str) -> String {
-    let trimmed = text.trim();
+    // Strip thinking blocks first so all patterns operate on clean text.
+    let stripped = strip_thinking_block(text);
+    let trimmed = stripped.trim();
 
     // Pattern 1: fill-in-the-blank completion — response starts with the
     // action text and ends with `"}` or just `"`. The model completed
@@ -2361,12 +2363,8 @@ fn extract_action_from_response(text: &str) -> String {
         search = &search[start + 1..];
     }
 
-    // Pattern 3: fallback — strip thinking preamble and take last meaningful line.
-    strip_thinking_block(text)
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .to_string()
+    // Pattern 3: fallback — take last meaningful line from already-stripped text.
+    trimmed.trim_matches('"').trim_matches('\'').to_string()
 }
 
 /// Strips reasoning preamble from LLM responses so only the action remains.
