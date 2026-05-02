@@ -13,13 +13,16 @@ import { savePickerVisible, saveFiles, currentSaveState } from '../stores/save';
 import SavePicker from './SavePicker.svelte';
 import type { SaveBranchDisplay, SaveFileInfo, SaveState } from '$lib/types';
 
+// jsdom does not implement Element.scrollIntoView; stub it to avoid unhandled rejections.
+Element.prototype.scrollIntoView = vi.fn();
+
 // ── IPC mock ────────────────────────────────────────────────────────────────
 // All IPC calls are mocked; test-specific overrides via mockReturnValue/mockResolvedValue.
 
-const mockDiscoverSaveFiles = vi.fn<[], Promise<SaveFileInfo[]>>(() => Promise.resolve([]));
-const mockGetSaveState = vi.fn<[], Promise<SaveState | null>>(() => Promise.resolve(null));
-const mockLoadBranch = vi.fn<[string, number], Promise<void>>(() => Promise.resolve());
-const mockCreateBranch = vi.fn<[string, number], Promise<string>>(() => Promise.resolve('new-id'));
+const mockDiscoverSaveFiles = vi.fn<() => Promise<SaveFileInfo[]>>(() => Promise.resolve([]));
+const mockGetSaveState = vi.fn<() => Promise<SaveState | null>>(() => Promise.resolve(null));
+const mockLoadBranch = vi.fn<(filePath: string, branchId: number) => Promise<void>>(() => Promise.resolve());
+const mockCreateBranch = vi.fn<(name: string, parentBranchId: number) => Promise<string>>(() => Promise.resolve('new-id'));
 const mockGetWorldSnapshot = vi.fn(() => Promise.resolve({}));
 const mockGetMap = vi.fn(() => Promise.resolve({}));
 const mockGetNpcsHere = vi.fn(() => Promise.resolve([]));
