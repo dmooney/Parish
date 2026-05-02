@@ -1872,10 +1872,10 @@ async fn do_new_game_inner(state: &Arc<AppState>) -> Result<(), String> {
         (world, data_dir.join("npcs.json"))
     };
 
-    let mut npc_manager = NpcManager::load_from_file(&npcs_path).map_err(|e| {
-        tracing::error!("do_new_game: failed to load npcs: {}", e);
-        format!("Failed to load NPC data: {}", e)
-    })?;
+    let mut npc_manager = NpcManager::load_from_file(&npcs_path).unwrap_or_else(|e| {
+        tracing::warn!("do_new_game: failed to load npcs.json: {}. No NPCs.", e);
+        NpcManager::new()
+    });
     npc_manager.assign_tiers(&world, &[]);
 
     // Replace state atomically (both locks held together to prevent a window
