@@ -22,7 +22,7 @@ just demo 3      # unlimited turns
 Capture logs to read the chat transcript:
 
 ```sh
-RUST_LOG=info just demo 2 5 > /tmp/demo.log 2>&1
+just demo 2 5 > /tmp/demo.log 2>&1
 grep -E "chat \[|demo turn|WARN" /tmp/demo.log
 ```
 
