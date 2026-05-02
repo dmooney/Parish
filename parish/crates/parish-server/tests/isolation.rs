@@ -1,13 +1,15 @@
 /// Integration tests for cross-user / shared-state isolation
-/// (issues #332, #333, #334, #335, #605).
+/// (issues #332, #333, #334, #335, #605, #752, #785).
 ///
 /// These tests drive minimal axum routers that exercise the security
 /// boundaries without requiring a fully initialised game world where possible.
 use axum::http::StatusCode;
 
 use parish_server::routes::{
-    check_admin_against, check_admin_no_config, is_admin_command, validate_branch_name,
+    check_admin_against, check_admin_no_config, is_admin_command, validate_addressed_to,
+    validate_branch_name,
 };
+use parish_server::session::is_valid_session_id;
 
 // ── #332 — Admin-command gate ─────────────────────────────────────────────────
 
@@ -218,12 +220,13 @@ async fn second_ws_upgrade_same_email_is_409() {
     // Build a minimal AppState using the public builder.
     use parish_core::npc::manager::NpcManager;
     use parish_core::world::transport::TransportConfig;
-    use parish_core::world::{LocationId, WorldState};
+    use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
     use parish_server::state::{GameConfig, UiConfigSnapshot, build_app_state};
 
     let data_dir =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../mods/rundale");
-    let world = WorldState::from_parish_file(&data_dir.join("world.json"), LocationId(15)).unwrap();
+    let world =
+        WorldState::from_parish_file(&data_dir.join("world.json"), DEFAULT_START_LOCATION).unwrap();
     let npc_manager = NpcManager::new();
     let ui_config = UiConfigSnapshot {
         hints_label: "test".to_string(),
@@ -332,12 +335,13 @@ async fn debug_snapshot_no_deadlock_with_concurrent_readers() {
     use parish_core::npc::manager::NpcManager;
     use parish_core::world::events::GameEvent;
     use parish_core::world::transport::TransportConfig;
-    use parish_core::world::{LocationId, WorldState};
+    use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
     use parish_server::state::{GameConfig, UiConfigSnapshot, build_app_state};
 
     let data_dir =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../mods/rundale");
-    let world = WorldState::from_parish_file(&data_dir.join("world.json"), LocationId(15)).unwrap();
+    let world =
+        WorldState::from_parish_file(&data_dir.join("world.json"), DEFAULT_START_LOCATION).unwrap();
     let npc_manager = NpcManager::new();
     let ui_config = UiConfigSnapshot {
         hints_label: "test".to_string(),
@@ -542,4 +546,86 @@ fn debug_snapshot_no_admin_config_is_deterministic() {
         Ok(()),
         "debug build with no admin config must allow (fail-open for local dev)"
     );
+}
+
+// ── #785 — Session cookie format validation ──────────────────────────────────
+
+/// A well-formed UUID v4 is accepted.
+#[test]
+fn session_id_valid_uuid_v4_passes() {
+    assert!(is_valid_session_id("550e8400-e29b-41d4-a716-446655440000"));
+}
+
+/// An empty string must be rejected — it would produce a useless path.
+#[test]
+fn session_id_empty_string_is_rejected() {
+    assert!(!is_valid_session_id(""));
+}
+
+/// A path-traversal attempt (`..`) must be rejected unconditionally.
+#[test]
+fn session_id_path_traversal_is_rejected() {
+    assert!(!is_valid_session_id("../../../etc/passwd"));
+}
+
+/// A `..`-containing value that still has only hex/hyphen chars is rejected
+/// because `..` is blocked explicitly.
+#[test]
+fn session_id_double_dot_only_hex_is_rejected() {
+    assert!(!is_valid_session_id("aaaa..bbbb"));
+}
+
+/// Non-hex characters (e.g. a slash or uppercase letter) are rejected.
+#[test]
+fn session_id_non_hex_chars_are_rejected() {
+    assert!(!is_valid_session_id("UPPERCASE-UUID-IS-INVALID"));
+    assert!(!is_valid_session_id("bad/path"));
+    assert!(!is_valid_session_id("with spaces"));
+}
+
+// ── #752 — addressed_to length cap ──────────────────────────────────────────
+
+/// Empty addressee list is always valid.
+#[test]
+fn addressed_to_empty_list_passes() {
+    assert_eq!(validate_addressed_to(&[]), Ok(()));
+}
+
+/// Up to 10 entries with short names is valid.
+#[test]
+fn addressed_to_ten_entries_passes() {
+    let names: Vec<String> = (0..10).map(|i| format!("npc{i}")).collect();
+    assert_eq!(validate_addressed_to(&names), Ok(()));
+}
+
+/// 11 entries must be rejected (exceeds the 10-entry cap).
+#[test]
+fn addressed_to_eleven_entries_is_rejected() {
+    let names: Vec<String> = (0..11).map(|i| format!("npc{i}")).collect();
+    assert_eq!(validate_addressed_to(&names), Err(StatusCode::BAD_REQUEST));
+}
+
+/// A single name longer than 100 characters must be rejected.
+#[test]
+fn addressed_to_name_over_100_chars_is_rejected() {
+    let long_name = "a".repeat(101);
+    assert_eq!(
+        validate_addressed_to(&[long_name]),
+        Err(StatusCode::BAD_REQUEST)
+    );
+}
+
+/// A name of exactly 100 characters must be accepted.
+#[test]
+fn addressed_to_name_exactly_100_chars_passes() {
+    let name = "a".repeat(100);
+    assert_eq!(validate_addressed_to(&[name]), Ok(()));
+}
+
+/// Mix: valid count but one name is oversized — still rejected.
+#[test]
+fn addressed_to_valid_count_but_oversized_name_is_rejected() {
+    let mut names: Vec<String> = (0..5).map(|i| format!("npc{i}")).collect();
+    names.push("x".repeat(101));
+    assert_eq!(validate_addressed_to(&names), Err(StatusCode::BAD_REQUEST));
 }
