@@ -45,7 +45,7 @@ fn weather_mod(weather: Weather) -> f64 {
 
 /// Pick one item from a slice using the given RNG.
 fn pick<'a, T>(rng: &mut StdRng, items: &'a [T]) -> &'a T {
-    let idx = rng.gen_range(0..items.len());
+    let idx = rng.random_range(0..items.len());
     &items[idx]
 }
 
@@ -286,7 +286,7 @@ Write one line only, no preamble, no explanation."
     let mut picks: Vec<&'static str> = Vec::new();
     let mut attempts = 0;
     while picks.len() < 4 && attempts < 40 && !pool.is_empty() {
-        let idx = rng.gen_range(0..pool.len());
+        let idx = rng.random_range(0..pool.len());
         let line = pool[idx];
         if line != canned.text && !picks.contains(&line) {
             picks.push(line);
@@ -322,7 +322,7 @@ pub fn resolve_encounter(
 ) -> Option<WayfarerEncounter> {
     let mut rng = StdRng::seed_from_u64(seed);
     let prob = (base_prob(time) + weather_mod(weather)).clamp(0.0, 1.0);
-    let roll: f64 = rng.r#gen();
+    let roll: f64 = rng.random();
     if roll >= prob {
         return None;
     }
@@ -499,7 +499,7 @@ mod tests {
             for &s in &seasons {
                 for &w in &weathers {
                     // Use seed=0 which gives roll=0, guaranteed trigger
-                    let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+                    let rng = rand::rngs::StdRng::seed_from_u64(0);
                     let prob = (super::base_prob(t) + super::weather_mod(w)).clamp(0.0, 1.0);
                     // Just test the pool lookup doesn't panic
                     let lines = match t {
