@@ -67,8 +67,10 @@ impl TileCache {
             .join(format!("{y}.png"));
 
         // ── Cache hit ──────────────────────────────────────────────────────
-        if tile_path.exists() {
-            return Ok(tokio::fs::read(&tile_path).await?);
+        match tokio::fs::read(&tile_path).await {
+            Ok(data) => return Ok(data),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
 
         // ── Cache miss: fetch from upstream ───────────────────────────────
@@ -88,7 +90,9 @@ impl TileCache {
         if let Some(parent) = tile_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&tile_path, &data).await?;
+        let tmp_path = tile_path.with_extension("tmp");
+        tokio::fs::write(&tmp_path, &data).await?;
+        tokio::fs::rename(&tmp_path, &tile_path).await?;
 
         Ok(data)
     }

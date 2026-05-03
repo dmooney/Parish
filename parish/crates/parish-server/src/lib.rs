@@ -410,7 +410,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .unwrap_or_else(|| saves_dir.join("tile-cache"));
     // Ensure the root cache directory exists at startup so the first request
     // doesn't race on directory creation.
-    if let Err(e) = std::fs::create_dir_all(&tile_cache_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&tile_cache_dir).await {
         tracing::warn!(
             dir = %tile_cache_dir.display(),
             error = %e,
