@@ -141,7 +141,10 @@ export const IRISH_HINTS: LanguageHint[] = [
 export const UI_CONFIG: UiConfig = {
 	hints_label: 'Focail (Irish Words)',
 	default_accent: DEFAULT_THEME_PALETTE.accent,
-	splash_text: ''
+	splash_text: 'Rundale\nCopyright © 2026 David Mooney. Licensed under GPL-3.0 — see LICENSE.\ntest-branch - 2026-03-29 00:00',
+	active_tile_source: '',
+	tile_sources: [],
+	auto_pause_timeout_seconds: 300
 };
 
 // ── Text log entries ────────────────────────────────────────────────────────
