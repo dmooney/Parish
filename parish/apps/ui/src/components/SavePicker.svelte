@@ -229,7 +229,7 @@
 	// Phantom branch ID used to identify the new-branch node in the layout
 	const PHANTOM_ID = -999;
 
-	const layoutBranches = $derived((() => {
+	const layoutBranches = $derived.by(() => {
 		if (!activeFile) return [];
 		const branches = [...activeFile.branches];
 		if (forkingBranchId !== null) {
@@ -247,7 +247,7 @@
 			}
 		}
 		return branches;
-	})());
+	});
 	const layout = $derived(layoutBranches.length > 0 ? layoutTree(layoutBranches) : null);
 </script>
 
