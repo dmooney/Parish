@@ -309,8 +309,10 @@ mod tests {
         };
         cfg.category_model
             .insert(InferenceCategory::Reaction, "reaction-model".to_string());
-        cfg.category_base_url
-            .insert(InferenceCategory::Reaction, "https://openrouter.ai/api".to_string());
+        cfg.category_base_url.insert(
+            InferenceCategory::Reaction,
+            "https://openrouter.ai/api".to_string(),
+        );
         cfg.category_api_key
             .insert(InferenceCategory::Reaction, "sk-test".to_string());
 
@@ -366,19 +368,27 @@ mod tests {
         assert!(changed);
         assert_eq!(cfg.model_name, "claude-opus-4-7");
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Dialogue).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("claude-opus-4-7"),
         );
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Simulation).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
             Some("claude-sonnet-4-6"),
         );
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Intent).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5"),
         );
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Reaction).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Reaction)
+                .map(String::as_str),
             Some("claude-sonnet-4-6"),
         );
     }
@@ -390,19 +400,29 @@ mod tests {
             model_name: "user-chosen-model".to_string(),
             ..GameConfig::default()
         };
-        cfg.category_model
-            .insert(InferenceCategory::Dialogue, "user-chosen-dialogue".to_string());
+        cfg.category_model.insert(
+            InferenceCategory::Dialogue,
+            "user-chosen-dialogue".to_string(),
+        );
 
         cfg.fill_missing_models_from_presets();
         assert_eq!(cfg.model_name, "user-chosen-model");
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Dialogue).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("user-chosen-dialogue"),
         );
         // The other three slots should still be filled from the preset.
-        assert!(cfg.category_model.contains_key(&InferenceCategory::Simulation));
+        assert!(
+            cfg.category_model
+                .contains_key(&InferenceCategory::Simulation)
+        );
         assert!(cfg.category_model.contains_key(&InferenceCategory::Intent));
-        assert!(cfg.category_model.contains_key(&InferenceCategory::Reaction));
+        assert!(
+            cfg.category_model
+                .contains_key(&InferenceCategory::Reaction)
+        );
     }
 
     #[test]
@@ -419,12 +439,16 @@ mod tests {
 
         cfg.fill_missing_models_from_presets();
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Intent).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5"),
         );
         // The other categories should pick up the ollama presets.
         assert_eq!(
-            cfg.category_model.get(&InferenceCategory::Dialogue).map(String::as_str),
+            cfg.category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("qwen3:32b"),
         );
     }
@@ -448,10 +472,14 @@ mod tests {
             model_name: "x".to_string(),
             ..GameConfig::default()
         };
-        cfg.category_model.insert(InferenceCategory::Dialogue, "a".to_string());
-        cfg.category_model.insert(InferenceCategory::Simulation, "b".to_string());
-        cfg.category_model.insert(InferenceCategory::Intent, "c".to_string());
-        cfg.category_model.insert(InferenceCategory::Reaction, "d".to_string());
+        cfg.category_model
+            .insert(InferenceCategory::Dialogue, "a".to_string());
+        cfg.category_model
+            .insert(InferenceCategory::Simulation, "b".to_string());
+        cfg.category_model
+            .insert(InferenceCategory::Intent, "c".to_string());
+        cfg.category_model
+            .insert(InferenceCategory::Reaction, "d".to_string());
         assert!(!cfg.fill_missing_models_from_presets());
     }
 
@@ -473,10 +501,22 @@ mod tests {
         };
         cfg.install_rate_limits(&rl);
 
-        assert!(cfg.category_rate_limit.contains_key(&InferenceCategory::Dialogue));
-        assert!(cfg.category_rate_limit.contains_key(&InferenceCategory::Intent));
-        assert!(!cfg.category_rate_limit.contains_key(&InferenceCategory::Simulation));
-        assert!(!cfg.category_rate_limit.contains_key(&InferenceCategory::Reaction));
+        assert!(
+            cfg.category_rate_limit
+                .contains_key(&InferenceCategory::Dialogue)
+        );
+        assert!(
+            cfg.category_rate_limit
+                .contains_key(&InferenceCategory::Intent)
+        );
+        assert!(
+            !cfg.category_rate_limit
+                .contains_key(&InferenceCategory::Simulation)
+        );
+        assert!(
+            !cfg.category_rate_limit
+                .contains_key(&InferenceCategory::Reaction)
+        );
     }
 
     #[test]
@@ -492,7 +532,10 @@ mod tests {
             ..RateLimitConfig::default()
         };
         cfg.install_rate_limits(&rl);
-        assert!(!cfg.category_rate_limit.contains_key(&InferenceCategory::Dialogue));
+        assert!(
+            !cfg.category_rate_limit
+                .contains_key(&InferenceCategory::Dialogue)
+        );
     }
 
     #[test]
@@ -504,8 +547,10 @@ mod tests {
             base_url: "http://localhost:11434".to_string(),
             ..GameConfig::default()
         };
-        cfg.category_base_url
-            .insert(InferenceCategory::Reaction, "https://openrouter.ai/api".to_string());
+        cfg.category_base_url.insert(
+            InferenceCategory::Reaction,
+            "https://openrouter.ai/api".to_string(),
+        );
         cfg.category_api_key
             .insert(InferenceCategory::Reaction, "sk-test".to_string());
 
@@ -531,8 +576,10 @@ mod tests {
             base_url: "http://localhost:11434".to_string(),
             ..GameConfig::default()
         };
-        cfg.category_base_url
-            .insert(InferenceCategory::Reaction, "https://openrouter.ai/api".to_string());
+        cfg.category_base_url.insert(
+            InferenceCategory::Reaction,
+            "https://openrouter.ai/api".to_string(),
+        );
         cfg.category_api_key
             .insert(InferenceCategory::Reaction, "sk-test".to_string());
 

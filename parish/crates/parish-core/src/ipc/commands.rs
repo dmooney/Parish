@@ -410,22 +410,18 @@ pub fn handle_command(
         }
 
         // ── Per-category provider/model/key ──────────────────────────────
-        Command::ShowCategoryProvider(cat) => {
-            match config.category_provider.get(&cat) {
-                Some(p) => CommandResult::text(format!("{} provider: {}", cat.name(), p)),
-                None => CommandResult::text(format!(
-                    "{} provider: (inherits base: {})",
-                    cat.name(),
-                    config.provider_name
-                )),
-            }
-        }
+        Command::ShowCategoryProvider(cat) => match config.category_provider.get(&cat) {
+            Some(p) => CommandResult::text(format!("{} provider: {}", cat.name(), p)),
+            None => CommandResult::text(format!(
+                "{} provider: (inherits base: {})",
+                cat.name(),
+                config.provider_name
+            )),
+        },
         Command::SetCategoryProvider(cat, name) => match Provider::from_str_loose(&name) {
             Ok(provider) => {
                 let provider_name = format!("{:?}", provider).to_lowercase();
-                config
-                    .category_provider
-                    .insert(cat, provider_name.clone());
+                config.category_provider.insert(cat, provider_name.clone());
                 config
                     .category_base_url
                     .insert(cat, provider.default_base_url().to_string());
@@ -439,28 +435,22 @@ pub fn handle_command(
             }
             Err(e) => CommandResult::text(format!("{}", e)),
         },
-        Command::ShowCategoryModel(cat) => {
-            match config.category_model.get(&cat) {
-                Some(m) => CommandResult::text(format!("{} model: {}", cat.name(), m)),
-                None => CommandResult::text(format!(
-                    "{} model: (inherits base: {})",
-                    cat.name(),
-                    config.model_name
-                )),
-            }
-        }
+        Command::ShowCategoryModel(cat) => match config.category_model.get(&cat) {
+            Some(m) => CommandResult::text(format!("{} model: {}", cat.name(), m)),
+            None => CommandResult::text(format!(
+                "{} model: (inherits base: {})",
+                cat.name(),
+                config.model_name
+            )),
+        },
         Command::SetCategoryModel(cat, name) => {
             config.category_model.insert(cat, name.clone());
             CommandResult::text(format!("{} model changed to {}.", cat.name(), name))
         }
-        Command::ShowCategoryKey(cat) => {
-            match config.category_api_key.get(&cat) {
-                Some(key) => {
-                    CommandResult::text(format!("{} API key: {}", cat.name(), mask_key(key)))
-                }
-                None => CommandResult::text(format!("{} API key: (not set)", cat.name())),
-            }
-        }
+        Command::ShowCategoryKey(cat) => match config.category_api_key.get(&cat) {
+            Some(key) => CommandResult::text(format!("{} API key: {}", cat.name(), mask_key(key))),
+            None => CommandResult::text(format!("{} API key: (not set)", cat.name())),
+        },
         Command::SetCategoryKey(cat, value) => {
             let cat_name = cat.name().to_string();
             config.category_api_key.insert(cat, value);
@@ -1294,7 +1284,10 @@ mod tests {
         );
         assert!(result.effects.contains(&CommandEffect::RebuildInference));
         assert_eq!(
-            config.category_provider.get(&InferenceCategory::Dialogue).map(String::as_str),
+            config
+                .category_provider
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("openrouter")
         );
     }
@@ -1309,7 +1302,10 @@ mod tests {
             &mut config,
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Simulation).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
             Some("mini-model")
         );
         assert!(result.response.contains("mini-model"));
@@ -1350,7 +1346,10 @@ mod tests {
         );
         assert!(result.effects.contains(&CommandEffect::RebuildInference));
         assert_eq!(
-            config.category_api_key.get(&InferenceCategory::Dialogue).map(String::as_str),
+            config
+                .category_api_key
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("sk-cat-key")
         );
     }
@@ -1372,19 +1371,31 @@ mod tests {
         assert_eq!(config.model_name, "claude-opus-4-7");
 
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Dialogue).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("claude-opus-4-7")
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Simulation).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
             Some("claude-sonnet-4-6")
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Intent).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5")
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Reaction).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Reaction)
+                .map(String::as_str),
             Some("claude-sonnet-4-6")
         );
         for cat in InferenceCategory::ALL {
@@ -1402,9 +1413,10 @@ mod tests {
     #[test]
     fn apply_preset_overwrites_existing_category_models() {
         let (mut world, mut npc, mut config) = default_state();
-        config
-            .category_model
-            .insert(InferenceCategory::Dialogue, "old-dialogue-model".to_string());
+        config.category_model.insert(
+            InferenceCategory::Dialogue,
+            "old-dialogue-model".to_string(),
+        );
 
         handle_command(
             Command::ApplyPreset("ollama".to_string()),
@@ -1413,7 +1425,10 @@ mod tests {
             &mut config,
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Dialogue).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("qwen3:32b")
         );
     }
@@ -1434,7 +1449,10 @@ mod tests {
         );
         assert_eq!(config.api_key.as_deref(), Some("sk-existing"));
         assert_eq!(
-            config.category_api_key.get(&InferenceCategory::Dialogue).map(String::as_str),
+            config
+                .category_api_key
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("sk-cat")
         );
     }
@@ -1508,11 +1526,17 @@ mod tests {
         assert_eq!(config.model_name, "claude-opus-4-7");
         // All four per-category slots should be filled from the Anthropic preset.
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Intent).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5"),
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Simulation).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
             Some("claude-sonnet-4-6"),
         );
     }
@@ -1544,7 +1568,10 @@ mod tests {
             &mut config,
         );
         assert_eq!(
-            config.category_model.get(&InferenceCategory::Intent).map(String::as_str),
+            config
+                .category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5"),
         );
     }

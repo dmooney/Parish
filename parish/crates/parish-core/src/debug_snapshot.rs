@@ -566,13 +566,11 @@ pub fn build_inference_categories(
     use crate::config::InferenceCategory;
     InferenceCategory::ALL
         .iter()
-        .map(|cat| {
-            InferenceCategoryDebug {
-                role: cat.name().to_string(),
-                provider: config.category_provider.get(cat).cloned(),
-                model: config.category_model.get(cat).cloned(),
-                base_url: config.category_base_url.get(cat).cloned(),
-            }
+        .map(|cat| InferenceCategoryDebug {
+            role: cat.name().to_string(),
+            provider: config.category_provider.get(cat).cloned(),
+            model: config.category_model.get(cat).cloned(),
+            base_url: config.category_base_url.get(cat).cloned(),
         })
         .collect()
 }
