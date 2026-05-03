@@ -15,8 +15,7 @@ use crate::types::{
     SeasonalSchedule,
 };
 use crate::{Npc, NpcId};
-use parish_types::LocationId;
-use parish_types::ParishError;
+use parish_types::{EmotionState, LocationId, ParishError, Temperament};
 use parish_world::time::{DayType, Season};
 
 /// Top-level JSON structure for the NPC data file.
@@ -58,6 +57,10 @@ pub struct NpcFileEntry {
     pub relationships: Vec<RelationshipFileEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge: Vec<String>,
+    /// Optional stable temperament shaping emotion decay and
+    /// reactivity. Missing blocks use [`Temperament::default`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperament: Option<Temperament>,
 }
 
 /// Intelligence ratings in the data file.
@@ -207,6 +210,19 @@ pub fn load_npcs_from_str(json: &str) -> Result<Vec<Npc>, ParishError> {
         }
     }
 
+    // Validate temperament ranges up-front so mod authors see a
+    // specific error at load rather than silent clamping at runtime.
+    for entry in &file.npcs {
+        if let Some(t) = entry.temperament
+            && let Err(msg) = t.validate()
+        {
+            return Err(ParishError::Setup(format!(
+                "NPC {} (id {}) has invalid temperament: {msg}",
+                entry.name, entry.id
+            )));
+        }
+    }
+
     // First pass: create all NPCs with their direct relationships
     let mut npcs: Vec<Npc> = file
         .npcs
@@ -248,6 +264,11 @@ pub fn load_npcs_from_str(json: &str) -> Result<Vec<Npc>, ParishError> {
                     .unwrap_or_default(),
                 location: LocationId(entry.home),
                 mood: entry.mood.clone(),
+                temperament: entry.temperament.unwrap_or_default(),
+                emotion: EmotionState::initial_from(
+                    &entry.temperament.unwrap_or_default(),
+                    &entry.mood,
+                ),
                 home: Some(LocationId(entry.home)),
                 workplace: entry.workplace.map(LocationId),
                 schedule: Some(schedule),
@@ -477,6 +498,73 @@ mod tests {
                 npc.name
             );
         }
+    }
+
+    #[test]
+    fn test_load_rejects_invalid_temperament() {
+        let json = r#"{
+            "npcs": [{
+                "id": 1,
+                "name": "Bad Temp",
+                "age": 30,
+                "occupation": "Farmer",
+                "personality": "Quiet",
+                "home": 1,
+                "workplace": null,
+                "mood": "calm",
+                "relationships": [],
+                "temperament": { "cheerfulness": 999.0, "reactivity": 0.5, "persistence": 0.5 }
+            }]
+        }"#;
+        let err = load_npcs_from_str(json).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("Bad Temp"), "error must name the NPC: {msg}");
+        assert!(
+            msg.contains("cheerfulness"),
+            "error must name the field: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_load_rejects_negative_reactivity() {
+        let json = r#"{
+            "npcs": [{
+                "id": 2,
+                "name": "Bad React",
+                "age": 30,
+                "occupation": "Farmer",
+                "personality": "Quiet",
+                "home": 1,
+                "workplace": null,
+                "mood": "calm",
+                "relationships": [],
+                "temperament": { "cheerfulness": 0.0, "reactivity": -2.0, "persistence": 0.5 }
+            }]
+        }"#;
+        let err = load_npcs_from_str(json).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("reactivity"), "error must name field: {msg}");
+    }
+
+    #[test]
+    fn test_load_accepts_boundary_temperament_values() {
+        let json = r#"{
+            "npcs": [{
+                "id": 3,
+                "name": "Boundary",
+                "age": 30,
+                "occupation": "Farmer",
+                "personality": "Quiet",
+                "home": 1,
+                "workplace": null,
+                "mood": "calm",
+                "relationships": [],
+                "temperament": { "cheerfulness": -1.0, "reactivity": 0.0, "persistence": 1.0 }
+            }]
+        }"#;
+        let npcs = load_npcs_from_str(json).expect("boundary values must load");
+        assert_eq!(npcs.len(), 1);
+        assert_eq!(npcs[0].temperament.cheerfulness, -1.0);
     }
 
     #[test]

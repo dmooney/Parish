@@ -1269,6 +1269,11 @@ pub fn run() {
                                             return;
                                         };
 
+                                        let emotions_enabled = state_t3
+                                            .config
+                                            .lock()
+                                            .await
+                                            .emotions_enabled();
                                         let ctx = parish_core::npc::ticks::Tier3Context {
                                             snapshots: &snapshots,
                                             queue: &queue,
@@ -1278,6 +1283,7 @@ pub fn run() {
                                             season: &season_str,
                                             hours,
                                             batch_size: 0,
+                                            emotions_enabled,
                                         };
 
                                         let result =
@@ -1420,6 +1426,11 @@ pub fn run() {
 
                                             // Submit each group sequentially (one LLM call
                                             // per group, single connection).
+                                            let emotions_enabled = state_t2
+                                                .config
+                                                .lock()
+                                                .await
+                                                .emotions_enabled();
                                             let mut events = Vec::new();
                                             for group in &groups {
                                                 if let Some(evt) =
@@ -1429,6 +1440,7 @@ pub fn run() {
                                                         group,
                                                         &time_desc,
                                                         &weather_str,
+                                                        emotions_enabled,
                                                     )
                                                     .await
                                                 {
@@ -1461,6 +1473,10 @@ pub fn run() {
                                                     game_time,
                                                 );
                                             }
+                                            // Emotional contagion leaks family intensities
+                                            // along strong positive relationships once per
+                                            // Tier 2 cycle, after events land.
+                                            npc_mgr.propagate_emotion_contagion(0.05);
                                             npc_mgr.record_tier2_tick(game_time);
                                             npc_mgr.set_tier2_in_flight(false);
 

@@ -219,6 +219,25 @@ impl GameConfig {
 
         changed
     }
+
+    /// Whether the structured character-emotion system is active this session.
+    ///
+    /// Ships on by default; kill-switched via `/flag disable emotions` at
+    /// runtime. Uses [`FeatureFlags::is_disabled`] so an unset flag reads as
+    /// enabled, matching the rule-6 kill-switch pattern in CLAUDE.md.
+    ///
+    /// When `false`:
+    /// - [`crate::npc::autonomous::pick_next_speaker_with_config`] falls back
+    ///   to arousal-only scoring (no `public_outburst` / `withdraws_silent`
+    ///   influence).
+    /// - Tier 1/2/3 prompts omit the emotion preamble and `emotion_delta`
+    ///   schema.
+    ///
+    /// Decay and contagion ticks always run regardless — so toggling
+    /// mid-session reveals live state rather than a stale snapshot.
+    pub fn emotions_enabled(&self) -> bool {
+        !self.flags.is_disabled("emotions")
+    }
 }
 
 /// Applies an optional rate limiter to whichever inner client variant
@@ -284,6 +303,21 @@ mod tests {
         assert!(c.active_tile_source.is_empty());
         assert!(c.tile_sources.is_empty());
         assert!(!c.reveal_unexplored_locations);
+    }
+
+    #[test]
+    fn emotions_enabled_kill_switch_semantics() {
+        let mut c = GameConfig::default();
+        assert!(c.emotions_enabled(), "default-on when no flag set");
+
+        c.flags.enable("emotions");
+        assert!(c.emotions_enabled(), "enabled when explicitly enabled");
+
+        c.flags.disable("emotions");
+        assert!(
+            !c.emotions_enabled(),
+            "kill-switched when explicitly disabled"
+        );
     }
 
     #[test]

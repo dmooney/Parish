@@ -418,6 +418,7 @@ pub async fn run_headless(
 
                     app.npc_manager.set_tier3_in_flight(true);
 
+                    let emotions_enabled = !app.flags.is_disabled("emotions");
                     let ctx = parish_core::npc::ticks::Tier3Context {
                         snapshots: &snapshots,
                         queue,
@@ -427,6 +428,7 @@ pub async fn run_headless(
                         season: &season_str,
                         hours,
                         batch_size: 0,
+                        emotions_enabled,
                     };
 
                     match parish_core::npc::ticks::tick_tier3(&ctx).await {
@@ -496,6 +498,7 @@ pub async fn run_headless(
 
                         app.npc_manager.set_tier2_in_flight(true);
 
+                        let emotions_enabled = !app.flags.is_disabled("emotions");
                         let mut events = Vec::new();
                         for group in &groups {
                             if let Some(evt) = parish_core::npc::ticks::run_tier2_for_group(
@@ -504,6 +507,7 @@ pub async fn run_headless(
                                 group,
                                 &app.world.clock.time_of_day().to_string(),
                                 &app.world.weather.to_string(),
+                                emotions_enabled,
                             )
                             .await
                             {
@@ -525,6 +529,14 @@ pub async fn run_headless(
                                 game_time,
                             );
                         }
+                        // Emotional contagion runs once per Tier 2
+                        // cycle, after the batch events have landed.
+                        // A 5% leak along strong positive relationships
+                        // lets a distraught NPC's state gradually colour
+                        // their closest ties. Capped per-family inside
+                        // propagate_contagion so cascades can't detonate.
+                        app.npc_manager.propagate_emotion_contagion(0.05);
+
                         app.npc_manager.record_tier2_tick(game_time);
                         app.debug_event(format!(
                             "[tier2] {} events from {} groups",
@@ -1065,6 +1077,7 @@ async fn handle_headless_game_input(
                 &dialogue,
                 target_name.as_deref(),
                 app.improv_enabled,
+                !app.flags.is_disabled("emotions"),
             ) {
                 // Teach this NPC the player's name if introduced
                 if app.world.player_name.is_some()
@@ -1183,6 +1196,9 @@ async fn handle_headless_game_input(
                                                 app.debug_event(event.clone());
                                             }
                                         }
+                                        // Light contagion so strongly-bonded NPCs feel
+                                        // immediate coupling from player-driven dialogue.
+                                        app.npc_manager.propagate_emotion_contagion(0.02);
 
                                         // Record conversation exchange
                                         let game_time = app.world.clock.now();

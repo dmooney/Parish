@@ -137,7 +137,8 @@ fn event_involves_npc(npc_id: NpcId, event: &GameEvent) -> bool {
         | GameEvent::MoodChanged { npc_id: id, .. }
         | GameEvent::NpcArrived { npc_id: id, .. }
         | GameEvent::NpcDeparted { npc_id: id, .. }
-        | GameEvent::LifeEvent { npc_id: id, .. } => *id == npc_id,
+        | GameEvent::LifeEvent { npc_id: id, .. }
+        | GameEvent::EmotionChanged { npc_id: id, .. } => *id == npc_id,
         GameEvent::RelationshipChanged { npc_a, npc_b, .. } => *npc_a == npc_id || *npc_b == npc_id,
         GameEvent::WeatherChanged { .. } | GameEvent::FestivalStarted { .. } => false,
     }
@@ -175,6 +176,9 @@ fn summarize_event_for_npc(npc_id: NpcId, event: &GameEvent) -> String {
         GameEvent::LifeEvent { description, .. } => {
             format!("Experienced: {description}")
         }
+        GameEvent::EmotionChanged { family, cause, .. } => {
+            format!("Felt {family:?} — {cause}")
+        }
         GameEvent::WeatherChanged { .. } | GameEvent::FestivalStarted { .. } => String::new(),
     }
 }
@@ -202,6 +206,8 @@ mod tests {
             intelligence: Intelligence::default(),
             location: LocationId(1),
             mood: "calm".to_string(),
+            emotion: parish_types::EmotionState::default(),
+            temperament: parish_types::Temperament::default(),
             home: Some(LocationId(1)),
             workplace: None,
             schedule: None,

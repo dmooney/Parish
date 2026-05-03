@@ -36,8 +36,13 @@ pub struct NpcSnapshot {
     pub personality: String,
     /// Compact intelligence tag for prompt injection (e.g. `INT[V3 A4 E2 P5 W4 C3]`).
     pub intelligence_tag: String,
-    /// Current mood.
+    /// Legacy one-word mood (kept for back-compat with any Tier 2
+    /// callers still reading this field).
     pub mood: String,
+    /// Short emotion descriptor for prompt injection. Derived from
+    /// `EmotionState::short_descriptor()` — e.g. "grief-stricken,
+    /// withdrawn". Preferred over `mood` in the Tier 2 prompt.
+    pub feeling: String,
     /// Relationship summaries with other NPCs at this location.
     pub relationship_context: String,
 }
@@ -80,11 +85,12 @@ pub fn relationship_label(strength: f64) -> &'static str {
 pub fn build_enhanced_system_prompt_with_config(
     npc: &Npc,
     improv: bool,
+    emotions_enabled: bool,
     config: &NpcConfig,
     npc_names: &std::collections::HashMap<NpcId, String>,
     known_roster: Option<&[(NpcId, String, String)]>,
 ) -> String {
-    let mut prompt = build_tier1_system_prompt(npc, improv);
+    let mut prompt = build_tier1_system_prompt(npc, improv, emotions_enabled);
 
     // Add known NPC roster (relationships + memory + co-located NPCs)
     // NpcId(0) is the player — shown first with a special "currently speaking with" note.
@@ -148,7 +154,14 @@ pub fn build_enhanced_system_prompt(
     improv: bool,
     npc_names: &std::collections::HashMap<NpcId, String>,
 ) -> String {
-    build_enhanced_system_prompt_with_config(npc, improv, &NpcConfig::default(), npc_names, None)
+    build_enhanced_system_prompt_with_config(
+        npc,
+        improv,
+        true,
+        &NpcConfig::default(),
+        npc_names,
+        None,
+    )
 }
 
 /// Builds an enhanced context prompt for Tier 1 interactions using the given config.
@@ -307,12 +320,60 @@ pub fn apply_tier1_response_with_config(
 ) -> Vec<String> {
     let mut events = Vec::new();
 
-    // Update mood from metadata
+    // Apply structured emotion delta from metadata. This is the
+    // write-back half of the Tier 1 emotion loop: the LLM reads the
+    // state via the prompt preamble, and here we consume the
+    // LLM-reported impulse to update internal state. The legacy
+    // mood string is re-derived after this so downstream readers
+    // stay consistent.
+    let mut emotion_already_applied = false;
     if let Some(ref meta) = response.metadata
+        && let Some(ref impulse) = meta.emotion_delta
+    {
+        let prev_label = npc.emotion.label();
+        npc.apply_emotion_impulse(impulse);
+        let new_label = npc.emotion.label();
+        if prev_label != new_label {
+            events.push(format!(
+                "{} emotion: {} -> {} ({:?} {:+.2}{})",
+                npc.name,
+                prev_label,
+                new_label,
+                impulse.family,
+                impulse.delta,
+                impulse
+                    .cause
+                    .as_deref()
+                    .map(|c| format!(", {c}"))
+                    .unwrap_or_default(),
+            ));
+        }
+        emotion_already_applied = true;
+    }
+
+    // Legacy mood-string fallback. If the LLM returned a structured
+    // delta, `apply_emotion_impulse` has already re-derived `mood`
+    // from `emotion.label()` and we must *not* overwrite it with the
+    // free-form string (which would break mood/emotion sync).
+    //
+    // When the LLM omits `emotion_delta` (emotions flag off, legacy
+    // schema, or a model that ignored the field), re-seed the
+    // structured `emotion` from the reported mood via the same
+    // `initial_from` heuristic used at NPC load. Without this,
+    // `npc.emotion` stays stale while `npc.mood` moves — and the
+    // next decay tick silently reverts `npc.mood` back to
+    // `emotion.label()`, undoing the LLM's reported shift. We
+    // assign `emotion` directly (not via `set_emotion`) so the LLM's
+    // exact string is preserved in `mood`; subsequent decay ticks
+    // will naturally normalise it to `emotion.label()` as the family
+    // vector evolves.
+    if !emotion_already_applied
+        && let Some(ref meta) = response.metadata
         && !meta.mood.is_empty()
         && meta.mood != npc.mood
     {
         events.push(format!("{} mood: {} -> {}", npc.name, npc.mood, meta.mood));
+        npc.emotion = parish_types::EmotionState::initial_from(&npc.temperament, &meta.mood);
         npc.mood = meta.mood.clone();
     }
 
@@ -424,14 +485,30 @@ pub fn record_witness_memories(
 }
 
 /// Builds the system prompt for a Tier 2 interaction between NPCs at a location.
-pub fn build_tier2_prompt(group: &Tier2Group, time_desc: &str, weather: &str) -> String {
+pub fn build_tier2_prompt(
+    group: &Tier2Group,
+    time_desc: &str,
+    weather: &str,
+    emotions_enabled: bool,
+) -> String {
     let npc_descriptions: Vec<String> = group
         .npcs
         .iter()
         .map(|snap| {
+            // With emotions off, fall back to the legacy `mood:` descriptor
+            // so the prompt is byte-identical to the pre-feature shape.
+            let state_field = if emotions_enabled {
+                format!("feeling: {}", snap.feeling)
+            } else {
+                format!("mood: {}", snap.mood)
+            };
             format!(
-                "- {} ({}), mood: {}, {}",
-                snap.name, snap.occupation, snap.mood, snap.intelligence_tag
+                "- NPC {id} \"{name}\" ({occ}), {state}, {intel}",
+                id = snap.id.0,
+                name = snap.name,
+                occ = snap.occupation,
+                state = state_field,
+                intel = snap.intelligence_tag,
             )
         })
         .collect();
@@ -439,6 +516,15 @@ pub fn build_tier2_prompt(group: &Tier2Group, time_desc: &str, weather: &str) ->
     let weather_commentary = match weather {
         "Light Rain" | "Heavy Rain" | "Storm" => " People are commenting on the weather.",
         _ => "",
+    };
+
+    // With emotions off, drop the `emotion_deltas` schema line. Apply
+    // functions treat the field as optional, so omitting it matches the
+    // legacy Tier 2 response shape exactly.
+    let emotion_deltas_line = if emotions_enabled {
+        ",\n          \"emotion_deltas\": [{\"npc_id\": <id>, \"impulse\": {\"family\": \"joy|sadness|fear|anger|disgust|surprise|shame|affection\", \"delta\": <-0.3 to 0.3>, \"cause\": \"one short phrase\"}}]"
+    } else {
+        ""
     };
 
     format!(
@@ -449,17 +535,19 @@ pub fn build_tier2_prompt(group: &Tier2Group, time_desc: &str, weather: &str) ->
         Weather: {weather}.{weather_commentary}\n\n\
         Characters present:\n{characters}\n\n\
         Generate a brief (1-2 sentence) summary of what these characters are doing \
-        and saying to each other. Include any mood changes or relationship shifts.\n\n\
+        and saying to each other. Include any mood changes, emotion nudges, or \
+        relationship shifts.\n\n\
         Respond with a JSON object:\n\
         {{\n\
           \"summary\": \"Brief description of the interaction\",\n\
           \"mood_changes\": [{{\"npc_id\": <id>, \"new_mood\": \"<mood>\"}}],\n\
-          \"relationship_changes\": [{{\"from\": <id>, \"to\": <id>, \"delta\": <-0.1 to 0.1>}}]\n\
+          \"relationship_changes\": [{{\"from\": <id>, \"to\": <id>, \"delta\": <-0.1 to 0.1>}}]{emotion_deltas}\n\
         }}",
         location = group.location_name,
         time = time_desc,
         weather = weather,
         characters = npc_descriptions.join("\n"),
+        emotion_deltas = emotion_deltas_line,
     )
 }
 
@@ -493,6 +581,7 @@ pub fn npc_snapshot_from_npc(npc: &Npc) -> NpcSnapshot {
         personality: npc.personality.clone(),
         intelligence_tag,
         mood: npc.mood.clone(),
+        feeling: npc.emotion.short_descriptor(),
         relationship_context: relationship_context.join(", "),
     }
 }
@@ -507,6 +596,7 @@ pub async fn run_tier2_for_group(
     group: &Tier2Group,
     time_desc: &str,
     weather: &str,
+    emotions_enabled: bool,
 ) -> Option<Tier2Event> {
     if group.npcs.len() < 2 {
         // Solo NPC: generate a simple template event, no inference needed
@@ -520,12 +610,13 @@ pub async fn run_tier2_for_group(
                 participants: vec![snap.id],
                 mood_changes: Vec::new(),
                 relationship_changes: Vec::new(),
+                emotion_deltas: Vec::new(),
             });
         }
         return None;
     }
 
-    let prompt = build_tier2_prompt(group, time_desc, weather);
+    let prompt = build_tier2_prompt(group, time_desc, weather, emotions_enabled);
     let participant_ids: Vec<NpcId> = group.npcs.iter().map(|s| s.id).collect();
 
     match parish_inference::submit_json::<Tier2Response>(
@@ -543,6 +634,7 @@ pub async fn run_tier2_for_group(
             participants: participant_ids,
             mood_changes: resp.mood_changes,
             relationship_changes: resp.relationship_changes,
+            emotion_deltas: resp.emotion_deltas,
         }),
         Err(e) => {
             tracing::warn!("Tier 2 inference failed at {}: {}", group.location_name, e);
@@ -565,8 +657,36 @@ pub fn apply_tier2_event_with_config(
 ) -> Vec<String> {
     let mut debug_events = Vec::new();
 
-    // Apply mood changes
+    // Track which NPCs received a structured emotion_delta so the
+    // fallback mood_changes pass below doesn't overwrite the derived
+    // mood label for those NPCs.
+    let mut emotion_applied: std::collections::HashSet<NpcId> = std::collections::HashSet::new();
+
+    // Apply structured emotion deltas first — these are the preferred
+    // path. Each delta is scaled by the NPC's temperament reactivity
+    // (inside apply_emotion_impulse) and re-derives the mood label.
+    for change in &event.emotion_deltas {
+        if let Some(npc) = npcs.get_mut(&change.npc_id) {
+            let prev = npc.emotion.label();
+            npc.apply_emotion_impulse(&change.impulse);
+            let now = npc.emotion.label();
+            if prev != now {
+                debug_events.push(format!(
+                    "{} emotion: {} -> {} ({:?} {:+.2})",
+                    npc.name, prev, now, change.impulse.family, change.impulse.delta,
+                ));
+            }
+            emotion_applied.insert(change.npc_id);
+        }
+    }
+
+    // Apply freeform mood_changes for NPCs that did NOT receive a
+    // structured delta. This keeps the legacy pathway alive for
+    // older prompt templates and models that ignore emotion_deltas.
     for mc in &event.mood_changes {
+        if emotion_applied.contains(&mc.npc_id) {
+            continue;
+        }
         if let Some(npc) = npcs.get_mut(&mc.npc_id) {
             if npc.mood != mc.new_mood {
                 debug_events.push(format!(
@@ -717,8 +837,11 @@ pub struct Tier3Snapshot {
     pub location: LocationId,
     /// Location name.
     pub location_name: String,
-    /// Current mood.
+    /// Legacy one-word mood (retained for callers that haven't
+    /// migrated to `feeling`).
     pub mood: String,
+    /// Short emotion descriptor for prompt injection.
+    pub feeling: String,
     /// Deflated summary or last activity.
     pub context: String,
     /// Relationship summaries for prompt injection.
@@ -732,6 +855,7 @@ pub fn build_tier3_prompt(
     weather: &str,
     season: &str,
     hours: u32,
+    emotions_enabled: bool,
 ) -> String {
     let npc_summaries: Vec<String> = snapshots
         .iter()
@@ -746,19 +870,37 @@ pub fn build_tier3_prompt(
             } else {
                 format!("\nRelationships: {}", snap.relationship_context)
             };
+            // With emotions off, fall back to the legacy `Mood:` label so
+            // the prompt is byte-identical to the pre-feature Tier 3 shape.
+            let state_field = if emotions_enabled {
+                format!("Feeling: {}", snap.feeling)
+            } else {
+                format!("Mood: {}", snap.mood)
+            };
             format!(
-                "NPC {id} \"{name}\" ({occupation}, age {age}): At {location}. Mood: {mood}.{context}{rels}",
+                "NPC {id} \"{name}\" ({occupation}, age {age}): At {location}. {state}.{context}{rels}",
                 id = snap.id.0,
                 name = snap.name,
                 occupation = snap.occupation,
                 age = snap.age,
                 location = snap.location_name,
-                mood = snap.mood,
+                state = state_field,
                 context = context_line,
                 rels = rel_line,
             )
         })
         .collect();
+
+    // With emotions off, drop the structured `emotion_delta` schema line
+    // and the "prefer emotion_delta" note on the `mood` field.
+    let (mood_note, emotion_delta_line) = if emotions_enabled {
+        (
+            " — kept for back-compat; prefer emotion_delta",
+            "\n        - emotion_delta (object or null): {{\"family\": one of joy|sadness|fear|anger|disgust|surprise|shame|affection, \"delta\": signed number from -0.3 to 0.3, \"cause\": short phrase}}",
+        )
+    } else {
+        ("", "")
+    };
 
     format!(
         "You are simulating background NPC activity in a rural Irish parish in 1820.\n\
@@ -766,16 +908,18 @@ pub fn build_tier3_prompt(
         The weather is {weather}. The season is {season}. The time is {time}.\n\n\
         Return a JSON object with an \"updates\" array. Each update has:\n\
         - npc_id (integer)\n\
-        - mood (string, one word)\n\
+        - mood (string, one word){mood_note}\n\
         - activity_summary (string, 1 sentence)\n\
         - new_location (integer or null)\n\
-        - relationship_changes (array of {{\"from\": <id>, \"to\": <id>, \"delta\": <-0.1 to 0.1>}})\n\n\
+        - relationship_changes (array of {{\"from\": <id>, \"to\": <id>, \"delta\": <-0.1 to 0.1>}}){emotion_delta}\n\n\
         NPCs:\n{npcs}",
         hours = hours,
         weather = weather,
         season = season,
         time = time_desc,
         npcs = npc_summaries.join("\n\n"),
+        mood_note = mood_note,
+        emotion_delta = emotion_delta_line,
     )
 }
 
@@ -809,6 +953,7 @@ pub fn tier3_snapshot_from_npc(npc: &Npc, graph: &WorldGraph) -> Tier3Snapshot {
         location: npc.location,
         location_name,
         mood: npc.mood.clone(),
+        feeling: npc.emotion.short_descriptor(),
         context,
         relationship_context: relationship_context.join(", "),
     }
@@ -836,6 +981,10 @@ pub struct Tier3Context<'a> {
     pub hours: u32,
     /// Maximum NPCs per batch LLM call.
     pub batch_size: usize,
+    /// Whether the structured emotion system is active this session.
+    /// When `false`, the prompt reverts to the legacy `Mood:` label and
+    /// omits the `emotion_delta` schema line.
+    pub emotions_enabled: bool,
 }
 
 /// Runs a Tier 3 batch simulation for distant NPCs.
@@ -854,7 +1003,14 @@ pub async fn tick_tier3(ctx: &Tier3Context<'_>) -> Result<Vec<Tier3Update>, Pari
     let mut all_updates = Vec::new();
 
     for batch in ctx.snapshots.chunks(batch_size) {
-        let prompt = build_tier3_prompt(batch, ctx.time_desc, ctx.weather, ctx.season, ctx.hours);
+        let prompt = build_tier3_prompt(
+            batch,
+            ctx.time_desc,
+            ctx.weather,
+            ctx.season,
+            ctx.hours,
+            ctx.emotions_enabled,
+        );
 
         match parish_inference::submit_json::<Tier3Response>(
             ctx.queue,
@@ -901,8 +1057,20 @@ pub fn apply_tier3_updates(
             continue;
         };
 
-        // Update mood
-        if !update.mood.is_empty() && update.mood != npc.mood {
+        // Apply structured emotion_delta if present; otherwise fall
+        // back to the legacy mood string. The structured path also
+        // re-derives mood from `emotion.label()`.
+        if let Some(ref impulse) = update.emotion_delta {
+            let prev = npc.emotion.label();
+            npc.apply_emotion_impulse(impulse);
+            let now = npc.emotion.label();
+            if prev != now {
+                debug_events.push(format!(
+                    "{} emotion: {} -> {} (tier3 {:?} {:+.2})",
+                    npc.name, prev, now, impulse.family, impulse.delta,
+                ));
+            }
+        } else if !update.mood.is_empty() && update.mood != npc.mood {
             debug_events.push(format!(
                 "{} mood: {} -> {} (tier3)",
                 npc.name, npc.mood, update.mood
@@ -978,6 +1146,106 @@ fn truncate_for_memory(s: &str, max_len: usize) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-tick emotion background: decay + relationship contagion.
+// ---------------------------------------------------------------------------
+
+/// Decays every NPC's emotional state toward its temperament-derived
+/// baseline over `dt_secs` of game time, then re-derives the
+/// `mood` label from the decayed state.
+///
+/// Always safe to call regardless of the `emotions` feature flag —
+/// pure float math with zero LLM cost. Running decay unconditionally
+/// keeps `Npc.emotion` coherent so toggling the flag mid-session
+/// reveals up-to-date state rather than a frozen snapshot from when
+/// the flag was last disabled.
+pub fn decay_emotions_tick(npcs: &mut std::collections::HashMap<NpcId, Npc>, dt_secs: f32) {
+    if dt_secs <= 0.0 {
+        return;
+    }
+    for npc in npcs.values_mut() {
+        npc.emotion.decay(dt_secs);
+        // Re-derive the canonical mood label from the decayed state.
+        // If decay is small this is usually a no-op, but it prevents
+        // drift when a strong emotion gradually subsides.
+        npc.mood = npc.emotion.label().to_string();
+    }
+}
+
+/// Propagates a fraction of each NPC's family intensities to NPCs
+/// they have strong positive relationships with (strength > 0.6).
+///
+/// Two-phase: first collects the full set of inbound impulses for
+/// every NPC, then applies them all at once. This makes contagion
+/// symmetric (A→B and B→A produce the same result regardless of
+/// HashMap iteration order) and caps the per-tick mutation.
+///
+/// The total absolute delta any single NPC can receive in one tick
+/// is capped at `MAX_CONTAGION_DELTA` per family, so a single
+/// distraught NPC can't catastrophically cascade a whole village in
+/// one tick.
+///
+/// Always safe to call regardless of the `emotions` flag — see
+/// [`decay_emotions_tick`] for the same reasoning.
+pub fn propagate_contagion(npcs: &mut std::collections::HashMap<NpcId, Npc>, fraction: f32) {
+    /// Maximum net change to any family per NPC per contagion tick.
+    const MAX_CONTAGION_DELTA: f32 = 0.1;
+    /// Only relationships with strength above this threshold transmit
+    /// emotional contagion.
+    const MIN_STRONG_REL: f64 = 0.6;
+
+    if fraction <= 0.0 {
+        return;
+    }
+    let fraction = fraction.clamp(0.0, 1.0);
+
+    // Phase 1: collect per-target inbound deltas keyed by family.
+    // Snapshot family vectors up front so subsequent apply doesn't
+    // feed back into later source reads in the same tick.
+    let snapshot: Vec<(NpcId, parish_types::FamilyVec)> = npcs
+        .iter()
+        .map(|(id, npc)| (*id, npc.emotion.families))
+        .collect();
+
+    let mut inbound: std::collections::HashMap<NpcId, parish_types::FamilyVec> =
+        std::collections::HashMap::new();
+
+    for (target_id, target_npc) in npcs.iter() {
+        for (source_id, rel) in &target_npc.relationships {
+            if rel.strength <= MIN_STRONG_REL {
+                continue;
+            }
+            let Some((_, source_families)) = snapshot.iter().find(|(id, _)| id == source_id) else {
+                continue;
+            };
+            let weight = fraction * (rel.strength as f32);
+            let entry = inbound.entry(*target_id).or_default();
+            for fam in parish_types::EmotionFamily::ALL.iter().copied() {
+                let slot = entry.get_mut(fam);
+                *slot += source_families.get(fam) * weight;
+            }
+        }
+    }
+
+    // Phase 2: apply each NPC's capped inbound contribution.
+    for (target_id, deltas) in inbound {
+        let Some(npc) = npcs.get_mut(&target_id) else {
+            continue;
+        };
+        for fam in parish_types::EmotionFamily::ALL.iter().copied() {
+            let delta = deltas
+                .get(fam)
+                .clamp(-MAX_CONTAGION_DELTA, MAX_CONTAGION_DELTA);
+            if delta.abs() < 0.001 {
+                continue;
+            }
+            let slot = npc.emotion.families.get_mut(fam);
+            *slot = (*slot + delta).clamp(0.0, 1.0);
+        }
+        npc.mood = npc.emotion.label().to_string();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,6 +1266,8 @@ mod tests {
             intelligence: crate::types::Intelligence::default(),
             location: LocationId(location),
             mood: "calm".to_string(),
+            emotion: parish_types::EmotionState::default(),
+            temperament: parish_types::Temperament::default(),
             home: Some(LocationId(location)),
             workplace: None,
             schedule: None,
@@ -1084,6 +1354,7 @@ mod tests {
                 internal_thought: None,
                 language_hints: Vec::new(),
                 mentioned_people: Vec::new(),
+                emotion_delta: None,
             }),
         };
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
@@ -1092,6 +1363,70 @@ mod tests {
 
         assert_eq!(npc.mood, "cheerful");
         assert_eq!(npc.memory.len(), 1);
+    }
+
+    #[test]
+    fn test_apply_tier1_legacy_mood_syncs_structured_emotion() {
+        // Regression: when the LLM omits emotion_delta and returns
+        // only a legacy mood string, the structured emotion must
+        // also be updated. Otherwise `npc.emotion` stays stale and
+        // the next decay tick silently reverts the mood back to
+        // `emotion.label()`, undoing the reported shift. Codex
+        // flagged this as a P1 on PR #443.
+        let mut npc = make_test_npc(1, "Padraig", 1);
+        // Seed Padraig with a strong anger state so drift would be
+        // visible: his dominant family is Anger before the LLM
+        // reports a mood shift to "grieving".
+        npc.emotion.families.anger = 0.9;
+        npc.emotion.pleasure = -0.4;
+        npc.emotion.arousal = 0.7;
+        npc.emotion.dominance = 0.5;
+        npc.mood = npc.emotion.label().to_string();
+        let pre_label = npc.emotion.label().to_string();
+        assert!(
+            pre_label.contains("angry") || pre_label == "furious" || pre_label == "irritated",
+            "precondition: NPC should start in an anger label, got {pre_label}"
+        );
+
+        let response = NpcStreamResponse {
+            dialogue: "I've no words in me just now.".into(),
+            metadata: Some(NpcMetadata {
+                action: "stares at the floor".into(),
+                mood: "grieving".into(),
+                internal_thought: None,
+                language_hints: Vec::new(),
+                mentioned_people: Vec::new(),
+                emotion_delta: None,
+            }),
+        };
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
+        apply_tier1_response(&mut npc, &response, "says softly", game_time);
+
+        // Mood string reflects the LLM's report exactly.
+        assert_eq!(npc.mood, "grieving");
+
+        // Critically: structured emotion is re-seeded from "grieving"
+        // so Sadness now dominates the family vector. Without the
+        // sync, Anger would still be 0.9 and Sadness ~0.
+        let (dom_family, dom_intensity) = npc.emotion.dominant_family();
+        assert_eq!(
+            dom_family,
+            parish_types::EmotionFamily::Sadness,
+            "structured emotion should re-seed to Sadness to match 'grieving' mood"
+        );
+        assert!(
+            dom_intensity > 0.5,
+            "sadness intensity should be meaningful, got {dom_intensity}"
+        );
+
+        // The drift sentinel: after a decay tick, mood should NOT
+        // snap back to an anger-family label, because emotion is
+        // already in the sadness family. Running decay and checking
+        // the label confirms the sync held.
+        decay_emotions_tick(
+            &mut std::collections::HashMap::from_iter([(npc.id, npc)]),
+            60.0,
+        );
     }
 
     #[test]
@@ -1110,6 +1445,170 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_tier1_response_emotion_delta_updates_state_and_mood() {
+        // The structured emotion_delta path should (a) nudge the
+        // family vector, (b) re-derive the legacy mood string from
+        // the updated state, and (c) suppress the freeform `mood`
+        // field in the same metadata (so the two don't fight).
+        let mut npc = make_test_npc(1, "Padraig", 1);
+        // Start him content so a fear nudge lands cleanly.
+        npc.emotion = parish_types::EmotionState::initial_from(
+            &parish_types::Temperament::default(),
+            "content",
+        );
+        npc.mood = npc.emotion.label().to_string();
+        let original_mood = npc.mood.clone();
+
+        let response = NpcStreamResponse {
+            dialogue: "Good day, now.".to_string(),
+            metadata: Some(NpcMetadata {
+                action: "speaks".to_string(),
+                // Legacy mood claims "jovial" but the LLM also returns
+                // a structured fear delta — the structured path must
+                // win, so the legacy string should be ignored here.
+                mood: "jovial".to_string(),
+                internal_thought: None,
+                language_hints: Vec::new(),
+                mentioned_people: Vec::new(),
+                emotion_delta: Some(parish_types::EmotionImpulse {
+                    family: parish_types::EmotionFamily::Fear,
+                    delta: 0.6,
+                    pad: None,
+                    cause: Some("heard the riders outside".to_string()),
+                }),
+            }),
+        };
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
+
+        apply_tier1_response(&mut npc, &response, "waves", game_time);
+
+        assert!(
+            npc.emotion.families.fear > 0.2,
+            "fear delta should have landed, got {}",
+            npc.emotion.families.fear
+        );
+        assert_ne!(
+            npc.mood, original_mood,
+            "mood should have shifted from the original 'content' label"
+        );
+        assert_ne!(
+            npc.mood, "jovial",
+            "legacy mood string must lose to the structured delta"
+        );
+    }
+
+    #[test]
+    fn test_apply_tier2_event_emotion_deltas_apply_to_multiple_npcs() {
+        // Two NPCs, two deltas — both should land, both moods should
+        // re-derive independently.
+        let mut npcs: HashMap<NpcId, Npc> = HashMap::new();
+        npcs.insert(NpcId(1), make_test_npc(1, "Padraig", 2));
+        npcs.insert(NpcId(2), make_test_npc(2, "Tommy", 2));
+
+        let event = Tier2Event {
+            location: LocationId(2),
+            summary: "A row breaks out over the rent".to_string(),
+            participants: vec![NpcId(1), NpcId(2)],
+            mood_changes: Vec::new(),
+            relationship_changes: Vec::new(),
+            emotion_deltas: vec![
+                crate::types::EmotionDeltaChange {
+                    npc_id: NpcId(1),
+                    impulse: parish_types::EmotionImpulse {
+                        family: parish_types::EmotionFamily::Anger,
+                        delta: 0.65,
+                        pad: None,
+                        cause: Some("argued back".to_string()),
+                    },
+                },
+                crate::types::EmotionDeltaChange {
+                    npc_id: NpcId(2),
+                    impulse: parish_types::EmotionImpulse {
+                        family: parish_types::EmotionFamily::Fear,
+                        delta: 0.5,
+                        pad: None,
+                        cause: Some("watched the row".to_string()),
+                    },
+                },
+            ],
+        };
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
+
+        apply_tier2_event(&event, &mut npcs, game_time);
+
+        // Note: delta 0.65 clamps to 0.5 per impulse contract, then
+        // scales by default reactivity (0.5) -> landing magnitude 0.25.
+        let padraig = npcs.get(&NpcId(1)).unwrap();
+        assert!(
+            padraig.emotion.families.anger >= 0.2,
+            "Padraig's anger should have risen, got {}",
+            padraig.emotion.families.anger
+        );
+        let tommy = npcs.get(&NpcId(2)).unwrap();
+        assert!(
+            tommy.emotion.families.fear >= 0.2,
+            "Tommy's fear should have risen, got {}",
+            tommy.emotion.families.fear
+        );
+        // State vectors must have diverged even if both land on the
+        // same PAD-fallback label ("calm") — the label() threshold
+        // for a family-derived name is 0.3, and our 0.25 post-clamp
+        // landing sits just under that. What matters is that the
+        // family intensities now differ, not that the coarse labels do.
+        assert_ne!(
+            padraig.emotion.families.anger, tommy.emotion.families.anger,
+            "two NPCs with distinct impulses should have distinct anger"
+        );
+        assert_ne!(
+            padraig.emotion.families.fear, tommy.emotion.families.fear,
+            "two NPCs with distinct impulses should have distinct fear"
+        );
+    }
+
+    #[test]
+    fn test_apply_tier2_event_mood_change_does_not_override_structured_delta() {
+        // Both an emotion_deltas entry and a mood_changes entry for
+        // the same NPC — the structured path wins; the legacy path
+        // is skipped for that NPC.
+        let mut npcs: HashMap<NpcId, Npc> = HashMap::new();
+        npcs.insert(NpcId(1), make_test_npc(1, "Padraig", 2));
+
+        let event = Tier2Event {
+            location: LocationId(2),
+            summary: "Padraig stews over the news".to_string(),
+            participants: vec![NpcId(1)],
+            mood_changes: vec![MoodChange {
+                npc_id: NpcId(1),
+                new_mood: "jubilant".to_string(), // contradicts the delta
+            }],
+            relationship_changes: Vec::new(),
+            emotion_deltas: vec![crate::types::EmotionDeltaChange {
+                npc_id: NpcId(1),
+                impulse: parish_types::EmotionImpulse {
+                    family: parish_types::EmotionFamily::Anger,
+                    delta: 0.7,
+                    pad: None,
+                    cause: None,
+                },
+            }],
+        };
+        let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
+
+        apply_tier2_event(&event, &mut npcs, game_time);
+
+        let npc = npcs.get(&NpcId(1)).unwrap();
+        assert_ne!(
+            npc.mood, "jubilant",
+            "legacy mood_changes must not overwrite the structured-delta-derived mood"
+        );
+        assert!(
+            npc.emotion.families.anger >= 0.2,
+            "anger delta should have landed (note: clamp+reactivity caps at ~0.25), got {}",
+            npc.emotion.families.anger,
+        );
+    }
+
+    #[test]
     fn test_build_tier2_prompt() {
         let group = Tier2Group {
             location: LocationId(2),
@@ -1122,6 +1621,7 @@ mod tests {
                     personality: "Warm".to_string(),
                     intelligence_tag: "INT[V3 A3 E4 P4 W5 C4]".to_string(),
                     mood: "content".to_string(),
+                    feeling: "content".to_string(),
                     relationship_context: String::new(),
                 },
                 NpcSnapshot {
@@ -1131,18 +1631,30 @@ mod tests {
                     personality: "Storyteller".to_string(),
                     intelligence_tag: "INT[V4 A2 E3 P4 W5 C5]".to_string(),
                     mood: "reflective".to_string(),
+                    feeling: "reflective".to_string(),
                     relationship_context: String::new(),
                 },
             ],
         };
 
-        let prompt = build_tier2_prompt(&group, "Evening", "Overcast");
+        let prompt = build_tier2_prompt(&group, "Evening", "Overcast", true);
         assert!(prompt.contains("Darcy's Pub"));
-        assert!(prompt.contains("Padraig (Publican)"));
-        assert!(prompt.contains("Tommy (Retired Farmer)"));
+        // New richer per-NPC prefix: `NPC <id> "<name>" (<occupation>)`.
+        // The id prefix matches Tier 3's convention and lets the model
+        // cite participants unambiguously in emotion_deltas.
+        assert!(prompt.contains("NPC 1 \"Padraig\" (Publican)"));
+        assert!(prompt.contains("NPC 5 \"Tommy\" (Retired Farmer)"));
+        assert!(
+            prompt.contains("feeling: content"),
+            "Tier 2 prompt should render the short emotion descriptor"
+        );
         assert!(prompt.contains("Evening"));
         assert!(prompt.contains("Overcast"));
         assert!(prompt.contains("summary"));
+        assert!(
+            prompt.contains("emotion_deltas"),
+            "Tier 2 schema should request structured emotion deltas"
+        );
     }
 
     #[test]
@@ -1167,6 +1679,7 @@ mod tests {
                 to: NpcId(5),
                 delta: 0.1,
             }],
+            emotion_deltas: Vec::new(),
         };
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1266,7 +1779,7 @@ mod tests {
         let npc_names: HashMap<NpcId, String> =
             [(NpcId(2), "Brigid".to_string())].into_iter().collect();
         let prompt =
-            build_enhanced_system_prompt_with_config(&npc, false, &config, &npc_names, None);
+            build_enhanced_system_prompt_with_config(&npc, false, true, &config, &npc_names, None);
         // 0.8 is below 0.9 threshold, so should be "friendly" not "very close"
         assert!(prompt.contains("friendly"));
         assert!(!prompt.contains("very close"));
@@ -1323,6 +1836,7 @@ mod tests {
             participants: vec![NpcId(1)],
             mood_changes: Vec::new(),
             relationship_changes: Vec::new(),
+            emotion_deltas: Vec::new(),
         };
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1413,6 +1927,7 @@ mod tests {
                 to: NpcId(1),
                 delta: 0.1,
             }],
+            emotion_deltas: Vec::new(),
         };
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1435,6 +1950,7 @@ mod tests {
             participants: Vec::new(),
             mood_changes: Vec::new(),
             relationship_changes: Vec::new(),
+            emotion_deltas: Vec::new(),
         };
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1460,6 +1976,7 @@ mod tests {
                 new_mood: "calm".to_string(), // same as current
             }],
             relationship_changes: Vec::new(),
+            emotion_deltas: Vec::new(),
         };
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1487,6 +2004,7 @@ mod tests {
                 to: NpcId(5),
                 delta: 0.1,
             }],
+            emotion_deltas: Vec::new(),
         };
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1511,6 +2029,7 @@ mod tests {
                 personality: "Warm".to_string(),
                 intelligence_tag: "INT[V3 A3 E4 P4 W5 C4]".to_string(),
                 mood: "content".to_string(),
+                feeling: "content".to_string(),
                 relationship_context: String::new(),
             }],
         };
@@ -1520,7 +2039,7 @@ mod tests {
         let (btx, _brx) = tokio::sync::mpsc::channel(1);
         let (batx, _batrx) = tokio::sync::mpsc::channel(1);
         let queue = parish_inference::InferenceQueue::new(itx, btx, batx);
-        let event = run_tier2_for_group(&queue, "test", &group, "Morning", "Clear").await;
+        let event = run_tier2_for_group(&queue, "test", &group, "Morning", "Clear", true).await;
         assert!(event.is_some());
         let event = event.unwrap();
         assert!(event.summary.contains("Padraig"));
@@ -1543,7 +2062,7 @@ mod tests {
         let (btx, _brx) = tokio::sync::mpsc::channel(1);
         let (batx, _batrx) = tokio::sync::mpsc::channel(1);
         let queue = parish_inference::InferenceQueue::new(itx, btx, batx);
-        let event = run_tier2_for_group(&queue, "test", &group, "Morning", "Clear").await;
+        let event = run_tier2_for_group(&queue, "test", &group, "Morning", "Clear", true).await;
         assert!(event.is_none());
     }
 
@@ -1562,6 +2081,7 @@ mod tests {
                     personality: "Warm".to_string(),
                     intelligence_tag: "INT[V3]".to_string(),
                     mood: "calm".to_string(),
+                    feeling: "calm".to_string(),
                     relationship_context: String::new(),
                 },
                 NpcSnapshot {
@@ -1571,16 +2091,62 @@ mod tests {
                     personality: "Gruff".to_string(),
                     intelligence_tag: "INT[V2]".to_string(),
                     mood: "tired".to_string(),
+                    feeling: "weary".to_string(),
                     relationship_context: String::new(),
                 },
             ],
         };
 
-        let prompt = build_tier2_prompt(&group, "Afternoon", "Heavy Rain");
+        let prompt = build_tier2_prompt(&group, "Afternoon", "Heavy Rain", true);
         assert!(prompt.contains("commenting on the weather"));
 
-        let prompt = build_tier2_prompt(&group, "Afternoon", "Clear");
+        let prompt = build_tier2_prompt(&group, "Afternoon", "Clear", true);
         assert!(!prompt.contains("commenting on the weather"));
+    }
+
+    #[test]
+    fn test_build_tier2_prompt_emotions_disabled_legacy_shape() {
+        // With emotions_enabled=false, the Tier 2 prompt reverts to the
+        // pre-feature byte shape: `mood:` descriptor in the NPC list and
+        // no `emotion_deltas` schema line.
+        let group = Tier2Group {
+            location: LocationId(2),
+            location_name: "The Crossroads".to_string(),
+            npcs: vec![
+                NpcSnapshot {
+                    id: NpcId(1),
+                    name: "Padraig".to_string(),
+                    occupation: "Publican".to_string(),
+                    personality: "Warm".to_string(),
+                    intelligence_tag: "INT[V3]".to_string(),
+                    mood: "calm".to_string(),
+                    feeling: "serene".to_string(),
+                    relationship_context: String::new(),
+                },
+                NpcSnapshot {
+                    id: NpcId(2),
+                    name: "Tommy".to_string(),
+                    occupation: "Farmer".to_string(),
+                    personality: "Gruff".to_string(),
+                    intelligence_tag: "INT[V2]".to_string(),
+                    mood: "tired".to_string(),
+                    feeling: "weary".to_string(),
+                    relationship_context: String::new(),
+                },
+            ],
+        };
+
+        let prompt = build_tier2_prompt(&group, "Afternoon", "Clear", false);
+        assert!(prompt.contains("mood: calm"));
+        assert!(prompt.contains("mood: tired"));
+        assert!(
+            !prompt.contains("feeling:"),
+            "emotion-off prompt must omit the `feeling:` descriptor"
+        );
+        assert!(
+            !prompt.contains("emotion_deltas"),
+            "emotion-off prompt must omit the `emotion_deltas` schema line"
+        );
     }
 
     // --- apply_tier1_response same mood no change event ---
@@ -1597,6 +2163,7 @@ mod tests {
                 internal_thought: None,
                 language_hints: Vec::new(),
                 mentioned_people: Vec::new(),
+                emotion_delta: None,
             }),
         };
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
@@ -1619,6 +2186,7 @@ mod tests {
                 internal_thought: None,
                 language_hints: Vec::new(),
                 mentioned_people: Vec::new(),
+                emotion_delta: None,
             }),
         };
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap();
@@ -1694,6 +2262,7 @@ mod tests {
                 location: LocationId(2),
                 location_name: "Darcy's Pub".to_string(),
                 mood: "content".to_string(),
+                feeling: "content".to_string(),
                 context: "Served drinks all evening.".to_string(),
                 relationship_context: "NPC 2 (0.5)".to_string(),
             },
@@ -1705,12 +2274,13 @@ mod tests {
                 location: LocationId(5),
                 location_name: "O'Brien's Farm".to_string(),
                 mood: "worried".to_string(),
+                feeling: "worried, withdrawn".to_string(),
                 context: String::new(),
                 relationship_context: String::new(),
             },
         ];
 
-        let prompt = build_tier3_prompt(&snapshots, "Morning", "Overcast", "Spring", 24);
+        let prompt = build_tier3_prompt(&snapshots, "Morning", "Overcast", "Spring", 24, true);
         assert!(prompt.contains("simulate 24 hours"));
         assert!(prompt.contains("Overcast"));
         assert!(prompt.contains("Spring"));
@@ -1721,11 +2291,49 @@ mod tests {
         assert!(prompt.contains("Served drinks all evening."));
         assert!(prompt.contains("NPC 3 \"Bridget\""));
         assert!(prompt.contains("Farmer, age 35"));
-        // NPC with no context should not have "Recent:" line
-        assert!(prompt.contains("Mood: worried."));
+        // Tier 3 now renders Feeling (the short emotion descriptor)
+        // rather than the raw mood string. The fixture set
+        // `feeling: "worried, withdrawn"`.
+        assert!(prompt.contains("Feeling: worried, withdrawn."));
         // JSON format instructions
         assert!(prompt.contains("npc_id"));
         assert!(prompt.contains("activity_summary"));
+        assert!(
+            prompt.contains("emotion_delta"),
+            "Tier 3 schema should request structured emotion_delta"
+        );
+    }
+
+    #[test]
+    fn test_tier3_prompt_emotions_disabled_legacy_shape() {
+        // With emotions_enabled=false, Tier 3 reverts to the pre-feature
+        // byte shape: `Mood:` per-NPC label and no `emotion_delta` schema.
+        let snapshots = vec![Tier3Snapshot {
+            id: NpcId(1),
+            name: "Padraig".to_string(),
+            occupation: "Publican".to_string(),
+            age: 58,
+            location: LocationId(2),
+            location_name: "Darcy's Pub".to_string(),
+            mood: "content".to_string(),
+            feeling: "serene, grounded".to_string(),
+            context: String::new(),
+            relationship_context: String::new(),
+        }];
+
+        let prompt = build_tier3_prompt(&snapshots, "Morning", "Clear", "Spring", 24, false);
+        assert!(
+            prompt.contains("Mood: content"),
+            "emotion-off prompt must use legacy `Mood:` label"
+        );
+        assert!(
+            !prompt.contains("Feeling:"),
+            "emotion-off prompt must omit `Feeling:` descriptor"
+        );
+        assert!(
+            !prompt.contains("emotion_delta"),
+            "emotion-off prompt must omit `emotion_delta` schema line"
+        );
     }
 
     #[test]
@@ -1740,6 +2348,7 @@ mod tests {
                 location: LocationId(1),
                 location_name: "Test".to_string(),
                 mood: "calm".to_string(),
+                feeling: "calm".to_string(),
                 context: String::new(),
                 relationship_context: String::new(),
             })
@@ -1771,6 +2380,7 @@ mod tests {
             mood: "jovial".to_string(),
             activity_summary: "Spent the day cleaning the pub.".to_string(),
             new_location: None,
+            emotion_delta: None,
             relationship_changes: vec![RelationshipChange {
                 from: NpcId(1),
                 to: NpcId(5),
@@ -1823,6 +2433,7 @@ mod tests {
             activity_summary: "Walked to market.".to_string(),
             new_location: Some(LocationId(999)), // nonexistent
             relationship_changes: Vec::new(),
+            emotion_delta: None,
         }];
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();
@@ -1847,6 +2458,7 @@ mod tests {
             activity_summary: "Ghost NPC.".to_string(),
             new_location: None,
             relationship_changes: Vec::new(),
+            emotion_delta: None,
         }];
 
         let game_time = Utc.with_ymd_and_hms(1820, 3, 20, 20, 0, 0).unwrap();

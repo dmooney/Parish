@@ -38,7 +38,8 @@ use types::{Intelligence, NpcState, Relationship, SeasonalSchedule};
 
 // Re-export shared types from parish-types
 pub use parish_types::{
-    IrishWordHint, LanguageHint, NpcId, extract_dialogue_from_partial_json, floor_char_boundary,
+    EmotionFamily, EmotionGates, EmotionImpulse, EmotionState, IrishWordHint, LanguageHint, NpcId,
+    Temperament, extract_dialogue_from_partial_json, floor_char_boundary, project_top_k,
 };
 
 // Re-export the NPC data-file schema so downstream crates (e.g. the Parish
@@ -73,8 +74,23 @@ pub struct Npc {
     pub intelligence: Intelligence,
     /// Current location.
     pub location: LocationId,
-    /// Current emotional state.
+    /// Current emotional state as a one-word label.
+    ///
+    /// Kept as the canonical serialisation surface for persistence,
+    /// gossip, the sidebar emoji map, and legacy prompts. Written by
+    /// [`Npc::set_emotion`] whenever the structured [`Self::emotion`]
+    /// state changes — do not write to this directly; it will fall
+    /// out of sync with the PAD + family-vector model. Reads are
+    /// always safe.
     pub mood: String,
+    /// Structured emotional state: PAD (pleasure/arousal/dominance)
+    /// plus per-family intensities, decay baseline, and non-linear
+    /// behaviour gates. See [`EmotionState`] for the full model.
+    pub emotion: EmotionState,
+    /// Stable temperament shaping how [`Self::emotion`] responds to
+    /// impulses and decays between events. Loaded from mod content
+    /// (defaults if omitted).
+    pub temperament: Temperament,
     /// Home location (where the NPC sleeps).
     pub home: Option<LocationId>,
     /// Workplace location (where the NPC works).
@@ -139,6 +155,8 @@ impl Npc {
             intelligence: Intelligence::new(3, 3, 4, 4, 5, 4),
             location: LocationId(1),
             mood: "content".to_string(),
+            emotion: EmotionState::initial_from(&Temperament::default(), "content"),
+            temperament: Temperament::default(),
             home: None,
             workplace: None,
             schedule: None,
@@ -154,6 +172,26 @@ impl Npc {
             doom: None,
             banshee_heralded: false,
         }
+    }
+
+    /// Replaces [`Self::emotion`] and re-derives the legacy [`Self::mood`]
+    /// string from the new state.
+    ///
+    /// This is the **only** path that should touch `mood` — anywhere
+    /// else, direct assignment risks `mood` drifting out of sync with
+    /// the structured emotion model. Tier 1/2/3/4 apply functions and
+    /// the decay/contagion ticks all go through here.
+    pub fn set_emotion(&mut self, new_state: EmotionState) {
+        self.emotion = new_state;
+        self.mood = self.emotion.label().to_string();
+    }
+
+    /// Applies an [`EmotionImpulse`] to this NPC, scaled by their
+    /// [`Self::temperament`]'s reactivity, and re-derives `mood`.
+    pub fn apply_emotion_impulse(&mut self, impulse: &EmotionImpulse) {
+        self.emotion
+            .apply_impulse(impulse, self.temperament.reactivity);
+        self.mood = self.emotion.label().to_string();
     }
 
     /// Returns the name to display to the player.
@@ -230,6 +268,10 @@ pub struct NpcJsonResponse {
     /// People the NPC mentioned by name in their dialogue (self-declared by the LLM).
     #[serde(default)]
     pub mentioned_people: Vec<String>,
+    /// Optional structured emotional nudge the LLM wants to apply to
+    /// the speaker after this turn.
+    #[serde(default)]
+    pub emotion_delta: Option<EmotionImpulse>,
 }
 
 /// Metadata block from an NPC response.
@@ -250,6 +292,13 @@ pub struct NpcMetadata {
     /// People the NPC mentioned by name in their dialogue (self-declared by the LLM).
     #[serde(default)]
     pub mentioned_people: Vec<String>,
+    /// Optional structured emotional nudge the LLM wants to apply to
+    /// the speaker after this turn (e.g. "the insult made me angrier").
+    ///
+    /// Absent on legacy responses — `#[serde(default)]` keeps older
+    /// models and older prompt templates compatible.
+    #[serde(default)]
+    pub emotion_delta: Option<EmotionImpulse>,
 }
 
 /// Parses a complete NPC response (JSON format) into dialogue and metadata.
@@ -270,6 +319,7 @@ pub fn parse_npc_stream_response(full_text: &str) -> NpcStreamResponse {
             internal_thought: json_resp.internal_thought,
             language_hints: json_resp.language_hints,
             mentioned_people: json_resp.mentioned_people,
+            emotion_delta: json_resp.emotion_delta,
         });
         return NpcStreamResponse { dialogue, metadata };
     }
@@ -318,16 +368,56 @@ const IMPROV_CRAFT_SECTION: &str = "\n\
 /// Builds the Tier 1 system prompt for an NPC.
 ///
 /// Combines the NPC's identity, personality, occupation, and current
-/// mood into a system prompt that establishes character for the LLM.
-/// When `improv` is true, includes the improv craft guidelines section
-/// to improve improvisational quality of NPC responses.
+/// emotional state into a system prompt that establishes character
+/// for the LLM.
 ///
 /// The prompt instructs the model to return a JSON object containing
 /// both the dialogue (streamed to the player) and metadata fields
 /// (parsed for simulation state).
-pub fn build_tier1_system_prompt(npc: &Npc, improv: bool) -> String {
+pub fn build_tier1_system_prompt(npc: &Npc, improv: bool, emotions_enabled: bool) -> String {
     let improv_section = if improv { IMPROV_CRAFT_SECTION } else { "" };
     let intel_guidance = npc.intelligence.prompt_guidance();
+
+    // Emotional state: when the flag is on, replace the legacy mood
+    // line with a multi-sentence method-actor preamble. This is the
+    // "steering via prompt" lever — see docs on EmotionState::prompt_guidance.
+    let emotion_block = if emotions_enabled {
+        format!("{}\n", npc.emotion.prompt_guidance())
+    } else {
+        format!("Current mood: {}\n", npc.mood)
+    };
+
+    // JSON schema exposes emotion_delta only when the flag is on.
+    // Families are lower-case strings matching EmotionFamily's serde
+    // rename_all = "lowercase".
+    let _schema_line = if emotions_enabled {
+        "{{\"action\": \"what you physically do\", \"mood\": \"your mood after this\", \
+         \"internal_thought\": \"what you think but don't say\", \
+         \"irish_words\": [{{\"word\": \"...\", \"pronunciation\": \"...\", \"meaning\": \"...\"}}], \
+         \"emotion_delta\": {{\"family\": \"one of: joy, sadness, fear, anger, disgust, surprise, shame, affection\", \
+         \"delta\": \"signed number from -0.5 to 0.5 — the nudge this moment gave your feelings\", \
+         \"cause\": \"one short phrase of why\"}}}}"
+    } else {
+        "{{\"action\": \"what you physically do\", \"mood\": \"your mood after this\", \
+         \"internal_thought\": \"what you think but don't say\", \
+         \"irish_words\": [{{\"word\": \"...\", \"pronunciation\": \"...\", \"meaning\": \"...\"}}]}}"
+    };
+
+    // Example line shows how a real emotion_delta looks. The example
+    // stays consistent with the schema: with the flag off, no
+    // emotion_delta; with it on, we include a plausible one.
+    let example_json = if emotions_enabled {
+        "{{\"action\": \"looks up from polishing glass, speaks warmly\", \"mood\": \"friendly\", \
+         \"internal_thought\": \"New face around here\", \
+         \"irish_words\": [{{\"word\": \"Dia dhuit\", \"pronunciation\": \"DEE-ah gwit\", \
+         \"meaning\": \"Hello (lit. God to you)\"}}], \
+         \"emotion_delta\": {{\"family\": \"affection\", \"delta\": 0.1, \"cause\": \"a welcome customer\"}}}}"
+    } else {
+        "{{\"action\": \"looks up from polishing glass, speaks warmly\", \"mood\": \"friendly\", \
+         \"internal_thought\": \"New face around here\", \
+         \"irish_words\": [{{\"word\": \"Dia dhuit\", \"pronunciation\": \"DEE-ah gwit\", \
+         \"meaning\": \"Hello (lit. God to you)\"}}]}}"
+    };
 
     format!(
         "You are {name}, a {age}-year-old {occupation} in a small parish in County Roscommon, \
@@ -349,7 +439,7 @@ pub fn build_tier1_system_prompt(npc: &Npc, improv: bool) -> String {
         \n\
         Personality: {personality}\n\
         {intel_guidance}\
-        Current mood: {mood}\n\
+        {emotion_block}\
         \n\
         Respond in character as {name}. You MUST respond with a JSON object. \
         Put the \"dialogue\" field FIRST. The dialogue should contain only what you say aloud — \
@@ -367,14 +457,10 @@ pub fn build_tier1_system_prompt(npc: &Npc, improv: bool) -> String {
           - \"word\": the Irish word as written\n\
           - \"pronunciation\": phonetic guide in English (e.g. \"SLAWN-cha\" for \"sláinte\")\n\
           - \"meaning\": English translation\n\
+        - \"emotion_delta\": optional emotional nudge (only if emotions_enabled)\n\
         \n\
         Example response:\n\
-        {{\"dialogue\": \"Ah, good morning to ye! Dia dhuit — fine day for it, so it is. \
-        Will ye have a drop of something to warm the bones?\", \
-        \"action\": \"looks up from polishing glass, speaks warmly\", \"mood\": \"friendly\", \
-        \"internal_thought\": \"New face around here\", \
-        \"irish_words\": [{{\"word\": \"Dia dhuit\", \"pronunciation\": \"DEE-ah gwit\", \
-        \"meaning\": \"Hello (lit. God to you)\"}}]}}",
+        {example_json}",
         name = npc.name,
         age = npc.age,
         occupation = npc.occupation,
@@ -384,8 +470,9 @@ pub fn build_tier1_system_prompt(npc: &Npc, improv: bool) -> String {
         } else {
             format!("Mind and manner: {intel_guidance}\n")
         },
-        mood = npc.mood,
+        emotion_block = emotion_block,
         improv_section = improv_section,
+        example_json = example_json,
     )
 }
 
@@ -658,13 +745,17 @@ mod tests {
     }
 
     #[test]
-    fn test_build_system_prompt() {
+    fn test_build_system_prompt_legacy_mood_form() {
+        // With emotions_enabled=false, the prompt uses the legacy
+        // `Current mood: <string>` line and omits emotion_delta from
+        // the JSON schema. This preserves the pre-emotion behaviour
+        // exactly so the flag is a clean kill-switch.
         let npc = Npc::new_test_npc();
-        let prompt = build_tier1_system_prompt(&npc, false);
+        let prompt = build_tier1_system_prompt(&npc, false, false);
         assert!(prompt.contains("Padraig O'Brien"));
         assert!(prompt.contains("58-year-old"));
         assert!(prompt.contains("Publican"));
-        assert!(prompt.contains("content"));
+        assert!(prompt.contains("Current mood: content"));
         assert!(
             prompt.contains("JSON object"),
             "prompt should instruct JSON object response format"
@@ -689,6 +780,47 @@ mod tests {
             prompt.contains("irish_words"),
             "prompt should instruct about irish_words metadata"
         );
+        assert!(
+            !prompt.contains("emotion_delta"),
+            "legacy form should not expose emotion_delta in the schema"
+        );
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_emotion_preamble() {
+        // With emotions_enabled=true, the prompt replaces the legacy
+        // mood line with EmotionState::prompt_guidance() prose AND
+        // extends the JSON schema with emotion_delta. "Emotional
+        // state:" is the signature lead-in of prompt_guidance.
+        let npc = Npc::new_test_npc();
+        let prompt = build_tier1_system_prompt(&npc, false, true);
+        assert!(
+            prompt.contains("Emotional state:"),
+            "prompt should include the emotion preamble when flag is on"
+        );
+        assert!(
+            prompt.contains("emotion_delta"),
+            "prompt schema should expose emotion_delta when flag is on"
+        );
+        // The label "content" still appears because Padraig's default
+        // state projects to that PAD region.
+        assert!(prompt.contains("content"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_emotion_preamble_surfaces_gate() {
+        // An NPC with fear > 0.9 should trip the panic_truth gate
+        // language ("true things you would normally hide") — the
+        // headline finding from the paper landing in-prompt.
+        let mut npc = Npc::new_test_npc();
+        npc.emotion.families.fear = 0.95;
+        npc.mood = npc.emotion.label().to_string();
+        let prompt = build_tier1_system_prompt(&npc, false, true);
+        assert!(
+            prompt.contains("true things"),
+            "panic_truth gate language should surface in the prompt"
+        );
+        assert!(prompt.contains("frightened"));
     }
 
     #[test]

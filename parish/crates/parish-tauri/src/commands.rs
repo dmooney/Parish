@@ -900,6 +900,7 @@ async fn run_npc_turn(
             speaker_id,
             transcript,
             config.improv_enabled,
+            config.emotions_enabled(),
         )
     }?;
 
@@ -1097,6 +1098,11 @@ async fn run_npc_turn(
                 player_name.as_deref(),
             );
         }
+        // Light contagion after player-driven dialogue so strongly-bonded
+        // NPCs feel immediate coupling ("if my wife is shaken, I am too"),
+        // without waiting for the next Tier 2 cycle. Capped per-family by
+        // propagate_contagion's internal MAX_CONTAGION_DELTA.
+        npc_manager.propagate_emotion_contagion(0.02);
     }
 
     let line = if parsed.dialogue.trim().is_empty() {
@@ -1245,17 +1251,19 @@ async fn handle_npc_conversation(
 
     // Phase 2: autonomous chain via the bystander-aware heuristic.
     let chain_cap = max_follow_up_turns.min(parish_core::npc::autonomous::MAX_CHAIN_TURNS);
+    let emotions_enabled = state.config.lock().await.emotions_enabled();
     for _ in 0..chain_cap {
         let next_speaker_id = {
             let world = state.world.lock().await;
             let npc_manager = state.npc_manager.lock().await;
             let candidates: Vec<&parish_core::npc::Npc> =
                 npc_manager.npcs_at(world.player_location);
-            parish_core::npc::autonomous::pick_next_speaker(
+            parish_core::npc::autonomous::pick_next_speaker_with_config(
                 &candidates,
                 last_speaker,
                 &spoken_this_chain,
                 &targets,
+                emotions_enabled,
             )
             .map(|npc| npc.id)
         };
@@ -1377,17 +1385,19 @@ async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
 
     // Follow-up turns: heuristic-based selection.
     let chain_cap = max_follow_up_turns.min(parish_core::npc::autonomous::MAX_CHAIN_TURNS);
+    let emotions_enabled = state.config.lock().await.emotions_enabled();
     for _ in 0..chain_cap {
         let next_speaker_id = {
             let world = state.world.lock().await;
             let npc_manager = state.npc_manager.lock().await;
             let candidates: Vec<&parish_core::npc::Npc> =
                 npc_manager.npcs_at(world.player_location);
-            parish_core::npc::autonomous::pick_next_speaker(
+            parish_core::npc::autonomous::pick_next_speaker_with_config(
                 &candidates,
                 last_speaker,
                 &spoken_this_chain,
                 &[],
+                emotions_enabled,
             )
             .map(|npc| npc.id)
         };

@@ -388,6 +388,12 @@ impl GameTestHarness {
     /// Useful for testing NPC movement without player actions.
     pub fn advance_time(&mut self, minutes: i64) {
         self.app.world.clock.advance(minutes);
+        // Decay every NPC's emotional state over the same window.
+        // Always runs regardless of the `emotions` flag — see
+        // Npc.emotion documentation.
+        self.app
+            .npc_manager
+            .decay_emotions((minutes.max(0) as f32) * 60.0);
 
         // Tick the weather engine for each hour that elapsed, so large time jumps
         // don't skip weather checks. The engine deduplicates by game-hour internally.
@@ -567,6 +573,11 @@ impl GameTestHarness {
                     self.app.world.weather = new_weather;
                 }
 
+                // NOTE: no emotion decay here — Command::Tick's contract is
+                // "re-run scheduling at the current game time", not "advance
+                // time by N minutes". Decay lives on the paths that actually
+                // move the clock forward (apply_movement, Command::Wait,
+                // GameTestHarness::advance_time).
                 self.app.npc_manager.assign_tiers(&self.app.world, &[]);
                 let events = self.app.npc_manager.tick_schedules(
                     &self.app.world.clock,
@@ -1118,6 +1129,7 @@ impl GameTestHarness {
                         internal_thought: None,
                         language_hints: Vec::new(),
                         mentioned_people: Vec::new(),
+                        emotion_delta: None,
                     }),
                 };
                 let game_time = self.app.world.clock.now();
@@ -1139,6 +1151,9 @@ impl GameTestHarness {
                         self.app.debug_event(event);
                     }
                 }
+                // Light contagion so strongly-bonded NPCs feel immediate
+                // coupling from player-driven dialogue in test scripts.
+                self.app.npc_manager.propagate_emotion_contagion(0.02);
 
                 // Record conversation exchange for scene awareness
                 let location = self.app.world.player_location;
@@ -1258,6 +1273,78 @@ pub struct ScriptResult {
 }
 
 /// Runs the game in script mode, reading commands from a file.
+/// Directly seeds structured emotion state on a named NPC.
+///
+/// Input shape: `<NpcName> <family>=<value> [<family>=<value> ...]`
+///
+/// - Family names are the lowercase forms from
+///   [`parish_types::EmotionFamily`]: joy, sadness, fear, anger,
+///   disgust, surprise, shame, affection.
+/// - Values are floats in `[0.0, 1.0]` and clamp into range.
+///
+/// Example: `/stub-emotion Padraig fear=0.95`
+///
+/// This is a test-harness escape hatch for gameplay proof scripts
+/// so they can exercise gate thresholds (panic_truth, etc.) without
+/// needing an LLM to cooperate with the emotion_delta JSON field.
+fn stub_emotion(app: &mut crate::app::App, rest: &str) -> Result<String, String> {
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err("Usage: /stub-emotion <NpcName> family=value [family=value ...]".to_string());
+    }
+
+    // Name may be multi-word — consume tokens until we see the first
+    // `key=value` pair, treat everything before as the name.
+    let first_assign = parts
+        .iter()
+        .position(|t| t.contains('='))
+        .ok_or_else(|| "expected at least one family=value pair".to_string())?;
+    if first_assign == 0 {
+        return Err("missing NPC name before family assignments".to_string());
+    }
+    let name = parts[..first_assign].join(" ");
+
+    let npc_id = app
+        .npc_manager
+        .all_npcs()
+        .find(|n| n.name.eq_ignore_ascii_case(&name))
+        .map(|n| n.id)
+        .ok_or_else(|| format!("NPC not found: {name}"))?;
+
+    let mut applied: Vec<String> = Vec::new();
+    for assign in &parts[first_assign..] {
+        let (family_str, value_str) = assign
+            .split_once('=')
+            .ok_or_else(|| format!("bad assignment: {assign} (expected family=value)"))?;
+        let value: f32 = value_str
+            .parse()
+            .map_err(|_| format!("bad value: {value_str}"))?;
+        let family = match family_str.to_lowercase().as_str() {
+            "joy" => crate::npc::EmotionFamily::Joy,
+            "sadness" | "sad" => crate::npc::EmotionFamily::Sadness,
+            "fear" => crate::npc::EmotionFamily::Fear,
+            "anger" | "angry" => crate::npc::EmotionFamily::Anger,
+            "disgust" => crate::npc::EmotionFamily::Disgust,
+            "surprise" => crate::npc::EmotionFamily::Surprise,
+            "shame" => crate::npc::EmotionFamily::Shame,
+            "affection" => crate::npc::EmotionFamily::Affection,
+            other => return Err(format!("unknown family: {other}")),
+        };
+        // Mutate the NPC's emotion state directly. Bypasses the
+        // normal apply_emotion_impulse scaling because this is a
+        // *seeding* operation for tests — we want exact values.
+        let npc = app
+            .npc_manager
+            .get_mut(npc_id)
+            .ok_or_else(|| format!("NPC disappeared: {name}"))?;
+        *npc.emotion.families.get_mut(family) = value.clamp(0.0, 1.0);
+        npc.mood = npc.emotion.label().to_string();
+        applied.push(format!("{:?}={:.2}", family, value.clamp(0.0, 1.0)));
+    }
+
+    Ok(format!("Stub emotion for {name}: {}", applied.join(", ")))
+}
+
 ///
 /// Each command is executed through [`GameTestHarness`] and produces
 /// one JSON line of output. This allows Claude Code (or any script)
@@ -2056,6 +2143,8 @@ mod tests {
             intelligence: parish_core::npc::types::Intelligence::default(),
             location: LocationId(6),
             mood: "calm".to_string(),
+            emotion: parish_types::EmotionState::default(),
+            temperament: parish_types::Temperament::default(),
             home: Some(LocationId(6)),
             workplace: None,
             schedule: None,

@@ -29,6 +29,7 @@ fn two_npc_group() -> Tier2Group {
                 personality: "Warm and welcoming".to_string(),
                 intelligence_tag: "INT[V3 A3 E4 P4 W5 C4]".to_string(),
                 mood: "content".to_string(),
+                feeling: "content".to_string(),
                 relationship_context: String::new(),
             },
             NpcSnapshot {
@@ -38,6 +39,7 @@ fn two_npc_group() -> Tier2Group {
                 personality: "Gruff but kind".to_string(),
                 intelligence_tag: "INT[V2 A4 E3 P3 W4 C2]".to_string(),
                 mood: "tired".to_string(),
+                feeling: "weary".to_string(),
                 relationship_context: String::new(),
             },
         ],
@@ -90,7 +92,7 @@ async fn tier2_multi_npc_success_returns_event() {
 
     let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&queue, "test-model", &group, "Afternoon", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Afternoon", "Clear", true).await;
 
     let event = event.expect("multi-NPC group should return Some on successful LLM response");
     assert_eq!(event.location, LocationId(2));
@@ -111,7 +113,7 @@ async fn tier2_multi_npc_with_mood_and_relationship_changes() {
 
     let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear", true).await;
 
     let event = event.unwrap();
     assert_eq!(event.mood_changes.len(), 1);
@@ -130,7 +132,7 @@ async fn tier2_http_error_returns_none() {
 
     let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear", true).await;
 
     assert!(event.is_none(), "HTTP error must return None, not panic");
 }
@@ -142,7 +144,7 @@ async fn tier2_malformed_json_returns_none() {
 
     let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear", true).await;
 
     assert!(
         event.is_none(),
@@ -161,7 +163,7 @@ async fn tier2_empty_choices_returns_none() {
 
     let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear", true).await;
 
     assert!(
         event.is_none(),
@@ -176,7 +178,7 @@ async fn tier2_missing_optional_fields_defaults_to_empty() {
 
     let queue = spawn_mock_worker(&server.uri());
     let group = two_npc_group();
-    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear").await;
+    let event = run_tier2_for_group(&queue, "test-model", &group, "Morning", "Clear", true).await;
 
     let event = event.expect("missing optional fields should still parse via serde defaults");
     assert_eq!(event.summary, "They nod at each other.");
