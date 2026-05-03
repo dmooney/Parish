@@ -23,7 +23,7 @@
 	import { buildStyle, readThemeColors } from '$lib/map/style';
 	import type { TileSource } from '$lib/types';
 
-	let mapContainer: HTMLDivElement | undefined;
+	let mapContainer: HTMLDivElement | undefined = $state(undefined);
 	let map: maplibregl.Map | null = null;
 	let mapLoaded = false;
 	let mapInitializing = false;
@@ -32,10 +32,10 @@
 	let dragMoved = false;
 	let dragMouseupHandler: (() => void) | null = null;
 
-	$: loc = $editorSelectedLocation;
-	$: locations = $editorLocations;
-	$: npcs = $editorNpcs;
-	$: selectedId = $editorSelectedLocationId;
+	const loc = $derived($editorSelectedLocation);
+	const locations = $derived($editorLocations);
+	const npcs = $derived($editorNpcs);
+	const selectedId = $derived($editorSelectedLocationId);
 
 	function locationName(id: number): string {
 		return locations.find((l) => l.id === id)?.name ?? `#${id}`;
@@ -266,11 +266,12 @@
 				type: 'geojson',
 				data: { type: 'FeatureCollection', features: [] }
 			});
+			const { mapEdge, mapSelected, mapRelative, mapStroke } = readThemeColors();
 			nextMap.addLayer({
 				id: 'editor-edges',
 				type: 'line',
 				source: 'editor-edges',
-				paint: { 'line-color': '#8f7e56', 'line-width': 2, 'line-opacity': 0.85 }
+				paint: { 'line-color': mapEdge, 'line-width': 2, 'line-opacity': 0.85 }
 			});
 			nextMap.addLayer({
 				id: 'editor-locations',
@@ -280,12 +281,12 @@
 					'circle-radius': ['case', ['==', ['get', 'selected'], 1], 8, 5],
 					'circle-color': [
 						'case',
-						['==', ['get', 'selected'], 1], '#f4cf75',
-						['==', ['get', 'relative'], 1], '#7dd7ff',
-						'#8f7e56'
+						['==', ['get', 'selected'], 1], mapSelected,
+						['==', ['get', 'relative'], 1], mapRelative,
+						mapEdge
 					],
 					'circle-stroke-width': 1.2,
-					'circle-stroke-color': '#1a140a'
+					'circle-stroke-color': mapStroke
 				}
 			});
 			nextMap.on('click', 'editor-locations', async (event) => {
@@ -358,33 +359,30 @@
 		};
 	});
 
-	// Tear the MapLibre instance down the moment the selected location
-	// clears (#409). The `{#if loc}` wrapper below unmounts the map-frame
-	// div, but Svelte's `bind:this` does not always reset `mapContainer`
-	// to `undefined` in time for the mapContainer-based watch below to
-	// fire — so we couple the cleanup to `loc` directly. Without this,
-	// each deselect leaks a WebGL context (MapLibre allocates one per
-	// Map instance) and after a few navigations the browser aborts
-	// further WebGL contexts.
-	$: if (!loc && map) {
-		destroyMap();
-	}
-	$: if (loc && mapContainer && !map) {
-		void ensureMap();
-	}
-	// Defensive secondary cleanup for any case where the div is
-	// unmounted without `loc` flipping (e.g. future refactors).
-	$: if (!mapContainer && map) {
-		destroyMap();
-	}
-	$: setMapData(locations, selectedId);
+	// Lifecycle management: ensure map exists when loc is selected,
+	// and destroy it when deselected or the container is unmounted.
+	// Background: the `{#if loc}` wrapper unmounts the map-frame div, but
+	// Svelte's `bind:this` does not always reset `mapContainer` to
+	// `undefined` in time — so we couple cleanup to `loc` directly (#409).
+	// Without explicit teardown each deselect leaks a WebGL context
+	// (MapLibre allocates one per Map instance) and after a few navigations
+	// the browser aborts further WebGL contexts.
+	// Also update map data when locations or selection changes.
+	$effect(() => {
+		if (loc && mapContainer) {
+			if (!map) void ensureMap();
+		} else if (map) {
+			destroyMap();
+		}
+		setMapData(locations, selectedId);
+	});
 </script>
 
 <div class="loc-detail">
 	{#if loc}
 		<div class="detail-header">
 			<h3 class="detail-title">{loc.name}</h3>
-			<button class="save-btn" on:click={handleSave} disabled={!$editorDirty}>Save World</button>
+			<button class="save-btn" onclick={handleSave} disabled={!$editorDirty}>Save World</button>
 		</div>
 
 		<div class="detail-scroll">
@@ -403,7 +401,7 @@
 						class="field-input"
 						type="text"
 						value={loc.name}
-						on:change={(e) => handleFieldChange('name', e.currentTarget.value)}
+						onchange={(e) => handleFieldChange('name', e.currentTarget.value)}
 					/>
 				</div>
 				<div class="field-row">
@@ -412,7 +410,7 @@
 						id="loc-indoor"
 						type="checkbox"
 						checked={loc.indoor}
-						on:change={(e) => handleFieldChange('indoor', e.currentTarget.checked)}
+						onchange={(e) => handleFieldChange('indoor', e.currentTarget.checked)}
 					/>
 				</div>
 				<div class="field-row">
@@ -421,7 +419,7 @@
 						id="loc-public"
 						type="checkbox"
 						checked={loc.public}
-						on:change={(e) => handleFieldChange('public', e.currentTarget.checked)}
+						onchange={(e) => handleFieldChange('public', e.currentTarget.checked)}
 					/>
 				</div>
 			</section>
@@ -434,7 +432,7 @@
 						id="loc-geo-kind"
 						class="field-input"
 						value={loc.geo_kind ?? 'fictional'}
-						on:change={(e) => handleFieldChange('geo_kind', e.currentTarget.value as GeoKind)}
+						onchange={(e) => handleFieldChange('geo_kind', e.currentTarget.value as GeoKind)}
 					>
 						<option value="real">Real</option>
 						<option value="manual">Manual</option>
@@ -447,7 +445,7 @@
 						id="loc-coord-mode"
 						class="field-input"
 						value={loc.relative_to ? 'relative' : 'absolute'}
-						on:change={(e) => setCoordinateMode(e.currentTarget.value as 'absolute' | 'relative')}
+						onchange={(e) => setCoordinateMode(e.currentTarget.value as 'absolute' | 'relative')}
 					>
 						<option value="absolute">Absolute</option>
 						<option value="relative">Relative</option>
@@ -460,7 +458,7 @@
 							id="loc-anchor"
 							class="field-input"
 							value={loc.relative_to.anchor}
-							on:change={(e) => applyRelativeField('anchor', e.currentTarget.value)}
+							onchange={(e) => applyRelativeField('anchor', e.currentTarget.value)}
 						>
 							{#each locations.filter((l) => l.id !== loc.id) as option}
 								<option value={option.id}>{option.name}</option>
@@ -475,7 +473,7 @@
 							type="number"
 							step="1"
 							value={loc.relative_to.dnorth_m}
-							on:change={(e) => applyRelativeField('dnorth_m', e.currentTarget.value)}
+							onchange={(e) => applyRelativeField('dnorth_m', e.currentTarget.value)}
 						/>
 						<label class="field-label" for="loc-deast">dEast m</label>
 						<input
@@ -484,7 +482,7 @@
 							type="number"
 							step="1"
 							value={loc.relative_to.deast_m}
-							on:change={(e) => applyRelativeField('deast_m', e.currentTarget.value)}
+							onchange={(e) => applyRelativeField('deast_m', e.currentTarget.value)}
 						/>
 					</div>
 				{:else}
@@ -496,7 +494,7 @@
 							type="number"
 							step="0.00001"
 							value={loc.lat}
-							on:change={(e) => handleFieldChange('lat', parseFloat(e.currentTarget.value))}
+							onchange={(e) => handleFieldChange('lat', parseFloat(e.currentTarget.value))}
 						/>
 						<label class="field-label" for="loc-lon">Lon</label>
 						<input
@@ -505,7 +503,7 @@
 							type="number"
 							step="0.00001"
 							value={loc.lon}
-							on:change={(e) => handleFieldChange('lon', parseFloat(e.currentTarget.value))}
+							onchange={(e) => handleFieldChange('lon', parseFloat(e.currentTarget.value))}
 						/>
 					</div>
 				{/if}
@@ -516,14 +514,14 @@
 						class="field-input"
 						type="text"
 						value={loc.geo_source ?? ''}
-						on:change={(e) => handleFieldChange('geo_source', e.currentTarget.value || null)}
+						onchange={(e) => handleFieldChange('geo_source', e.currentTarget.value || null)}
 					/>
 				</div>
 				<div class="nudge-row">
-					<button class="nudge-btn" on:click={() => nudgeSelected(100, 0)}>N +100m</button>
-					<button class="nudge-btn" on:click={() => nudgeSelected(-100, 0)}>S +100m</button>
-					<button class="nudge-btn" on:click={() => nudgeSelected(0, 100)}>E +100m</button>
-					<button class="nudge-btn" on:click={() => nudgeSelected(0, -100)}>W +100m</button>
+					<button class="nudge-btn" onclick={() => nudgeSelected(100, 0)}>N +100m</button>
+					<button class="nudge-btn" onclick={() => nudgeSelected(-100, 0)}>S +100m</button>
+					<button class="nudge-btn" onclick={() => nudgeSelected(0, 100)}>E +100m</button>
+					<button class="nudge-btn" onclick={() => nudgeSelected(0, -100)}>W +100m</button>
 				</div>
 			</section>
 
@@ -533,7 +531,7 @@
 					<div class="conn-row">
 						<span class="conn-target">{locationName(conn.target)}</span>
 						<span class="conn-desc">{conn.path_description}</span>
-						<button class="nudge-btn" on:click={() => toggleConnection(conn.target)}>Remove</button>
+						<button class="nudge-btn" onclick={() => toggleConnection(conn.target)}>Remove</button>
 					</div>
 				{/each}
 			</section>
@@ -544,7 +542,7 @@
 					class="field-textarea tall"
 					aria-label="Description template"
 					value={loc.description_template}
-					on:change={(e) => handleFieldChange('description_template', e.currentTarget.value)}
+					onchange={(e) => handleFieldChange('description_template', e.currentTarget.value)}
 				></textarea>
 				<p class="field-hint">Placeholders: {'{time}'}, {'{weather}'}, {'{npcs_present}'}</p>
 			</section>
@@ -566,7 +564,7 @@
 					aria-label="Mythological significance"
 					value={loc.mythological_significance ?? ''}
 					placeholder="Fairy fort, holy well, cursed ground…"
-					on:change={(e) =>
+					onchange={(e) =>
 						handleFieldChange(
 							'mythological_significance',
 							e.currentTarget.value.trim() === '' ? null : e.currentTarget.value
@@ -611,7 +609,7 @@
 	}
 
 	.detail-title {
-		font-family: 'Cinzel', serif;
+		font-family: var(--font-display);
 		font-size: 0.95rem;
 		margin: 0;
 		color: var(--color-accent);
@@ -625,7 +623,7 @@
 		background: none;
 		color: var(--color-accent);
 		font-size: 0.7rem;
-		font-family: 'IM Fell English', serif;
+		font-family: var(--font-body);
 		cursor: pointer;
 	}
 	.save-btn:hover:not(:disabled),
@@ -680,7 +678,7 @@
 		background: var(--color-input-bg);
 		color: var(--color-fg);
 		font-size: 0.75rem;
-		font-family: 'IM Fell English', serif;
+		font-family: var(--font-body);
 	}
 	.field-input.short {
 		max-width: 100px;
@@ -709,7 +707,7 @@
 		background: var(--color-input-bg);
 		color: var(--color-fg);
 		font-size: 0.75rem;
-		font-family: 'IM Fell English', serif;
+		font-family: var(--font-body);
 		resize: vertical;
 		box-sizing: border-box;
 	}

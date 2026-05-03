@@ -257,6 +257,7 @@ pub async fn submit_input(
             handle_system_command(cmd, &state, &app).await;
         }
         InputResult::GameInput(raw) => {
+            tracing::info!(input = %raw, "chat [player]");
             // Emit the player's own text as a dialogue bubble only for actual dialogue
             let player_msg = text_log("player", format!("> {}", raw));
             let player_msg_id = player_msg.id.clone();
@@ -337,7 +338,7 @@ async fn rebuild_inference(state: &Arc<AppState>, app: &tauri::AppHandle) {
                 TextLogPayload {
                     id: String::new(),
                     stream_turn_id: None,
-                    source: "system".to_string(),
+                    source: "system".into(),
                     content: format!(
                         "Warning: '{}' doesn't look like a valid URL — NPC conversations may fail.",
                         base_url
@@ -639,7 +640,7 @@ async fn handle_game_input(
                 TextLogPayload {
                     id: String::new(),
                     stream_turn_id: None,
-                    source: "system".to_string(),
+                    source: "system".into(),
                     content: "And where would ye be off to?".to_string(),
                 },
             );
@@ -655,6 +656,11 @@ async fn handle_game_input(
     // `talk to <name>` / `speak to <name>` — bypass @mention parsing and
     // route directly to the multi-target dispatch loop with this single
     // addressee. The chip-selection list still gets prepended below.
+    //
+    // Pass `raw` (the original input) rather than an empty string so that
+    // dialogue like "Hello Brigid, good morning!" is not discarded when the
+    // intent parser classifies it as Talk. An empty `raw` still produces the
+    // "say something first" prompt, which is correct for bare "talk to X".
     if is_talk && let Some(target) = talk_target {
         let mut targets: Vec<String> = Vec::with_capacity(addressed_to.len() + 1);
         for name in addressed_to {
@@ -665,7 +671,7 @@ async fn handle_game_input(
         if !targets.iter().any(|t| t == &target) {
             targets.push(target);
         }
-        handle_npc_conversation(String::new(), targets, state, app).await;
+        handle_npc_conversation(raw, targets, state, app).await;
         return;
     }
 
@@ -700,22 +706,64 @@ async fn handle_game_input(
 /// [`parish_core::game_session::apply_movement`], then emits the returned
 /// effects to the frontend.
 async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHandle) {
-    use parish_core::game_session::apply_movement;
+    use parish_core::game_session::{
+        apply_movement, enrich_travel_encounter, roll_travel_encounter,
+    };
 
     let transport = state.transport.default_mode().clone();
 
     // Apply all movement state changes within a single lock scope to prevent
     // TOCTOU races.
-    let effects = {
+    let (effects, rolled_encounter) = {
         let mut world = state.world.lock().await;
         let mut npc_manager = state.npc_manager.lock().await;
-        apply_movement(
+        let effects = apply_movement(
             &mut world,
             &mut npc_manager,
             &state.reaction_templates,
             target,
             &transport,
-        )
+        );
+        let rolled = if effects.world_changed {
+            let config = state.config.lock().await;
+            if !config.flags.is_disabled("travel-encounters") {
+                roll_travel_encounter(&world, &effects)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (effects, rolled)
+    };
+
+    // Resolve encounter text — LLM-enriched when a reaction client exists
+    // and the `travel-encounters-llm` flag is not explicitly disabled.
+    let encounter_line: Option<String> = if let Some(rolled) = rolled_encounter.as_ref() {
+        let llm_enabled = {
+            let cfg = state.config.lock().await;
+            !cfg.flags.is_disabled("travel-encounters-llm")
+        };
+        let (reaction_client, reaction_model) = if llm_enabled {
+            let config = state.config.lock().await;
+            let base_client = state.client.lock().await;
+            config.resolve_category_client(InferenceCategory::Reaction, base_client.as_ref())
+        } else {
+            (None, String::new())
+        };
+        let text = if let Some(client) = reaction_client.as_ref() {
+            enrich_travel_encounter(rolled, client, &reaction_model, 15).await
+        } else {
+            rolled.canned.text.clone()
+        };
+        let formatted = format!("  · {text}");
+        {
+            let mut world = state.world.lock().await;
+            world.log(formatted.clone());
+        }
+        Some(formatted)
+    } else {
+        None
     };
 
     // Emit travel-start animation payload first
@@ -725,11 +773,17 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
 
     // Emit all player-visible messages in order
     for msg in &effects.messages {
+        tracing::info!(source = %msg.source, text = %msg.text.trim(), "chat");
         let payload = match msg.subtype {
             Some(st) => text_log_typed(msg.source, &msg.text, st),
             None => text_log(msg.source, &msg.text),
         };
         let _ = app.emit(EVENT_TEXT_LOG, payload);
+    }
+
+    // Emit travel encounter line if one fired
+    if let Some(line) = encounter_line {
+        let _ = app.emit(EVENT_TEXT_LOG, text_log("system", &line));
     }
 
     // Emit NPC arrival reactions — stream gradually like normal NPC dialogue
@@ -790,7 +844,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
                     StreamTokenPayload {
                         token: batch.to_string(),
                         turn_id,
-                        source: source.to_string(),
+                        source: std::borrow::Cow::Owned(source.to_string()),
                     },
                 );
             },
@@ -857,7 +911,7 @@ async fn handle_look(state: &Arc<AppState>, app: &tauri::AppHandle) {
         TextLogPayload {
             id: String::new(),
             stream_turn_id: None,
-            source: "system".to_string(),
+            source: "system".into(),
             content: text,
         },
     );
@@ -908,7 +962,7 @@ async fn run_npc_turn(
 
     let (token_tx, token_rx) = mpsc::channel::<String>(parish_core::ipc::TOKEN_CHANNEL_CAPACITY);
     let display_label = capitalize_first(&setup.display_name);
-    let req_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let req_id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit(
         EVENT_TEXT_LOG,
         text_log_for_stream_turn(display_label.clone(), String::new(), req_id),
@@ -950,7 +1004,7 @@ async fn run_npc_turn(
                 TextLogPayload {
                     id: String::new(),
                     stream_turn_id: None,
-                    source: "system".to_string(),
+                    source: "system".into(),
                     content: "The parish storyteller has wandered off. Try again in a moment."
                         .to_string(),
                 },
@@ -970,7 +1024,7 @@ async fn run_npc_turn(
                     StreamTokenPayload {
                         token: batch.to_string(),
                         turn_id: req_id,
-                        source: source.clone(),
+                        source: source.clone().into(),
                     },
                 );
             })
@@ -1009,7 +1063,7 @@ async fn run_npc_turn(
                 TextLogPayload {
                     id: String::new(),
                     stream_turn_id: None,
-                    source: "system".to_string(),
+                    source: "system".into(),
                     content: "The storyteller has wandered off mid-tale.".to_string(),
                 },
             );
@@ -1034,7 +1088,7 @@ async fn run_npc_turn(
                 TextLogPayload {
                     id: String::new(),
                     stream_turn_id: None,
-                    source: "system".to_string(),
+                    source: "system".into(),
                     content: "The storyteller is lost in thought. Try again.".to_string(),
                 },
             );
@@ -1061,7 +1115,7 @@ async fn run_npc_turn(
             TextLogPayload {
                 id: String::new(),
                 stream_turn_id: None,
-                source: "system".to_string(),
+                source: "system".into(),
                 content: INFERENCE_FAILURE_MESSAGES[idx].to_string(),
             },
         );
@@ -1072,6 +1126,9 @@ async fn run_npc_turn(
     loading_cancel.cancel();
 
     let parsed = parse_npc_stream_response(&response.text);
+    if !parsed.dialogue.trim().is_empty() {
+        tracing::info!(speaker = %display_label, dialogue = %parsed.dialogue.trim(), "chat [npc]");
+    }
     let hints = parsed
         .metadata
         .as_ref()
@@ -1141,13 +1198,13 @@ async fn handle_npc_conversation(
     };
 
     if !npc_present {
-        let idx = REQUEST_ID.fetch_add(1, Ordering::Relaxed) as usize % IDLE_MESSAGES.len();
+        let idx = REQUEST_ID.fetch_add(1, Ordering::SeqCst) as usize % IDLE_MESSAGES.len();
         let _ = app.emit(
             EVENT_TEXT_LOG,
             TextLogPayload {
                 id: String::new(),
                 stream_turn_id: None,
-                source: "system".to_string(),
+                source: "system".into(),
                 content: IDLE_MESSAGES[idx].to_string(),
             },
         );
@@ -1160,7 +1217,7 @@ async fn handle_npc_conversation(
             TextLogPayload {
                 id: String::new(),
                 stream_turn_id: None,
-                source: "system".to_string(),
+                source: "system".into(),
                 content: "There are ears enough for ye here, but say something first.".to_string(),
             },
         );
@@ -1173,7 +1230,7 @@ async fn handle_npc_conversation(
             TextLogPayload {
                 id: String::new(),
                 stream_turn_id: None,
-                source: "system".to_string(),
+                source: "system".into(),
                 content:
                     "There's someone here, but the LLM is not configured — set a provider with /provider."
                         .to_string(),
@@ -1188,7 +1245,7 @@ async fn handle_npc_conversation(
             TextLogPayload {
                 id: String::new(),
                 stream_turn_id: None,
-                source: "system".to_string(),
+                source: "system".into(),
                 content: "No one here answers to that name just now.".to_string(),
             },
         );
@@ -1494,7 +1551,7 @@ pub(crate) async fn tick_inactivity(state: &Arc<AppState>, app: &tauri::AppHandl
             TextLogPayload {
                 id: String::new(),
                 stream_turn_id: None,
-                source: "system".to_string(),
+                source: "system".into(),
                 content:
                     "The parish falls quiet after a full minute of silence. Time is now paused."
                         .to_string(),
@@ -1663,7 +1720,7 @@ pub async fn load_branch(
         TextLogPayload {
             id: String::new(),
             stream_turn_id: None,
-            source: "system".to_string(),
+            source: "system".into(),
             content: format!("Loaded {} (branch: {}).", filename, branch_name),
         },
     );
@@ -1867,7 +1924,7 @@ pub async fn new_game(
         TextLogPayload {
             id: String::new(),
             stream_turn_id: None,
-            source: "system".to_string(),
+            source: "system".into(),
             content: "A new chapter begins in the parish...".to_string(),
         },
     );
@@ -2144,4 +2201,798 @@ fn emit_npc_reactions(
             }
         }
     });
+}
+
+// ── Demo / auto-player commands ──────────────────────────────────────────────
+
+/// A single NPC visible to the demo player at the current location.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct DemoNpcInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// An adjacent location visible to the demo player.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct DemoAdjacentLocation {
+    pub name: String,
+    pub travel_minutes: Option<u16>,
+    pub visited: bool,
+}
+
+/// A snapshot of the game context passed to the LLM player each turn.
+///
+/// Backend fills all fields except `recent_log`; the frontend appends the
+/// last 40 entries from the `textLog` store before calling `get_llm_player_action`.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct DemoContextSnapshot {
+    pub location_name: String,
+    pub location_description: String,
+    pub game_time: String,
+    pub season: String,
+    pub weather: String,
+    pub npcs_here: Vec<DemoNpcInfo>,
+    pub adjacent: Vec<DemoAdjacentLocation>,
+    pub recent_log: Vec<String>,
+    pub extra_prompt: Option<String>,
+}
+
+/// Demo configuration returned by `get_demo_config`.
+#[derive(serde::Serialize, Clone)]
+pub struct DemoConfigPayload {
+    pub auto_start: bool,
+    pub extra_prompt: Option<String>,
+    pub turn_pause_secs: f32,
+    pub max_turns: Option<u32>,
+}
+
+/// Returns the demo configuration (CLI flags parsed at startup).
+#[tauri::command]
+pub async fn get_demo_config(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<DemoConfigPayload, String> {
+    let dc = &state.demo_config;
+    Ok(DemoConfigPayload {
+        auto_start: dc.auto_start,
+        extra_prompt: dc.extra_prompt.clone(),
+        turn_pause_secs: dc.turn_pause_secs,
+        max_turns: dc.max_turns,
+    })
+}
+
+/// Builds a context snapshot for the LLM demo player.
+///
+/// Returns location, time, weather, NPCs present, and adjacent locations.
+/// The `recent_log` field is empty; the frontend fills it from the text log
+/// store before passing the snapshot to `get_llm_player_action`.
+#[tauri::command]
+pub async fn get_demo_context(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<DemoContextSnapshot, String> {
+    {
+        let config = state.config.lock().await;
+        if !config.flags.is_enabled("demo-mode") {
+            return Err("Demo mode is not active.".to_string());
+        }
+    }
+
+    // Lock order: world → npc_manager (matches AppState contract).
+    let world = state.world.lock().await;
+    let npc_manager = state.npc_manager.lock().await;
+
+    let player_loc = world.player_location;
+
+    let location_name = world
+        .graph
+        .get(player_loc)
+        .map(|d| d.name.clone())
+        .unwrap_or_default();
+
+    let location_description = if let Some(loc_data) = world.current_location_data() {
+        parish_core::world::description::render_description(
+            loc_data,
+            world.clock.time_of_day(),
+            &world.weather.to_string(),
+            &[],
+        )
+    } else {
+        String::new()
+    };
+
+    use chrono::Datelike;
+    let now = world.clock.now();
+    let time_of_day = world.clock.time_of_day();
+    let game_time = format!(
+        "{}, {} {} {}, {}",
+        now.format("%A"),
+        now.day(),
+        now.format("%B"),
+        now.year(),
+        time_of_day,
+    );
+    let season = format!("{}", world.clock.season());
+    let weather = world.weather.to_string();
+
+    let npcs_here = npc_manager
+        .npcs_at(player_loc)
+        .iter()
+        .map(|npc| {
+            let introduced = npc_manager.is_introduced(npc.id);
+            DemoNpcInfo {
+                name: npc.display_name(introduced).to_string(),
+                description: npc.occupation.clone(),
+            }
+        })
+        .collect();
+
+    let speed = state.transport.default_mode().speed_m_per_s;
+    let adjacent = world
+        .graph
+        .neighbors(player_loc)
+        .into_iter()
+        .map(|(neighbor_id, _conn)| {
+            let name = world
+                .graph
+                .get(neighbor_id)
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| format!("Location {}", neighbor_id.0));
+            let travel_minutes = Some(world.graph.edge_travel_minutes(
+                player_loc,
+                neighbor_id,
+                speed,
+            ));
+            let visited = world.visited_locations.contains(&neighbor_id);
+            DemoAdjacentLocation {
+                name,
+                travel_minutes,
+                visited,
+            }
+        })
+        .collect();
+
+    let extra_prompt = state.demo_config.extra_prompt.clone();
+
+    Ok(DemoContextSnapshot {
+        location_name,
+        location_description,
+        game_time,
+        season,
+        weather,
+        npcs_here,
+        adjacent,
+        recent_log: Vec::new(),
+        extra_prompt,
+    })
+}
+
+/// Extracts the player action from an LLM response.
+///
+/// Handles three patterns:
+/// 1. Completion: model received `{"action": "` and completed it — response is
+///    something like `go to the mill"}`. Extract up to the closing quote.
+/// 2. Full JSON: model output `{"action": "go to the mill"}` — scan for `{`
+///    and JSON-parse from there.
+/// 3. Fallback: no JSON at all — strip thinking preamble, take last line.
+fn extract_action_from_response(text: &str) -> String {
+    // Strip thinking blocks first so all patterns operate on clean text.
+    let stripped = strip_thinking_block(text);
+    let trimmed = stripped.trim();
+
+    // Pattern 1: fill-in-the-blank completion — response starts with the
+    // action text and ends with `"}` or just `"`. The model completed
+    // `{"action": "` → `go to the mill"}`.
+    // We also handle `go to the mill"` (no closing brace).
+    let completion = trimmed
+        .trim_end_matches('}')
+        .trim_end()
+        .trim_end_matches('"')
+        .trim();
+    // Valid completion: no opening brace in the extracted text (it's pure action).
+    if !completion.is_empty() && !completion.starts_with('{') && !completion.contains("action") {
+        // Check that the raw response looked like a completion (no full JSON object).
+        if !trimmed.contains("{\"action\"") && !trimmed.contains("{ \"action\"") {
+            return completion.to_string();
+        }
+    }
+
+    // Pattern 2: full JSON object anywhere in the response.
+    let mut search = trimmed;
+    while let Some(start) = search.find('{') {
+        let candidate = &search[start..];
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate)
+            && let Some(action) = val.get("action").and_then(|v| v.as_str())
+        {
+            let action = action.trim();
+            if !action.is_empty() {
+                return action.to_string();
+            }
+        }
+        search = &search[start + 1..];
+    }
+
+    // Pattern 3: fallback — take last meaningful line from already-stripped text.
+    trimmed.trim_matches('"').trim_matches('\'').to_string()
+}
+
+/// Strips reasoning preamble from LLM responses so only the action remains.
+///
+/// Handles two patterns:
+/// 1. Tagged blocks: `<thinking>...</thinking>` / `<think>...</think>` from
+///    reasoning models (deepseek-r1, qwq). Takes everything after the last
+///    closing tag.
+/// 2. Plain-text multi-paragraph reasoning: if the response has blank-line-
+///    separated paragraphs, takes the last paragraph. This covers models that
+///    output reasoning prose before the final action without tags.
+///
+/// Falls back to the full trimmed text if neither pattern applies.
+fn strip_thinking_block(text: &str) -> &str {
+    let trimmed = text.trim();
+
+    // Strip tagged thinking blocks first.
+    for close_tag in &["</thinking>", "</think>"] {
+        if let Some(pos) = trimmed.rfind(close_tag) {
+            let after = trimmed[pos + close_tag.len()..].trim();
+            if !after.is_empty() {
+                return after;
+            }
+        }
+    }
+
+    // If the response has multiple blank-line-separated paragraphs, take the
+    // last one — reasoning models often output rationale before the action.
+    if let Some(last_para) = trimmed.rsplit("\n\n").find(|p| !p.trim().is_empty()) {
+        let candidate = last_para.trim();
+        // Only use the last paragraph if it looks like a short action (≤ 3
+        // lines), not if the whole thing is one paragraph of prose.
+        let line_count = candidate.lines().count();
+        if line_count <= 3 && candidate.len() < trimmed.len() {
+            return candidate;
+        }
+    }
+
+    // Last-line fallback: models sometimes separate reasoning from action with
+    // a single newline. If the last non-empty line is much shorter than the
+    // full response, treat it as the action.
+    let lines: Vec<&str> = trimmed.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() > 1
+        && let Some(&last) = lines.last()
+    {
+        let last = last.trim();
+        if last.len() <= 200 && last.len() < trimmed.len() {
+            return last;
+        }
+    }
+
+    trimmed
+}
+
+/// Asks the LLM to choose the next player action given the current game context.
+///
+/// The frontend fills `ctx.recent_log` from the text log store before calling
+/// this command. Returns the trimmed action string.
+#[tauri::command]
+pub async fn get_llm_player_action(
+    ctx: DemoContextSnapshot,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    {
+        let config = state.config.lock().await;
+        if !config.flags.is_enabled("demo-mode") {
+            return Err("Demo mode is not active.".to_string());
+        }
+    }
+
+    // Resolve client and model (base client; no per-category override for demo).
+    let (client_opt, model) = {
+        let config = state.config.lock().await;
+        let client_guard = state.client.lock().await;
+        let model = config.model_name.clone();
+        let client = client_guard.as_ref().cloned();
+        (client, model)
+    };
+
+    let Some(client) = client_opt else {
+        return Err("No LLM client configured.".to_string());
+    };
+
+    let extra_section = ctx
+        .extra_prompt
+        .as_deref()
+        .map(|p| format!("\n\n{}", p))
+        .unwrap_or_default();
+
+    let system_prompt = format!(
+        "You are playing Rundale, an Irish living-world simulation set in 1820. You are a \
+wandering stranger exploring the townlands of east Roscommon. The world is populated by \
+historical Irish villagers — farmers, priests, weavers, matchmakers — each living their \
+own life.\n\
+\n\
+Explore naturally: talk to people, learn their stories, travel between locations, and \
+respond to whatever you encounter. Act as a curious outsider would.{extra}\n\
+\n\
+Respond with a JSON object containing a single field \"action\" — the text the player \
+would type into the game. Do NOT use meta-commands like \"talk to X\"; write the actual \
+words or command directly.\n\
+\n\
+Examples:\n\
+  {{\"action\": \"Good morning! What brings you out at this hour?\"}}\n\
+  {{\"action\": \"go to the mill\"}}\n\
+  {{\"action\": \"look\"}}\n\
+  {{\"action\": \"ask about the harvest\"}}\n\
+\n\
+Your entire response must be a single JSON object — nothing before or after it.",
+        extra = extra_section,
+    );
+
+    let mut user_parts: Vec<String> = Vec::new();
+    user_parts.push(format!("Location: {}", ctx.location_name));
+    if !ctx.location_description.is_empty() {
+        user_parts.push(ctx.location_description.clone());
+    }
+    user_parts.push(format!("Date and time: {} | {}", ctx.game_time, ctx.season));
+    user_parts.push(format!("Weather: {}", ctx.weather));
+
+    if ctx.npcs_here.is_empty() {
+        user_parts.push("NPCs here: none".to_string());
+    } else {
+        let npc_lines: Vec<String> = ctx
+            .npcs_here
+            .iter()
+            .map(|n| format!("  - {} ({})", n.name, n.description))
+            .collect();
+        user_parts.push(format!("NPCs here:\n{}", npc_lines.join("\n")));
+    }
+
+    if !ctx.adjacent.is_empty() {
+        let adj_lines: Vec<String> = ctx
+            .adjacent
+            .iter()
+            .map(|a| {
+                let mins = a
+                    .travel_minutes
+                    .map(|m| format!("{} min", m))
+                    .unwrap_or_else(|| "? min".to_string());
+                let vis = if a.visited { "visited" } else { "unvisited" };
+                format!("  - {} ({}, {})", a.name, mins, vis)
+            })
+            .collect();
+        user_parts.push(format!("Adjacent locations:\n{}", adj_lines.join("\n")));
+    }
+
+    if !ctx.recent_log.is_empty() {
+        let log_lines: Vec<String> = ctx.recent_log.iter().map(|l| format!("> {}", l)).collect();
+        user_parts.push(format!("Recent events:\n{}", log_lines.join("\n")));
+    }
+
+    // Fill-in-the-blank technique: end the prompt with an incomplete JSON
+    // object so the model completes the string rather than reasoning about it.
+    user_parts.push("Action (complete the JSON):\n{\"action\": \"".to_string());
+
+    let user_prompt = user_parts.join("\n\n");
+
+    let raw = client
+        .generate(
+            &model,
+            &user_prompt,
+            Some(&system_prompt),
+            Some(200),
+            Some(0.9),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Primary: extract the "action" field from JSON output.
+    // The system prompt asks for {"action": "..."}, which is robust against
+    // any amount of preamble or reasoning text the model emits before it.
+    let action_text = extract_action_from_response(&raw);
+    tracing::info!(
+        location = %ctx.location_name,
+        raw_len = raw.len(),
+        action = %action_text,
+        "demo turn: LLM chose action"
+    );
+    Ok(action_text)
+}
+
+#[cfg(test)]
+mod demo_tests {
+    use super::{extract_action_from_response, strip_thinking_block};
+
+    #[test]
+    fn extracts_action_from_json() {
+        let input = r#"{"action": "Good morning! How are you today?"}"#;
+        assert_eq!(
+            extract_action_from_response(input),
+            "Good morning! How are you today?"
+        );
+    }
+
+    #[test]
+    fn extracts_action_from_json_after_preamble() {
+        let input = "Let me think... However, we are a wandering stranger.\n{\"action\": \"go to the crossroads\"}";
+        assert_eq!(extract_action_from_response(input), "go to the crossroads");
+    }
+
+    #[test]
+    fn extracts_action_from_json_after_thinking_tags() {
+        let input = "<think>reasoning here</think>\n{\"action\": \"look\"}";
+        assert_eq!(extract_action_from_response(input), "look");
+    }
+
+    #[test]
+    fn falls_back_to_stripping_when_no_json() {
+        let input = "Some reasoning.\nask about the harvest";
+        assert_eq!(extract_action_from_response(input), "ask about the harvest");
+    }
+
+    #[test]
+    fn strips_thinking_block_before_action() {
+        let input =
+            "<thinking>\nI should greet the farmer.\n</thinking>\nHello there, good morning!";
+        assert_eq!(strip_thinking_block(input), "Hello there, good morning!");
+    }
+
+    #[test]
+    fn strips_think_tag_variant() {
+        let input = "<think>reasoning</think>\ngo to the mill";
+        assert_eq!(strip_thinking_block(input), "go to the mill");
+    }
+
+    #[test]
+    fn no_thinking_block_returns_trimmed() {
+        let input = "  ask Brigid about the harvest  ";
+        assert_eq!(strip_thinking_block(input), "ask Brigid about the harvest");
+    }
+
+    #[test]
+    fn only_thinking_block_falls_back_to_full() {
+        let input = "<thinking>just thinking, nothing after</thinking>";
+        assert_eq!(
+            strip_thinking_block(input),
+            "<thinking>just thinking, nothing after</thinking>"
+        );
+    }
+
+    #[test]
+    fn uses_last_closing_tag_for_nested() {
+        let input = "<thinking>outer <think>inner</think> more</thinking>\nlook around";
+        assert_eq!(strip_thinking_block(input), "look around");
+    }
+
+    #[test]
+    fn strips_plain_text_reasoning_before_action() {
+        let input = "Looking at the context, I see Peig is here. I should greet her warmly.\n\nHello Peig, good morning!";
+        assert_eq!(strip_thinking_block(input), "Hello Peig, good morning!");
+    }
+
+    #[test]
+    fn single_paragraph_returned_as_is() {
+        let input = "Hello Seamus, how goes the harvest?";
+        assert_eq!(strip_thinking_block(input), input);
+    }
+
+    #[test]
+    fn strips_single_newline_reasoning_before_action() {
+        let input = "I need to explore. The crossroads is nearby.\ngo to the crossroads";
+        assert_eq!(strip_thinking_block(input), "go to the crossroads");
+    }
+
+    #[test]
+    fn strips_multi_sentence_reasoning_single_newline() {
+        let input = "Based on my previous interaction with Peig, I should explore. The mill is unvisited.\nask about the mill";
+        assert_eq!(strip_thinking_block(input), "ask about the mill");
+    }
+}
+
+#[cfg(test)]
+mod cmd_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Builds a minimal [`AppState`] for unit tests — matches the structure
+    /// used in `parish-server` tests (`routes::tests::test_app_state`).
+    fn test_app_state() -> Arc<AppState> {
+        use crate::{
+            AppState, ConversationRuntimeState, DEBUG_EVENT_CAPACITY, DemoConfig, GameConfig,
+            UiConfigSnapshot,
+        };
+        use parish_core::inference::new_inference_log;
+        use parish_core::npc::manager::NpcManager;
+        use parish_core::world::transport::TransportConfig;
+        use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let data_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../mods/rundale");
+        let world =
+            WorldState::from_parish_file(&data_dir.join("world.json"), DEFAULT_START_LOCATION)
+                .unwrap();
+        let npc_manager = NpcManager::new();
+        let transport = TransportConfig::default();
+        let ui_config = UiConfigSnapshot {
+            hints_label: "test".to_string(),
+            default_accent: "#000".to_string(),
+            splash_text: String::new(),
+            active_tile_source: String::new(),
+            tile_sources: Vec::new(),
+            auto_pause_timeout_seconds: 300,
+        };
+        let theme_palette = parish_core::game_mod::default_theme_palette();
+        let pronunciations = Vec::new();
+        let reaction_templates = parish_core::npc::reactions::ReactionTemplates::default();
+        let game_config = GameConfig {
+            provider_name: String::new(),
+            base_url: String::new(),
+            api_key: None,
+            model_name: String::new(),
+            cloud_provider_name: None,
+            cloud_model_name: None,
+            cloud_api_key: None,
+            cloud_base_url: None,
+            improv_enabled: false,
+            max_follow_up_turns: 2,
+            idle_banter_after_secs: 25,
+            auto_pause_after_secs: 60,
+            category_provider: Default::default(),
+            category_model: Default::default(),
+            category_api_key: Default::default(),
+            category_base_url: Default::default(),
+            flags: parish_core::config::FeatureFlags::default(),
+            category_rate_limit: Default::default(),
+            active_tile_source: String::new(),
+            tile_sources: Vec::new(),
+            reveal_unexplored_locations: false,
+        };
+        let saves_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../saves");
+        let shutdown_token = CancellationToken::new();
+
+        Arc::new(AppState {
+            world: Mutex::new(world),
+            npc_manager: Mutex::new(npc_manager),
+            inference_queue: Mutex::new(None),
+            client: Mutex::new(None),
+            cloud_client: Mutex::new(None),
+            conversation: Mutex::new(ConversationRuntimeState::new()),
+            debug_events: Mutex::new(std::collections::VecDeque::with_capacity(
+                DEBUG_EVENT_CAPACITY,
+            )),
+            game_events: Mutex::new(std::collections::VecDeque::with_capacity(
+                DEBUG_EVENT_CAPACITY,
+            )),
+            inference_log: new_inference_log(),
+            ui_config,
+            theme_palette,
+            pronunciations,
+            reaction_templates,
+            save_path: Mutex::new(None),
+            current_branch_id: Mutex::new(None),
+            current_branch_name: Mutex::new(None),
+            transport,
+            data_dir: data_dir.clone(),
+            saves_dir,
+            worker_handle: Mutex::new(None),
+            editor: std::sync::Mutex::new(parish_core::ipc::editor::EditorSession::default()),
+            save_lock: Mutex::new(None),
+            ollama_process: Mutex::new(parish_core::inference::client::OllamaProcess::none()),
+            inference_config: parish_core::config::InferenceConfig::default(),
+            config: Mutex::new(game_config),
+            demo_config: DemoConfig::default(),
+            shutdown_token,
+        })
+    }
+
+    // ── validate_input_text ─────────────────────────────────────────────────
+
+    #[test]
+    fn validate_input_accepts_normal_text() {
+        assert!(validate_input_text("ask Brigid about the harvest").is_ok());
+    }
+
+    #[test]
+    fn validate_input_trims_whitespace() {
+        let result = validate_input_text("  hello  ").unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn validate_input_allows_empty_after_trim() {
+        assert!(validate_input_text("   ").is_ok());
+    }
+
+    #[test]
+    fn validate_input_rejects_over_2000_chars() {
+        let long: String = "a".repeat(2001);
+        assert!(validate_input_text(&long).is_err());
+    }
+
+    #[test]
+    fn validate_input_accepts_exactly_2000_chars() {
+        let exactly: String = "a".repeat(2000);
+        assert!(validate_input_text(&exactly).is_ok());
+    }
+
+    // ── validate_addressed_to ───────────────────────────────────────────────
+
+    #[test]
+    fn validate_addressed_to_accepts_empty_list() {
+        assert!(validate_addressed_to(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_addressed_to_accepts_up_to_10() {
+        let names: Vec<String> = (0..10).map(|i| format!("Npc{}", i)).collect();
+        assert!(validate_addressed_to(&names).is_ok());
+    }
+
+    #[test]
+    fn validate_addressed_to_rejects_11_names() {
+        let names: Vec<String> = (0..11).map(|i| format!("Npc{}", i)).collect();
+        assert!(validate_addressed_to(&names).is_err());
+    }
+
+    #[test]
+    fn validate_addressed_to_rejects_name_over_100_chars() {
+        let long_name = "a".repeat(101);
+        assert!(validate_addressed_to(&[long_name]).is_err());
+    }
+
+    #[test]
+    fn validate_addressed_to_accepts_100_char_name() {
+        let name = "a".repeat(100);
+        assert!(validate_addressed_to(&[name]).is_ok());
+    }
+
+    // ── is_snippet_injection_char ───────────────────────────────────────────
+
+    #[test]
+    fn snippet_injection_rejects_double_quote() {
+        assert!(is_snippet_injection_char('"'));
+    }
+
+    #[test]
+    fn snippet_injection_rejects_backslash() {
+        assert!(is_snippet_injection_char('\\'));
+    }
+
+    #[test]
+    fn snippet_injection_rejects_line_separator() {
+        assert!(is_snippet_injection_char('\u{2028}'));
+    }
+
+    #[test]
+    fn snippet_injection_rejects_paragraph_separator() {
+        assert!(is_snippet_injection_char('\u{2029}'));
+    }
+
+    #[test]
+    fn snippet_injection_rejects_null_byte() {
+        assert!(is_snippet_injection_char('\0'));
+    }
+
+    #[test]
+    fn snippet_injection_accepts_normal_chars() {
+        for c in "abcdefghijklmnopqrstuvwxyz ÁÉÍÓÚ,.!?'".chars() {
+            assert!(
+                !is_snippet_injection_char(c),
+                "char {:?} should be allowed",
+                c
+            );
+        }
+    }
+
+    // ── AppState save state on fresh state ─────────────────────────────────
+
+    #[tokio::test]
+    async fn save_state_initial_is_empty() {
+        let state = test_app_state();
+        let save_path = state.save_path.lock().await;
+        let branch_id = state.current_branch_id.lock().await;
+        let branch_name = state.current_branch_name.lock().await;
+
+        let filename = save_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string());
+
+        assert!(filename.is_none(), "fresh state should have no save file");
+        assert!(branch_id.is_none(), "fresh state should have no branch id");
+        assert!(
+            branch_name.is_none(),
+            "fresh state should have no branch name"
+        );
+    }
+
+    // ── conversation state ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn set_conversation_running_toggles_flag() {
+        let state = test_app_state();
+
+        // Initially not running
+        {
+            let conv = state.conversation.lock().await;
+            assert!(!conv.conversation_in_progress);
+        }
+
+        set_conversation_running(&state, true).await;
+
+        {
+            let conv = state.conversation.lock().await;
+            assert!(conv.conversation_in_progress);
+        }
+
+        set_conversation_running(&state, false).await;
+
+        {
+            let conv = state.conversation.lock().await;
+            assert!(!conv.conversation_in_progress);
+        }
+    }
+
+    // ── tick_inactivity does nothing when paused ────────────────────────────
+
+    #[tokio::test]
+    async fn world_clock_paused_state_has_expected_invariants() {
+        let state = test_app_state();
+
+        // Pause the world clock
+        {
+            let mut world = state.world.lock().await;
+            world.clock.pause();
+        }
+
+        // tick_inactivity needs an AppHandle which we can't construct in unit
+        // tests.  The early-return path (world is paused) never touches app,
+        // so we exercise the banter-after-silence guard indirectly via
+        // conversation state: conversation_in_progress=false, clock paused →
+        // the guard returns immediately without calling run_idle_banter.
+        // We verify world state is unchanged.
+        let (paused_before, loc_before) = {
+            let world = state.world.lock().await;
+            (world.clock.is_paused(), world.player_location)
+        };
+        assert!(paused_before, "clock should be paused before tick");
+
+        // We can't call tick_inactivity here because it needs tauri::AppHandle.
+        // Instead, confirm the state invariants hold so future tests that mock
+        // AppHandle can call tick_inactivity against this base.
+        let paused_after = {
+            let world = state.world.lock().await;
+            world.clock.is_paused()
+        };
+        assert!(paused_after, "paused flag should still be set");
+        assert_eq!(
+            state.world.lock().await.player_location,
+            loc_before,
+            "location should be unchanged"
+        );
+    }
+
+    // ── world snapshot consistency ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn world_state_loads_kilteevan_as_start_location() {
+        let state = test_app_state();
+        let world = state.world.lock().await;
+        let loc_name = world
+            .current_location_data()
+            .map(|d| d.name.as_str())
+            .unwrap_or("unknown");
+        // Default start location for Rundale is Kilteevan Village
+        assert_eq!(loc_name, "Kilteevan Village");
+    }
+
+    #[tokio::test]
+    async fn discover_save_files_returns_ok_for_missing_saves_dir() {
+        let state = test_app_state();
+        let world = state.world.lock().await;
+        let saves =
+            parish_core::persistence::picker::discover_saves(&state.saves_dir, &world.graph);
+        // Missing dir should return empty vec, not panic
+        assert!(
+            saves.is_empty(),
+            "discover_saves should return empty vec for missing directory"
+        );
+    }
 }

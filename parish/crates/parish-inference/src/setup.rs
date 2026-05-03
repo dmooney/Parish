@@ -103,7 +103,7 @@ pub struct OllamaSetup {
 ///
 /// Implemented differently by headless and other modes to show
 /// installation, detection, and download progress appropriately.
-pub trait SetupProgress {
+pub trait SetupProgress: Send + Sync {
     /// Reports a status message during setup.
     fn on_status(&self, msg: &str);
     /// Reports model pull progress (bytes downloaded vs total).
@@ -931,23 +931,6 @@ pub async fn setup_ollama_with_config(
     })
 }
 
-/// Sends a trivial generate request to force Ollama to load the model into VRAM.
-///
-/// Without this, Ollama defers model loading until the first real request,
-/// causing a long delay on the player's first interaction. The warmup prompt
-/// is minimal so the response completes quickly once the model is loaded.
-///
-/// Uses a dedicated HTTP client with a 5-minute timeout since the first
-/// model load (moving weights from disk to VRAM) can be slow.
-#[allow(dead_code)] // Kept as default-timeout wrapper for external callers
-async fn warmup_model(
-    base_url: &str,
-    model_name: &str,
-    progress: &dyn SetupProgress,
-) -> Result<(), ParishError> {
-    warmup_model_with_config(base_url, model_name, progress, &InferenceConfig::default()).await
-}
-
 /// Sends a trivial generate request to force Ollama to load the model into VRAM,
 /// with configurable timeout.
 ///
@@ -1326,34 +1309,38 @@ mod tests {
 
     /// Tracks status messages for testing.
     struct TestProgress {
-        messages: std::cell::RefCell<Vec<String>>,
+        messages: std::sync::Mutex<Vec<String>>,
     }
 
     impl TestProgress {
         fn new() -> Self {
             Self {
-                messages: std::cell::RefCell::new(Vec::new()),
+                messages: std::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn messages(&self) -> Vec<String> {
-            self.messages.borrow().clone()
+            self.messages.lock().unwrap().clone()
         }
     }
 
     impl SetupProgress for TestProgress {
         fn on_status(&self, msg: &str) {
-            self.messages.borrow_mut().push(msg.to_string());
+            self.messages.lock().unwrap().push(msg.to_string());
         }
 
         fn on_pull_progress(&self, completed: u64, total: u64) {
             self.messages
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .push(format!("progress: {}/{}", completed, total));
         }
 
         fn on_error(&self, msg: &str) {
-            self.messages.borrow_mut().push(format!("ERROR: {}", msg));
+            self.messages
+                .lock()
+                .unwrap()
+                .push(format!("ERROR: {}", msg));
         }
     }
 

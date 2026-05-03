@@ -22,7 +22,9 @@ import type {
 	TravelStartPayload,
 	DebugSnapshot,
 	SaveFileInfo,
-	SaveState
+	SaveState,
+	DemoContextSnapshot,
+	DemoConfigPayload
 } from './types';
 
 // ── Transport detection ─────────────────────────────────────────────────────
@@ -90,6 +92,15 @@ export const getSaveState = () => command<SaveState>('get_save_state');
 
 export const reactToMessage = (npcName: string, messageSnippet: string, emoji: string) =>
 	command<void>('react_to_message', { npcName, messageSnippet, emoji });
+
+// ── Demo / auto-player commands ──────────────────────────────────────────────
+
+export const getDemoConfig = () => command<DemoConfigPayload>('get_demo_config');
+
+export const getDemoContext = () => command<DemoContextSnapshot>('get_demo_context');
+
+export const getLlmPlayerAction = (ctx: DemoContextSnapshot) =>
+	command<string>('get_llm_player_action', { ctx });
 
 // ── Events ──────────────────────────────────────────────────────────────────
 
@@ -297,3 +308,30 @@ export const onNpcReaction = (cb: (payload: NpcReactionPayload) => void) =>
 
 export const onTravelStart = (cb: (payload: TravelStartPayload) => void) =>
 	onEvent<TravelStartPayload>('travel-start', cb);
+
+// ── Setup overlay events ────────────────────────────────────────────────────
+
+export function isTauri(): boolean {
+	return IS_TAURI;
+}
+
+export interface SetupStatusPayload {
+	message: string;
+}
+export interface SetupProgressPayload {
+	completed: number;
+	total: number;
+}
+export interface SetupDonePayload {
+	success: boolean;
+	error: string;
+}
+
+export const onSetupStatus = (cb: (payload: SetupStatusPayload) => void) =>
+	onEvent<SetupStatusPayload>('setup-status', cb);
+
+export const onSetupProgress = (cb: (payload: SetupProgressPayload) => void) =>
+	onEvent<SetupProgressPayload>('setup-progress', cb);
+
+export const onSetupDone = (cb: (payload: SetupDonePayload) => void) =>
+	onEvent<SetupDonePayload>('setup-done', cb);

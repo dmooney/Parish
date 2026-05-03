@@ -144,6 +144,7 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     ("/pause", "Hold time still"),
     ("/resume", "Let time flow again"),
     ("/save", "Save the game"),
+    ("/session", "Listen to the music session at the pub"),
     (
         "/speed [slow|normal|fast|fastest|ludicrous]",
         "Show or change game speed",
@@ -318,20 +319,6 @@ pub fn handle_command(
                 CommandResult::text(format!("{} schedule event(s) processed.", count))
             }
         }
-        Command::Weather(Some(kind)) => match kind.parse::<parish_types::Weather>() {
-            Ok(w) => {
-                world.weather = w;
-                CommandResult::text(format!("Weather forced to {}.", w))
-            }
-            Err(_) => CommandResult::text(
-                "Unknown weather. Try: Clear, Partly Cloudy, Overcast, \
-                 Light Rain, Heavy Rain, Fog, Storm.",
-            ),
-        },
-        Command::Weather(None) => {
-            CommandResult::text(format!("Current weather: {}.", world.weather))
-        }
-
         // ── Sidebar & Improv ────────────────────────────────────────────
         Command::ToggleSidebar => {
             CommandResult::text("The Irish words panel is managed by the sidebar.")
@@ -421,24 +408,22 @@ pub fn handle_command(
             CommandResult::with_effect("Cloud API key updated.", CommandEffect::RebuildCloudClient)
         }
 
-        // ── Per-category provider/model/key ──��──────────────────────────
-        Command::ShowCategoryProvider(cat) => {
-            let idx = GameConfig::cat_idx(cat);
-            match &config.category_provider[idx] {
-                Some(p) => CommandResult::text(format!("{} provider: {}", cat.name(), p)),
-                None => CommandResult::text(format!(
-                    "{} provider: (inherits base: {})",
-                    cat.name(),
-                    config.provider_name
-                )),
-            }
-        }
+        // ── Per-category provider/model/key ──────────────────────────────
+        Command::ShowCategoryProvider(cat) => match config.category_provider.get(&cat) {
+            Some(p) => CommandResult::text(format!("{} provider: {}", cat.name(), p)),
+            None => CommandResult::text(format!(
+                "{} provider: (inherits base: {})",
+                cat.name(),
+                config.provider_name
+            )),
+        },
         Command::SetCategoryProvider(cat, name) => match Provider::from_str_loose(&name) {
             Ok(provider) => {
-                let idx = GameConfig::cat_idx(cat);
                 let provider_name = format!("{:?}", provider).to_lowercase();
-                config.category_provider[idx] = Some(provider_name.clone());
-                config.category_base_url[idx] = Some(provider.default_base_url().to_string());
+                config.category_provider.insert(cat, provider_name.clone());
+                config
+                    .category_base_url
+                    .insert(cat, provider.default_base_url().to_string());
                 // Auto-fill the model for this category if unset, using the
                 // new provider's preset for this role.
                 config.fill_missing_models_from_presets();
@@ -449,35 +434,25 @@ pub fn handle_command(
             }
             Err(e) => CommandResult::text(format!("{}", e)),
         },
-        Command::ShowCategoryModel(cat) => {
-            let idx = GameConfig::cat_idx(cat);
-            match &config.category_model[idx] {
-                Some(m) => CommandResult::text(format!("{} model: {}", cat.name(), m)),
-                None => CommandResult::text(format!(
-                    "{} model: (inherits base: {})",
-                    cat.name(),
-                    config.model_name
-                )),
-            }
-        }
+        Command::ShowCategoryModel(cat) => match config.category_model.get(&cat) {
+            Some(m) => CommandResult::text(format!("{} model: {}", cat.name(), m)),
+            None => CommandResult::text(format!(
+                "{} model: (inherits base: {})",
+                cat.name(),
+                config.model_name
+            )),
+        },
         Command::SetCategoryModel(cat, name) => {
-            let idx = GameConfig::cat_idx(cat);
-            config.category_model[idx] = Some(name.clone());
+            config.category_model.insert(cat, name.clone());
             CommandResult::text(format!("{} model changed to {}.", cat.name(), name))
         }
-        Command::ShowCategoryKey(cat) => {
-            let idx = GameConfig::cat_idx(cat);
-            match &config.category_api_key[idx] {
-                Some(key) => {
-                    CommandResult::text(format!("{} API key: {}", cat.name(), mask_key(key)))
-                }
-                None => CommandResult::text(format!("{} API key: (not set)", cat.name())),
-            }
-        }
+        Command::ShowCategoryKey(cat) => match config.category_api_key.get(&cat) {
+            Some(key) => CommandResult::text(format!("{} API key: {}", cat.name(), mask_key(key))),
+            None => CommandResult::text(format!("{} API key: (not set)", cat.name())),
+        },
         Command::SetCategoryKey(cat, value) => {
             let cat_name = cat.name().to_string();
-            let idx = GameConfig::cat_idx(cat);
-            config.category_api_key[idx] = Some(value);
+            config.category_api_key.insert(cat, value);
             CommandResult::with_effect(
                 format!("{} API key updated.", cat_name),
                 CommandEffect::RebuildInference,
@@ -514,10 +489,13 @@ pub fn handle_command(
                     // explicit user action). API keys are intentionally left
                     // alone — see hint below.
                     for cat in InferenceCategory::ALL {
-                        let idx = cat.idx();
-                        config.category_provider[idx] = Some(provider_name.clone());
-                        config.category_base_url[idx] = Some(default_url.clone());
-                        config.category_model[idx] = presets[idx].map(str::to_string);
+                        config.category_provider.insert(cat, provider_name.clone());
+                        config.category_base_url.insert(cat, default_url.clone());
+                        if let Some(m) = presets[cat.idx()].map(str::to_string) {
+                            config.category_model.insert(cat, m);
+                        } else {
+                            config.category_model.remove(&cat);
+                        }
                     }
 
                     let hint = if provider.requires_api_key() && config.api_key.is_none() {
@@ -589,6 +567,8 @@ pub fn handle_command(
         Command::Log => CommandResult::effect_only(CommandEffect::ShowLog),
         Command::Map(arg) => handle_map_command(config, arg),
         Command::Unexplored(arg) => handle_unexplored_command(config, arg),
+        Command::Weather(arg) => handle_weather_command(world, arg),
+        Command::Session => handle_session_command(world, config),
         Command::Designer => CommandResult::effect_only(CommandEffect::OpenDesigner),
         Command::Debug(sub) => CommandResult::effect_only(CommandEffect::Debug(sub)),
         Command::Spinner(secs) => CommandResult::effect_only(CommandEffect::ShowSpinner(secs)),
@@ -642,6 +622,135 @@ pub fn handle_command(
 
 /// Handles the `/weather` command.
 ///
+/// With no argument, reports the current weather and how long it has been
+/// running. With an argument, forces a weather state — useful for testing
+/// weather-gated travel and demonstrations. Accepts the canonical names
+/// plus common shorthands (e.g. `rain`, `partly`).
+fn handle_weather_command(
+    world: &mut crate::world::WorldState,
+    arg: Option<String>,
+) -> CommandResult {
+    use parish_types::Weather;
+
+    let parse_weather = |s: &str| -> Option<Weather> {
+        match s.trim().to_lowercase().as_str() {
+            "clear" | "sun" | "sunny" => Some(Weather::Clear),
+            "partly" | "partly cloudy" | "partlycloudy" => Some(Weather::PartlyCloudy),
+            "overcast" | "cloudy" => Some(Weather::Overcast),
+            "light rain" | "lightrain" | "rain" | "drizzle" => Some(Weather::LightRain),
+            "heavy rain" | "heavyrain" | "pour" | "pouring" => Some(Weather::HeavyRain),
+            "fog" | "foggy" | "mist" => Some(Weather::Fog),
+            "storm" | "stormy" | "gale" => Some(Weather::Storm),
+            _ => None,
+        }
+    };
+
+    match arg {
+        None => {
+            let hours = world.weather_engine.duration_hours(world.clock.now());
+            CommandResult::text(format!(
+                "The weather is {} (running for {:.1} game-hour{}).\nUsage: /weather <clear|fog|rain|heavy rain|storm|overcast|partly cloudy>",
+                world.weather,
+                hours,
+                if (hours - 1.0).abs() < f64::EPSILON {
+                    ""
+                } else {
+                    "s"
+                }
+            ))
+        }
+        Some(name) => match parse_weather(&name) {
+            Some(w) => {
+                world.weather = w;
+                world.weather_engine.force(w, world.clock.now());
+                CommandResult::text(format!("The weather shifts to {}.", w))
+            }
+            None => CommandResult::text(format!(
+                "Unknown weather '{}'. Try: clear, partly cloudy, overcast, light rain, heavy rain, fog, storm.",
+                name
+            )),
+        },
+    }
+}
+
+/// Handles the `/session` command.
+///
+/// Three guards, in order:
+///
+/// 1. **Feature flag** — the `session` flag is default-on; explicitly
+///    disabling it (`/flag disable session`) silences the command with
+///    a short acknowledgement.
+/// 2. **Location** — only fires at a pub. The check walks the current
+///    location's `name` and `aliases` case-insensitively so a mod that
+///    renames Darcy's Pub (or adds another pub) keeps working. A miss
+///    prints a hint pointing the player at the right place.
+/// 3. **Time** — only fires at dusk, night, or midnight. At other hours
+///    the pub is effectively empty of musicians and the command prints
+///    a hint rather than a vignette.
+fn handle_session_command(world: &WorldState, config: &GameConfig) -> CommandResult {
+    use crate::world::session::{is_session_hour, session_seed, vignette_from_seed};
+
+    if config.flags.is_disabled("session") {
+        return CommandResult::text("The session feature is currently disabled.");
+    }
+
+    let loc = world.current_location();
+    let loc_name = loc.name.clone();
+    let is_pub = location_is_pub(world);
+    if !is_pub {
+        return CommandResult::text(format!(
+            "{loc_name} is quiet — no music here. Try Darcy's Pub after dusk."
+        ));
+    }
+
+    let tod = world.clock.time_of_day();
+    if !is_session_hour(tod) {
+        return CommandResult::text(
+            "The pub is quiet — too early for music. Come back after dusk.",
+        );
+    }
+
+    let date = world.clock.now().date_naive();
+    let seed = session_seed(date, loc.id.0);
+    let v = vignette_from_seed(seed, world.weather, world.clock.season());
+
+    // Compose the vignette into a single response. Paragraph-style so
+    // the frontend's prose renderer handles line wrapping; the pub name
+    // anchors the reader before the scene begins.
+    let mut out = String::new();
+    out.push_str(&format!("A session is in flow at {loc_name}.\n\n"));
+    out.push_str(&v.ambient);
+    out.push_str("\n\n");
+    out.push_str(&v.musician);
+    out.push(' ');
+    out.push_str(&v.tune);
+    if let Some(verse) = v.verse {
+        out.push_str("\n\n");
+        out.push_str(&verse);
+    }
+    CommandResult::text(out)
+}
+
+/// Returns `true` when the player's current location looks like a pub.
+///
+/// Checks the location's name and aliases case-insensitively for the
+/// substring "pub". Mods that rename Darcy's (or add a second pub) keep
+/// working as long as the word is retained somewhere in name or aliases.
+fn location_is_pub(world: &WorldState) -> bool {
+    let name_lc = world.current_location().name.to_lowercase();
+    if name_lc.contains("pub") {
+        return true;
+    }
+    world
+        .current_location_data()
+        .map(|data| {
+            data.aliases
+                .iter()
+                .any(|a| a.to_lowercase().contains("pub"))
+        })
+        .unwrap_or(false)
+}
+
 /// Handles the `/unexplored` command (reveal/hide all unexplored map locations).
 ///
 /// Gated by the `reveal-unexplored` feature flag (default-enabled per
@@ -1173,8 +1282,13 @@ mod tests {
             &mut config,
         );
         assert!(result.effects.contains(&CommandEffect::RebuildInference));
-        let idx = GameConfig::cat_idx(InferenceCategory::Dialogue);
-        assert_eq!(config.category_provider[idx].as_deref(), Some("openrouter"));
+        assert_eq!(
+            config
+                .category_provider
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
+            Some("openrouter")
+        );
     }
 
     #[test]
@@ -1186,8 +1300,13 @@ mod tests {
             &mut npc,
             &mut config,
         );
-        let idx = GameConfig::cat_idx(InferenceCategory::Simulation);
-        assert_eq!(config.category_model[idx].as_deref(), Some("mini-model"));
+        assert_eq!(
+            config
+                .category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
+            Some("mini-model")
+        );
         assert!(result.response.contains("mini-model"));
     }
 
@@ -1225,8 +1344,13 @@ mod tests {
             &mut config,
         );
         assert!(result.effects.contains(&CommandEffect::RebuildInference));
-        let idx = GameConfig::cat_idx(InferenceCategory::Dialogue);
-        assert_eq!(config.category_api_key[idx].as_deref(), Some("sk-cat-key"));
+        assert_eq!(
+            config
+                .category_api_key
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
+            Some("sk-cat-key")
+        );
     }
 
     // ── Provider presets ────────────────────────────────────────────────────
@@ -1245,31 +1369,41 @@ mod tests {
         assert_eq!(config.base_url, "https://api.anthropic.com");
         assert_eq!(config.model_name, "claude-opus-4-7");
 
-        let idx_d = InferenceCategory::Dialogue.idx();
-        let idx_s = InferenceCategory::Simulation.idx();
-        let idx_i = InferenceCategory::Intent.idx();
-        let idx_r = InferenceCategory::Reaction.idx();
         assert_eq!(
-            config.category_model[idx_d].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
             Some("claude-opus-4-7")
         );
         assert_eq!(
-            config.category_model[idx_s].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
             Some("claude-sonnet-4-6")
         );
         assert_eq!(
-            config.category_model[idx_i].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5")
         );
         assert_eq!(
-            config.category_model[idx_r].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Reaction)
+                .map(String::as_str),
             Some("claude-sonnet-4-6")
         );
         for cat in InferenceCategory::ALL {
-            let i = cat.idx();
-            assert_eq!(config.category_provider[i].as_deref(), Some("anthropic"));
             assert_eq!(
-                config.category_base_url[i].as_deref(),
+                config.category_provider.get(&cat).map(String::as_str),
+                Some("anthropic")
+            );
+            assert_eq!(
+                config.category_base_url.get(&cat).map(String::as_str),
                 Some("https://api.anthropic.com")
             );
         }
@@ -1278,8 +1412,10 @@ mod tests {
     #[test]
     fn apply_preset_overwrites_existing_category_models() {
         let (mut world, mut npc, mut config) = default_state();
-        let idx = InferenceCategory::Dialogue.idx();
-        config.category_model[idx] = Some("old-dialogue-model".to_string());
+        config.category_model.insert(
+            InferenceCategory::Dialogue,
+            "old-dialogue-model".to_string(),
+        );
 
         handle_command(
             Command::ApplyPreset("ollama".to_string()),
@@ -1287,15 +1423,22 @@ mod tests {
             &mut npc,
             &mut config,
         );
-        assert_eq!(config.category_model[idx].as_deref(), Some("qwen3:32b"));
+        assert_eq!(
+            config
+                .category_model
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
+            Some("qwen3:32b")
+        );
     }
 
     #[test]
     fn apply_preset_does_not_touch_api_keys() {
         let (mut world, mut npc, mut config) = default_state();
-        let idx = InferenceCategory::Dialogue.idx();
         config.api_key = Some("sk-existing".to_string());
-        config.category_api_key[idx] = Some("sk-cat".to_string());
+        config
+            .category_api_key
+            .insert(InferenceCategory::Dialogue, "sk-cat".to_string());
 
         handle_command(
             Command::ApplyPreset("anthropic".to_string()),
@@ -1304,7 +1447,13 @@ mod tests {
             &mut config,
         );
         assert_eq!(config.api_key.as_deref(), Some("sk-existing"));
-        assert_eq!(config.category_api_key[idx].as_deref(), Some("sk-cat"));
+        assert_eq!(
+            config
+                .category_api_key
+                .get(&InferenceCategory::Dialogue)
+                .map(String::as_str),
+            Some("sk-cat")
+        );
     }
 
     #[test]
@@ -1376,11 +1525,17 @@ mod tests {
         assert_eq!(config.model_name, "claude-opus-4-7");
         // All four per-category slots should be filled from the Anthropic preset.
         assert_eq!(
-            config.category_model[InferenceCategory::Intent.idx()].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5"),
         );
         assert_eq!(
-            config.category_model[InferenceCategory::Simulation.idx()].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Simulation)
+                .map(String::as_str),
             Some("claude-sonnet-4-6"),
         );
     }
@@ -1412,7 +1567,10 @@ mod tests {
             &mut config,
         );
         assert_eq!(
-            config.category_model[InferenceCategory::Intent.idx()].as_deref(),
+            config
+                .category_model
+                .get(&InferenceCategory::Intent)
+                .map(String::as_str),
             Some("claude-haiku-4-5"),
         );
     }
