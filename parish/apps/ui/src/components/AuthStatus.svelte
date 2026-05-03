@@ -26,13 +26,13 @@
 {#if status?.oauth_enabled}
 	<span class="sep">·</span>
 	{#if status.logged_in}
-		<span class="auth-indicator" title="Signed in with Google — your saves are synced">
-			✓ {status.display_name ?? 'Google'}
+		<span class="auth-indicator" title="Signed in with {status.provider ?? 'your account'} — your saves are synced">
+			✓ {status.display_name ?? status.provider ?? 'Signed in'}
 		</span>
 		<span class="sep">·</span>
 		<a href="/auth/logout" class="auth-link">Sign out</a>
 	{:else}
-		<a href="/auth/login/google" class="auth-link">Login with Google</a>
+		<a href="/auth/login/{status.provider ?? 'google'}" class="auth-link">Login with {status.provider ? status.provider.charAt(0).toUpperCase() + status.provider.slice(1) : 'Google'}</a>
 	{/if}
 {/if}
 
