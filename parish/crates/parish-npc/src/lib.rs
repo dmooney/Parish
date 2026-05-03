@@ -262,59 +262,48 @@ pub fn parse_npc_stream_response(full_text: &str) -> NpcStreamResponse {
     let trimmed = full_text.trim();
     let stripped = strip_json_fence(trimmed);
 
-    // Primary path: typed parse with exact field names.
-    if let Ok(json_resp) = serde_json::from_str::<NpcJsonResponse>(stripped) {
-        let dialogue = json_resp.dialogue.clone();
-        let metadata = Some(NpcMetadata {
-            action: json_resp.action,
-            mood: json_resp.mood,
-            internal_thought: json_resp.internal_thought,
-            language_hints: json_resp.language_hints,
-            mentioned_people: json_resp.mentioned_people,
-        });
-        return NpcStreamResponse { dialogue, metadata };
-    }
-
-    // Fallback: loose parse via serde_json::Value to tolerate LLM typos in
-    // field names (e.g. "dialogine" for "dialogue"). Takes the value of the
-    // first key that starts with "dialog", then re-parses the remaining fields.
+    // Loose parse via serde_json::Value so we can tolerate LLM typos in field
+    // names (e.g. "dialogine" for "dialogue"). Prefer the exact "dialogue"
+    // key, then any "dialog*" prefix.
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(stripped)
     {
         let dialogue = map
-            .iter()
-            .find(|(k, _)| k.starts_with("dialog"))
-            .and_then(|(_, v)| v.as_str())
+            .get("dialogue")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                map.iter()
+                    .find(|(k, _)| k.starts_with("dialog") && k.as_str() != "dialogue")
+                    .and_then(|(_, v)| v.as_str())
+            })
             .unwrap_or("")
             .to_string();
 
-        if !dialogue.is_empty() {
-            let metadata = Some(NpcMetadata {
-                action: map
-                    .get("action")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                mood: map
-                    .get("mood")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                internal_thought: map
-                    .get("internal_thought")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-                language_hints: map
-                    .get("irish_words")
-                    .or_else(|| map.get("language_hints"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or_default(),
-                mentioned_people: map
-                    .get("mentioned_people")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or_default(),
-            });
-            return NpcStreamResponse { dialogue, metadata };
-        }
+        let metadata = Some(NpcMetadata {
+            action: map
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            mood: map
+                .get("mood")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            internal_thought: map
+                .get("internal_thought")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            language_hints: map
+                .get("irish_words")
+                .or_else(|| map.get("language_hints"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            mentioned_people: map
+                .get("mentioned_people")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+        });
+        return NpcStreamResponse { dialogue, metadata };
     }
 
     NpcStreamResponse {
