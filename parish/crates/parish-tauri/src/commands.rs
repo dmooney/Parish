@@ -2886,7 +2886,7 @@ mod cmd_tests {
     // ── tick_inactivity does nothing when paused ────────────────────────────
 
     #[tokio::test]
-    async fn tick_inactivity_does_not_panic_when_world_paused() {
+    async fn world_clock_paused_state_has_expected_invariants() {
         let state = test_app_state();
 
         // Pause the world clock
@@ -2943,6 +2943,9 @@ mod cmd_tests {
         let saves =
             parish_core::persistence::picker::discover_saves(&state.saves_dir, &world.graph);
         // Missing dir should return empty vec, not panic
-        assert!(saves.is_empty() || !saves.is_empty()); // just assert no panic
+        assert!(
+            saves.is_empty(),
+            "discover_saves should return empty vec for missing directory"
+        );
     }
 }
