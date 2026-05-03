@@ -20,7 +20,7 @@
 	let downloadTotal = $state(0);
 	let hasError = $state(false);
 	let errorMsg = $state('');
-	let messagesEl: HTMLDivElement;
+	let messagesEl = $state<HTMLDivElement | undefined>(undefined);
 
 	let downloadPct = $derived(
 		downloadTotal > 0 ? Math.min(100, (downloadCompleted / downloadTotal) * 100) : null
@@ -36,7 +36,9 @@
 				currentPhrase = p.message;
 				messages = [...messages.slice(-49), p.message];
 				tick().then(() => {
-					if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+					if (messagesEl) {
+						messagesEl.scrollTop = messagesEl.scrollHeight;
+					}
 				});
 			})
 		);
