@@ -78,8 +78,7 @@ pub fn tier_for_distance(distance: Option<u32>, config: &CognitiveTierConfig) ->
 /// Maps a [`CogTier`] to a numeric rank for comparison.
 ///
 /// Lower rank means closer to the player and therefore higher cognitive
-/// fidelity. Used to detect promotions vs. demotions in
-/// [`compute_tier_changes`].
+/// fidelity. Used to detect promotions vs. demotions during tier assignment.
 pub fn tier_rank(tier: CogTier) -> u8 {
     match tier {
         CogTier::Tier1 => 1,
@@ -111,42 +110,6 @@ pub fn npc_distance(npc: &Npc, distances: &HashMap<LocationId, u32>) -> Option<u
     }
 }
 
-/// Walks all NPCs and computes their new tier given the BFS distances from
-/// the player.
-///
-/// Returns one [`TierChange`] per NPC whose tier differs from
-/// `current_assignments`. NPCs whose tier is unchanged are omitted. NPCs that
-/// have never been assigned default to [`CogTier::Tier4`] (the same fallback
-/// the legacy implementation used).
-///
-/// This function is pure: it never mutates the manager. The caller is
-/// responsible for applying the side effects (inflate / deflate /
-/// `tier_assignments` updates / event publication).
-pub fn compute_tier_changes(
-    npcs: &HashMap<NpcId, Npc>,
-    distances: &HashMap<LocationId, u32>,
-    current_assignments: &HashMap<NpcId, CogTier>,
-    config: &CognitiveTierConfig,
-) -> Vec<TierChange> {
-    let mut changes = Vec::new();
-    for npc in npcs.values() {
-        let distance = npc_distance(npc, distances);
-        let new_tier = tier_for_distance(distance, config);
-        let old_tier = current_assignments
-            .get(&npc.id)
-            .copied()
-            .unwrap_or(CogTier::Tier4);
-        if new_tier != old_tier {
-            changes.push(TierChange {
-                npc_id: npc.id,
-                old_tier,
-                new_tier,
-            });
-        }
-    }
-    changes
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -155,6 +118,40 @@ mod tests {
     use crate::Npc;
     use crate::memory::{LongTermMemory, ShortTermMemory};
     use crate::types::{Intelligence, NpcState};
+
+    /// Walks all NPCs and computes their new tier given the BFS distances from
+    /// the player.
+    ///
+    /// Returns one [`TierChange`] per NPC whose tier differs from
+    /// `current_assignments`. NPCs whose tier is unchanged are omitted. NPCs
+    /// that have never been assigned default to [`CogTier::Tier4`].
+    ///
+    /// Production code uses a single-pass inline loop in `assign_tiers`; this
+    /// helper exists only to keep the unit tests self-contained.
+    fn compute_tier_changes(
+        npcs: &HashMap<NpcId, Npc>,
+        distances: &HashMap<LocationId, u32>,
+        current_assignments: &HashMap<NpcId, CogTier>,
+        config: &CognitiveTierConfig,
+    ) -> Vec<TierChange> {
+        let mut changes = Vec::new();
+        for npc in npcs.values() {
+            let distance = npc_distance(npc, distances);
+            let new_tier = tier_for_distance(distance, config);
+            let old_tier = current_assignments
+                .get(&npc.id)
+                .copied()
+                .unwrap_or(CogTier::Tier4);
+            if new_tier != old_tier {
+                changes.push(TierChange {
+                    npc_id: npc.id,
+                    old_tier,
+                    new_tier,
+                });
+            }
+        }
+        changes
+    }
 
     fn make_npc(id: u32, location: u32) -> Npc {
         Npc {

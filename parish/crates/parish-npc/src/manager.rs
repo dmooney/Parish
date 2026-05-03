@@ -429,48 +429,49 @@ impl NpcManager {
             let distances = tier_assigner::bfs_distances(player_location, graph);
             self.bfs_distances_cache = Some((player_location, distances));
         }
-        // Compute final assignments and the diff list while we hold an
-        // immutable borrow of `self.bfs_distances_cache`. We then drop that
-        // borrow before invoking `apply_tier_changes`, which mutates `self`.
+        // Single pass: build both the diff list and the complete assignment
+        // map while holding an immutable borrow of `self.bfs_distances_cache`.
+        // We then drop that borrow before invoking `apply_tier_changes`, which
+        // mutates `self`.
         let (changes, final_assignments) = {
-            // SAFETY: we just ensured the cache is populated above.
             let distances = &self
                 .bfs_distances_cache
                 .as_ref()
                 .expect("cache populated above")
                 .1;
 
-            // Pure computation: which NPCs change tier?
-            let changes = tier_assigner::compute_tier_changes(
-                &self.npcs,
-                distances,
-                &self.tier_assignments,
-                &config,
-            );
+            let mut changes = Vec::new();
+            let mut assignments = Vec::with_capacity(self.npcs.len());
 
-            // Even NPCs whose tier didn't change must be present in
-            // `tier_assignments` so callers can call `tier_of`.
-            // compute_tier_changes only emits diffs, so we walk the whole map
-            // once and capture the final tier for every NPC.
-            let final_assignments: Vec<(NpcId, CogTier)> = self
-                .npcs
-                .values()
-                .map(|npc| {
-                    let distance = tier_assigner::npc_distance(npc, distances);
-                    (npc.id, tier_assigner::tier_for_distance(distance, &config))
-                })
-                .collect();
+            for npc in self.npcs.values() {
+                let distance = tier_assigner::npc_distance(npc, distances);
+                let new_tier = tier_assigner::tier_for_distance(distance, &config);
+                assignments.push((npc.id, new_tier));
 
-            (changes, final_assignments)
+                let old_tier = self
+                    .tier_assignments
+                    .get(&npc.id)
+                    .copied()
+                    .unwrap_or(CogTier::Tier4);
+                if new_tier != old_tier {
+                    changes.push(tier_assigner::TierChange {
+                        npc_id: npc.id,
+                        old_tier,
+                        new_tier,
+                    });
+                }
+            }
+            (changes, assignments)
         };
 
-        // Apply side effects: inflate/deflate, publish events.
-        let transitions = self.apply_tier_changes(&changes, world, recent_events, game_time);
-
-        // Persist the final tier for every NPC.
+        // Persist the final tier for every NPC BEFORE applying side effects so
+        // that event listeners calling `tier_of` see up-to-date data.
         for (id, tier) in final_assignments {
             self.tier_assignments.insert(id, tier);
         }
+
+        // Apply side effects: inflate/deflate, publish events.
+        let transitions = self.apply_tier_changes(&changes, world, recent_events, game_time);
 
         tracing::debug!(
             player_location = player_location.0,
@@ -491,9 +492,8 @@ impl NpcManager {
     /// - publish a `NpcArrived` event when entering Tier 1,
     /// - assemble the corresponding [`TierTransition`].
     ///
-    /// Note: the per-NPC `tier_assignments` map is updated by the caller after
-    /// this returns so the final map covers *every* NPC, not just the ones
-    /// that changed.
+    /// Note: the per-NPC `tier_assignments` map is updated by the caller before
+    /// this is invoked so that event listeners calling `tier_of` see current data.
     fn apply_tier_changes(
         &mut self,
         changes: &[tier_assigner::TierChange],

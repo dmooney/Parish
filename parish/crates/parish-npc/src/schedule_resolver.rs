@@ -128,7 +128,7 @@ pub fn needs_shelter(weather: Weather, npc: &Npc, dest_is_outdoor: bool) -> bool
     if !dominated_by_rain {
         return false;
     }
-    let is_farmer = npc.occupation.to_lowercase() == "farmer";
+    let is_farmer = npc.occupation.eq_ignore_ascii_case("farmer");
     if is_farmer {
         // Farmers tolerate light rain; they only seek shelter in heavier weather.
         !matches!(weather, Weather::LightRain) && dest_is_outdoor
