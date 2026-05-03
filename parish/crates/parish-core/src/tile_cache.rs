@@ -100,9 +100,22 @@ impl TileCache {
                 ParishError::Config(format!("tile source not registered: {source_id:?}"))
             })?;
 
+        // Path::file_name() is a CodeQL-recognised path-traversal sanitiser:
+        // it returns only the last path component, stripping any `..` segments
+        // or leading `/`.  For config-loaded slug keys this is a no-op, but
+        // it gives CodeQL a concrete sanitisation step to track statically.
+        let safe_dir = std::path::Path::new(config_source_id.as_str())
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| {
+                ParishError::Config(format!(
+                    "tile source id is not a valid path component: {config_source_id:?}"
+                ))
+            })?;
+
         let tile_path = self
             .cache_dir
-            .join(config_source_id.as_str())
+            .join(safe_dir)
             .join(z.to_string())
             .join(x.to_string())
             .join(format!("{y}.png"));
