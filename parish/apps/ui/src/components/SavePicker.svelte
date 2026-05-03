@@ -13,8 +13,6 @@
 	let forkError = $state('');
 	let showLedgers = $state(false);
 
-	const activeFile = $derived(files.find(f => f.filename === saveState?.filename) ?? files[0] ?? null);
-
 	// ── Handlers ────────────────────────────────────────────────────
 
 	async function refreshSaves() {
@@ -215,6 +213,10 @@
 		}
 	}
 
+	const files = $derived($saveFiles);
+	const saveState = $derived($currentSaveState);
+	const activeFile = $derived(files.find(f => f.filename === saveState?.filename) ?? files[0] ?? null);
+
 	let prevVisible = $state(false);
 	$effect(() => {
 		const visible = $savePickerVisible;
@@ -223,9 +225,6 @@
 		}
 		prevVisible = visible;
 	});
-
-	const files = $derived($saveFiles);
-	const saveState = $derived($currentSaveState);
 
 	// Phantom branch ID used to identify the new-branch node in the layout
 	const PHANTOM_ID = -999;

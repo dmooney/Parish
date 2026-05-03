@@ -131,7 +131,7 @@
 						type="text"
 						value={npc.brief_description ?? ''}
 						placeholder="(auto-generated from occupation)"
-						on:change={(e) => {
+						onchange={(e) => {
 							const val = e.currentTarget.value.trim();
 							handleFieldChange('brief_description', val || null);
 						}}
@@ -170,7 +170,7 @@
 						id="npc-workplace"
 						class="field-select"
 						value={npc.workplace ?? -1}
-						on:change={(e) => {
+						onchange={(e) => {
 							const v = parseInt(e.currentTarget.value);
 							handleFieldChange('workplace', v === -1 ? null : v);
 						}}
@@ -197,7 +197,7 @@
 								min="1"
 								max="5"
 								value={npc.intelligence?.[dim.key] ?? 3}
-								on:change={(e) => {
+								onchange={(e) => {
 									if (!npc?.intelligence) return;
 									const updated = {
 										...npc.intelligence,
