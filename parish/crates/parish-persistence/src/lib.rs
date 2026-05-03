@@ -32,7 +32,6 @@ impl<T> IntoParishDbError<T> for Result<T, rusqlite::Error> {
     }
 }
 
-
 pub use database::{AsyncDatabase, BranchInfo, Database, SnapshotInfo};
 pub use journal::{WorldEvent, replay_journal};
 pub use lock::SaveFileLock;

@@ -185,7 +185,7 @@ impl AnthropicClient {
         let response = req
             .send()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -217,7 +217,7 @@ impl AnthropicClient {
         let parsed: MessagesResponse = resp
             .json()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
         Ok(extract_text(&parsed))
     }
 
@@ -487,7 +487,7 @@ impl AnthropicClient {
         let response = req
             .send()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -506,7 +506,7 @@ impl AnthropicClient {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?
+            .map_err(|e| ParishError::Network(e.to_string()))?
         {
             line_buf.push_str(&decoder.push(&chunk));
 

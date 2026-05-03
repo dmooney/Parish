@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::IntoParishDbError as _;
 use crate::journal::WorldEvent;
 use crate::snapshot::GameSnapshot;
-use crate::IntoParishDbError as _;
 use parish_types::ParishError;
 
 /// Acquires a lock on `mutex`, recovering transparently from poisoning.

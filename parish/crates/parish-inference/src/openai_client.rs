@@ -244,7 +244,7 @@ impl OpenAiClient {
         let completion: ChatCompletionResponse = resp
             .json()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
         Ok(extract_content(&completion))
     }
 
@@ -274,9 +274,9 @@ impl OpenAiClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?
+            .map_err(|e| ParishError::Network(e.to_string()))?
             .error_for_status()
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
 
         let mut accumulated = String::new();
         let mut line_buf = String::new();
@@ -286,7 +286,7 @@ impl OpenAiClient {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?
+            .map_err(|e| ParishError::Network(e.to_string()))?
         {
             // Decode incrementally so multi-byte characters split across
             // HTTP chunk boundaries aren't mangled into U+FFFD (#223).
@@ -335,9 +335,9 @@ impl OpenAiClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?
+            .map_err(|e| ParishError::Network(e.to_string()))?
             .error_for_status()
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
 
         let mut accumulated = String::new();
         let mut line_buf = String::new();
@@ -347,7 +347,7 @@ impl OpenAiClient {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?
+            .map_err(|e| ParishError::Network(e.to_string()))?
         {
             line_buf.push_str(&decoder.push(&chunk));
 
@@ -389,7 +389,7 @@ impl OpenAiClient {
         let completion: ChatCompletionResponse = resp
             .json()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?;
+            .map_err(|e| ParishError::Network(e.to_string()))?;
         let content = extract_content(&completion);
         let parsed: T = serde_json::from_str(&content)?;
         Ok(parsed)
@@ -448,9 +448,9 @@ impl OpenAiClient {
 
         req.send()
             .await
-            .map_err(|e| ParishError::Inference(e.to_string()))?
+            .map_err(|e| ParishError::Network(e.to_string()))?
             .error_for_status()
-            .map_err(|e| ParishError::Inference(e.to_string()))
+            .map_err(|e| ParishError::Network(e.to_string()))
     }
 
     /// Applies authorization and provider-specific headers to a request.
