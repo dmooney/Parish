@@ -419,16 +419,14 @@ fn apply_env_and_cli_layers(
 }
 
 /// Reads the TOML config file (or returns a default if missing/unspecified).
+///
+/// When `config_path` is `None`, returns the default config without probing
+/// the current working directory. The path must be resolved at startup from
+/// an explicit CLI flag or env var — never from `current_dir()` (Rule 9).
 fn load_toml(config_path: Option<&Path>) -> Result<TomlConfig, ParishError> {
-    if let Some(path) = config_path {
-        read_toml_config(path)
-    } else {
-        let cwd_path = Path::new("parish.toml");
-        if cwd_path.exists() {
-            read_toml_config(cwd_path)
-        } else {
-            Ok(TomlConfig::default())
-        }
+    match config_path {
+        Some(path) => read_toml_config(path),
+        None => Ok(TomlConfig::default()),
     }
 }
 
@@ -559,13 +557,13 @@ pub fn resolve_cloud_config(
     // If no explicit cloud config was provided, return None (backward compatible).
     // Provider key env vars are intentionally excluded from this check — having
     // OPENROUTER_API_KEY set globally should not auto-activate cloud mode.
+    // `raw` was produced by `apply_env_and_cli_layers` which already incorporates
+    // CLI overrides, so checking `cli.*` again would be redundant and could miss
+    // env-var-only activations.
     if raw.provider_str.is_none()
         && raw.base_url.is_none()
         && raw.api_key.is_none()
         && raw.model.is_none()
-        && cli.provider.is_none()
-        && cli.base_url.is_none()
-        && cli.model.is_none()
     {
         return Ok(None);
     }
