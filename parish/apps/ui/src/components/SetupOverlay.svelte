@@ -50,11 +50,13 @@
 			})
 		);
 
+		let fadeTimer: ReturnType<typeof setTimeout> | undefined;
+		cleanupFns.push(() => clearTimeout(fadeTimer));
 		cleanupFns.push(
 			await onSetupDone((p: SetupDonePayload) => {
 				if (p.success) {
 					fading = true;
-					setTimeout(() => {
+					fadeTimer = setTimeout(() => {
 						visible = false;
 					}, 650);
 				} else {
