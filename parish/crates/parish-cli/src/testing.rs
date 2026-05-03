@@ -443,7 +443,11 @@ impl GameTestHarness {
         // Propagate gossip between co-located NPCs
         if !self.app.world.gossip_network.is_empty() {
             let groups = self.app.npc_manager.tier2_groups();
-            for npc_ids in groups.values() {
+            // Sort by LocationId to ensure deterministic RNG sequencing across ticks.
+            let mut sorted_keys: Vec<_> = groups.keys().copied().collect();
+            sorted_keys.sort();
+            for loc_id in sorted_keys {
+                let npc_ids = &groups[&loc_id];
                 if npc_ids.len() >= 2 {
                     crate::npc::ticks::propagate_gossip_at_location(
                         npc_ids,
@@ -468,6 +472,8 @@ impl GameTestHarness {
                     .values_mut()
                     .filter(|n| tier4_ids.contains(&n.id))
                     .collect();
+                // Sort by NpcId for deterministic RNG sequencing across ticks.
+                tier4_refs.sort_by_key(|n| n.id);
                 let season = self.app.world.clock.season();
                 let game_date = now.date_naive();
                 crate::npc::tier4::tick_tier4(&mut tier4_refs, season, game_date, &mut self.rng)

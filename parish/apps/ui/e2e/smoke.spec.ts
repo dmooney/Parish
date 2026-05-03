@@ -89,8 +89,8 @@ test.describe('Parish Web UI', () => {
 		await page.goto('/');
 		await expect(page.locator('[data-testid="status-bar"]')).toBeVisible({ timeout: 10_000 });
 
-		// Wait for theme to apply
-		await page.waitForLoadState('networkidle');
+		// Wait for the app shell to be fully rendered before taking the screenshot.
+		await expect(page.locator('.app-shell')).toBeVisible();
 		await page.screenshot({ path: 'e2e-results/initial-load.png', fullPage: true });
 
 		// After a command
