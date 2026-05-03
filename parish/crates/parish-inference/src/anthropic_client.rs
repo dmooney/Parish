@@ -214,7 +214,10 @@ impl AnthropicClient {
         self.acquire_slot().await;
         let body = self.build_request(model, prompt, system, false, max_tokens, temperature);
         let resp = self.send_request(&body).await?;
-        let parsed: MessagesResponse = resp.json().await?;
+        let parsed: MessagesResponse = resp
+            .json()
+            .await
+            .map_err(|e| ParishError::Inference(e.to_string()))?;
         Ok(extract_text(&parsed))
     }
 
@@ -500,7 +503,11 @@ impl AnthropicClient {
         let mut decoder = crate::utf8_stream::Utf8StreamDecoder::new();
 
         let mut response = response;
-        while let Some(chunk) = response.chunk().await? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| ParishError::Inference(e.to_string()))?
+        {
             line_buf.push_str(&decoder.push(&chunk));
 
             while let Some(newline_pos) = line_buf.find('\n') {
