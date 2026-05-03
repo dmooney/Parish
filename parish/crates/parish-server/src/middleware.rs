@@ -84,7 +84,7 @@ pub async fn session_middleware_tower(
     // a fresh one and persist it.  `tower-sessions` will only write a
     // `Set-Cookie` header on the way out if the session was modified,
     // which keeps idempotent reads cheap.
-    let cookie_id: Option<String> = match session.get::<String>(TOWER_SESSION_ID_KEY).await {
+    let mut cookie_id: Option<String> = match session.get::<String>(TOWER_SESSION_ID_KEY).await {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(
@@ -94,6 +94,30 @@ pub async fn session_middleware_tower(
             None
         }
     };
+
+    // Session persistence recovery: if the tower-session is fresh (no stored
+    // parish UUID yet), try recovering from the raw `parish_sid` cookie.
+    // This handles returning visitors whose cookie was issued before the
+    // tower-sessions migration — their UUID is in the persistent DB but not
+    // in the new MemoryStore, so tower-sessions would otherwise assign them
+    // a brand-new session and clobber their save data.
+    if cookie_id.is_none() {
+        let raw_headers = req.headers();
+        if let Some(raw_id) = extract_cookie_value(
+            raw_headers
+                .get(header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+            SESSION_COOKIE,
+        ) && global.sessions.exists_in_db(&raw_id)
+        {
+            tracing::debug!(
+                session_id = %raw_id,
+                "tower-sessions: recovered pre-migration parish_sid from cookie"
+            );
+            cookie_id = Some(raw_id);
+        }
+    }
 
     let (session_id, entry, is_new) = get_or_create_session(&global, cookie_id.as_deref()).await;
 

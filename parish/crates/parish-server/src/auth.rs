@@ -408,6 +408,12 @@ pub async fn callback_google_tower(
             sid
         };
 
+    // Fix: cycle the session ID to prevent session fixation attacks (#364).
+    // An attacker who obtained the pre-auth session ID cannot use it after
+    // authentication because cycle_id() rotates the ID in the backing store.
+    if let Err(e) = session.cycle_id().await {
+        tracing::warn!(error = %e, "tower-sessions: failed to cycle session ID after OAuth");
+    }
     if let Err(e) = session
         .insert(TOWER_SESSION_ID_KEY, target_session_id.clone())
         .await
@@ -456,13 +462,28 @@ pub async fn logout_tower(State(global): State<Arc<GlobalState>>, session: Sessi
 /// either [`crate::middleware::session_middleware`] (legacy) or
 /// [`crate::middleware::session_middleware_tower`] (#364).  Falls back to
 /// reading the raw `parish_sid` cookie when the extension is absent (e.g.
-/// the response is generated outside the middleware stack in tests).
+/// routes not covered by the middleware stack in tests or future routes).
 pub async fn get_auth_status(
     State(global): State<Arc<GlobalState>>,
-    extensions: axum::extract::Extension<crate::middleware::SessionId>,
+    headers: HeaderMap,
+    extensions: Option<axum::extract::Extension<crate::middleware::SessionId>>,
 ) -> Json<AuthStatus> {
     let oauth_enabled = global.oauth_config.is_some();
-    let session_id = extensions.0.0;
+    let session_id = if let Some(ext) = extensions {
+        ext.0.0
+    } else {
+        match cookie_value(&headers, SESSION_COOKIE) {
+            Some(id) => id,
+            None => {
+                return Json(AuthStatus {
+                    oauth_enabled,
+                    logged_in: false,
+                    provider: None,
+                    display_name: None,
+                });
+            }
+        }
+    };
 
     // Check whether this session has a linked OAuth account.
     let linked = find_oauth_account_for_session(&global, &session_id);
