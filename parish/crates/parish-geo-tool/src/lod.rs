@@ -37,7 +37,6 @@ pub fn filter_by_detail(features: Vec<GeoFeature>, level: DetailLevel) -> Vec<Ge
 /// Within `inner_radius_m`, keeps all features. Between `inner_radius_m`
 /// and `outer_radius_m`, keeps only notable features. Beyond `outer_radius_m`,
 /// keeps only sparse-worthy features.
-#[allow(dead_code)] // Public API for distance-based LOD (future use)
 pub fn filter_by_distance(
     features: Vec<GeoFeature>,
     center_lat: f64,

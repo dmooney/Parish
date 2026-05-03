@@ -148,7 +148,6 @@ pub fn determine_id_offset(merge_path: Option<&Path>, explicit_offset: Option<u3
 ///
 /// Adds bidirectional connections between curated locations and the closest
 /// generated locations within `max_distance_m`.
-#[allow(dead_code)] // Public API for curated-to-generated linking (future use)
 pub fn connect_curated_to_generated(locations: &mut [TrackedLocation], max_distance_m: f64) {
     // Collect indices and coordinates for generated locations with valid coords
     let gen_indices: Vec<(usize, f64, f64)> = locations

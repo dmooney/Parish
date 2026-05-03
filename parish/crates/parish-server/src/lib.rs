@@ -265,7 +265,20 @@ async fn cf_access_guard(
 
 /// Starts the Parish web server on the given port.
 pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> anyhow::Result<()> {
+    // Load .env in debug builds only. In release, a stale .env in the
+    // deployment directory could silently override critical security variables
+    // (CF_ACCESS_AUD, PARISH_WS_SIGNING_KEY, etc.), so we skip it and emit a
+    // warning if one is present (#786).
+    #[cfg(debug_assertions)]
     dotenvy::dotenv().ok();
+    #[cfg(not(debug_assertions))]
+    if std::path::Path::new(".env").exists() {
+        tracing::warn!(
+            ".env file found in working directory but will NOT be loaded in \
+             release builds — set environment variables explicitly to avoid \
+             accidentally overriding security-critical config (#786)"
+        );
+    }
 
     // ── World path ────────────────────────────────────────────────────────────
     let world_path = {
