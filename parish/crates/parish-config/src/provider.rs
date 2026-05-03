@@ -485,7 +485,9 @@ pub fn resolve_config(
         api_key = Some(val);
     }
 
-    let base_url = raw.base_url.unwrap_or_else(|| provider.default_base_url().to_string());
+    let base_url = raw
+        .base_url
+        .unwrap_or_else(|| provider.default_base_url().to_string());
     let api_key = api_key.filter(|s| !s.is_empty());
     let model = raw.model.filter(|s| !s.is_empty());
 
@@ -580,7 +582,9 @@ pub fn resolve_cloud_config(
         api_key = Some(val);
     }
 
-    let base_url = raw.base_url.unwrap_or_else(|| provider.default_base_url().to_string());
+    let base_url = raw
+        .base_url
+        .unwrap_or_else(|| provider.default_base_url().to_string());
     let model = raw.model.filter(|s| !s.is_empty());
 
     let model = model.ok_or_else(|| {
