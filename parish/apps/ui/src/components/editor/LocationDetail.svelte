@@ -358,22 +358,23 @@
 		};
 	});
 
-	// Manage the MapLibre instance lifecycle in a single effect so that
-	// create/destroy logic is centralised and ordering is unambiguous.
+	// Lifecycle management: ensure map exists when loc is selected,
+	// and destroy it when deselected or the container is unmounted.
 	// Background: the `{#if loc}` wrapper unmounts the map-frame div, but
 	// Svelte's `bind:this` does not always reset `mapContainer` to
 	// `undefined` in time — so we couple cleanup to `loc` directly (#409).
 	// Without explicit teardown each deselect leaks a WebGL context
 	// (MapLibre allocates one per Map instance) and after a few navigations
 	// the browser aborts further WebGL contexts.
+	// Also update map data when locations or selection changes.
 	$effect(() => {
 		if (loc && mapContainer) {
 			if (!map) void ensureMap();
 		} else if (map) {
 			destroyMap();
 		}
+		setMapData(locations, selectedId);
 	});
-	$effect(() => { setMapData(locations, selectedId); });
 </script>
 
 <div class="loc-detail">
