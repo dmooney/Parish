@@ -79,24 +79,6 @@ pub fn tick_schedules(
     let season = clock.season();
     let day_type = clock.day_type();
     let mut events = Vec::new();
-
-    // Pre-collect cuaird targets using an immutable reborrow so the mutable
-    // borrow of `npcs` is not active during the iteration.
-    let cuaird_targets: HashMap<NpcId, Vec<LocationId>> = {
-        let r: &HashMap<NpcId, Npc> = npcs;
-        r.iter()
-            .map(|(id, npc)| {
-                let friends: Vec<LocationId> = npc
-                    .relationships
-                    .iter()
-                    .filter(|(_, rel)| rel.strength > 0.3)
-                    .filter_map(|(friend_id, _)| r.get(friend_id).and_then(|f| f.home))
-                    .collect();
-                (*id, friends)
-            })
-            .collect()
-    };
-
     let npc_ids: Vec<NpcId> = npcs.keys().copied().collect();
 
     for id in npc_ids {
@@ -110,14 +92,22 @@ pub fn tick_schedules(
                     continue;
                 };
 
-                // Cuaird override: rotate visiting location by day-of-year.
+                // Cuaird override: only compute friend locations when this NPC actually has a
+                // cuaird slot active — avoids an O(relationships) scan for every NPC every tick.
                 if let Some(entry) = npc.schedule_entry(current_hour, season, day_type)
                     && entry.cuaird
-                    && let Some(friends) = cuaird_targets.get(&id)
-                    && !friends.is_empty()
                 {
-                    let day_of_year = now.ordinal() as usize;
-                    desired = friends[day_of_year % friends.len()];
+                    let r: &HashMap<NpcId, Npc> = npcs;
+                    let friends: Vec<LocationId> = npc
+                        .relationships
+                        .iter()
+                        .filter(|(_, rel)| rel.strength > 0.3)
+                        .filter_map(|(friend_id, _)| r.get(friend_id).and_then(|f| f.home))
+                        .collect();
+                    if !friends.is_empty() {
+                        let day_of_year = now.ordinal() as usize;
+                        desired = friends[day_of_year % friends.len()];
+                    }
                 }
 
                 // Weather shelter override: seek indoor locations in bad weather.
@@ -126,7 +116,8 @@ pub fn tick_schedules(
                     Weather::LightRain | Weather::HeavyRain | Weather::Storm
                 );
                 if rainy {
-                    let is_farmer = npc.occupation.to_lowercase() == "farmer";
+                    // Consistent with tier4.rs which uses contains("farm") for occupation checks.
+                    let is_farmer = npc.occupation.to_ascii_lowercase().contains("farm");
                     let dest_outdoor = graph.get(desired).map(|d| !d.indoor).unwrap_or(false);
                     let needs_shelter = if is_farmer {
                         // Farmers tolerate light rain.

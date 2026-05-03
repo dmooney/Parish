@@ -150,9 +150,9 @@ pub fn epitaph_line(event: &BansheeEvent) -> Option<String> {
 
 /// Ring-buffer capacity for recent Tier 4 life-event descriptions.
 ///
-/// Shared with `tier4::apply_events`. Defined here because banshee deaths
-/// also push to the same ring buffer.
-pub(crate) const RING_BUFFER_CAPACITY: usize = 5;
+/// Defined in `tier4` (the canonical owner of life events) and re-exported
+/// here for use in this module.
+pub(crate) use crate::tier4::RING_BUFFER_CAPACITY;
 
 /// Runs one banshee tick: heralds imminent deaths and finalises doomed NPCs.
 ///
@@ -185,10 +185,17 @@ pub fn tick(
         .collect();
 
     for id in doomed_ids {
-        let (doom, already_heralded, name, home) = {
+        // Extract all fields in one lookup so we avoid a second get() for the herald path.
+        let (doom, already_heralded, name, home, current_location) = {
             let Some(npc) = npcs.get(&id) else { continue };
             let Some(d) = npc.doom else { continue };
-            (d, npc.banshee_heralded, npc.name.clone(), npc.home)
+            (
+                d,
+                npc.banshee_heralded,
+                npc.name.clone(),
+                npc.home,
+                npc.location,
+            )
         };
 
         if now >= doom {
@@ -218,14 +225,15 @@ pub fn tick(
             continue;
         }
 
-        let home_loc = home.or_else(|| npcs.get(&id).map(|n| n.location));
-        let home_name = home_loc.and_then(|l| graph.get(l).map(|d| d.name.clone()));
-        let near_player = home_loc == Some(player_loc);
+        // Wail rises from the NPC's home if set, otherwise from their current location.
+        let wail_loc = home.unwrap_or(current_location);
+        let home_name = graph.get(wail_loc).map(|d| d.name.clone());
+        let near_player = wail_loc == player_loc;
 
         let event = BansheeEvent::Heard {
             target: id,
             target_name: name,
-            home: home_loc,
+            home,
             home_name,
             near_player,
         };

@@ -96,43 +96,43 @@ pub fn assign_tiers(
         tier_assignments.insert(npc.id, new_tier);
     }
 
-    // Second pass: handle transitions.
+    // Second pass: handle transitions — single get_mut per NPC to avoid redundant lookups.
     let mut transitions = Vec::new();
     for (npc_id, old_tier, new_tier) in &changes {
         let promoted = tier_rank(*new_tier) < tier_rank(*old_tier);
         let demoted = tier_rank(*new_tier) > tier_rank(*old_tier);
-        let npc_name = npcs.get(npc_id).map(|n| n.name.clone()).unwrap_or_default();
 
-        if promoted && let Some(npc) = npcs.get_mut(npc_id) {
-            inflate_npc_context(npc, recent_events, game_time);
-            tracing::debug!(
-                npc_id = npc_id.0,
-                ?old_tier,
-                ?new_tier,
-                "NPC promoted (inflated)"
-            );
-        }
-
-        if demoted && let Some(npc) = npcs.get(npc_id) {
-            let summary = deflate_npc_state(npc, recent_events);
-            if let Some(npc_mut) = npcs.get_mut(npc_id) {
-                npc_mut.deflated_summary = Some(summary);
+        let (npc_name, tier1_location) = if let Some(npc) = npcs.get_mut(npc_id) {
+            if promoted {
+                inflate_npc_context(npc, recent_events, game_time);
+                tracing::debug!(
+                    npc_id = npc_id.0,
+                    ?old_tier,
+                    ?new_tier,
+                    "NPC promoted (inflated)"
+                );
             }
-            tracing::debug!(
-                npc_id = npc_id.0,
-                ?old_tier,
-                ?new_tier,
-                "NPC demoted (deflated)"
-            );
-        }
+            if demoted {
+                let summary = deflate_npc_state(npc, recent_events);
+                npc.deflated_summary = Some(summary);
+                tracing::debug!(
+                    npc_id = npc_id.0,
+                    ?old_tier,
+                    ?new_tier,
+                    "NPC demoted (deflated)"
+                );
+            }
+            let tier1_loc = (*new_tier == CogTier::Tier1 && *old_tier != CogTier::Tier1)
+                .then_some(npc.location);
+            (npc.name.clone(), tier1_loc)
+        } else {
+            (String::new(), None)
+        };
 
-        if *new_tier == CogTier::Tier1
-            && *old_tier != CogTier::Tier1
-            && let Some(npc) = npcs.get(npc_id)
-        {
+        if let Some(location) = tier1_location {
             world.event_bus.publish(GameEvent::NpcArrived {
                 npc_id: *npc_id,
-                location: npc.location,
+                location,
                 timestamp: game_time,
             });
         }
