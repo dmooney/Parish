@@ -266,11 +266,7 @@
 				type: 'geojson',
 				data: { type: 'FeatureCollection', features: [] }
 			});
-			const rootStyles = getComputedStyle(document.documentElement);
-			const mapEdge = rootStyles.getPropertyValue('--color-map-edge').trim() || '#8f7e56';
-			const mapSelected = rootStyles.getPropertyValue('--color-map-selected').trim() || '#f4cf75';
-			const mapRelative = rootStyles.getPropertyValue('--color-map-relative').trim() || '#7dd7ff';
-			const mapStroke = rootStyles.getPropertyValue('--color-map-stroke').trim() || '#1a140a';
+			const { mapEdge, mapSelected, mapRelative, mapStroke } = readThemeColors();
 			nextMap.addLayer({
 				id: 'editor-edges',
 				type: 'line',
