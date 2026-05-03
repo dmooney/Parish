@@ -525,10 +525,12 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         // ── Tile proxy (issue #360) ──────────────────────────────────────
         // Requires a valid session (session_middleware already in the stack).
         // `source_id` is validated against the registered tile sources.
-        .route(
-            "/tiles/{source_id}/{z}/{x}/{y}.png",
-            get(tile_routes::get_tile),
-        )
+        //
+        // Route uses a wildcard (`*path`) because axum 0.8 does not allow a
+        // static suffix (`.png`) in the same path segment as a parameter
+        // (`{y}`).  The handler parses `source_id/z/x/y.png` from the
+        // captured wildcard string.
+        .route("/tiles/{*path}", get(tile_routes::get_tile))
         // ── Editor routes (Parish Designer) ─────────────────────────────
         // #376 — update endpoints carry a 256 KiB body limit.
         .route(

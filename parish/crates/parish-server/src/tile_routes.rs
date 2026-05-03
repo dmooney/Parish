@@ -15,7 +15,11 @@ use axum::response::{IntoResponse, Response};
 
 use crate::session::GlobalState;
 
-/// `GET /tiles/{source_id}/{z}/{x}/{y}.png`
+/// `GET /tiles/*path` — resolves to `GET /tiles/{source_id}/{z}/{x}/{y}.png`.
+///
+/// Axum 0.8 does not allow a static suffix (`.png`) in the same path segment
+/// as a named parameter (`{y}`), so we capture the tail as a wildcard string
+/// and parse the four components here.
 ///
 /// Authentication is enforced by `cf_access_guard` and `session_middleware`
 /// (both already in the middleware stack for every route on the router);
@@ -25,8 +29,23 @@ use crate::session::GlobalState;
 /// cache path cannot be exploited to traverse outside `tile_cache_dir`.
 pub async fn get_tile(
     State(global): State<Arc<GlobalState>>,
-    Path((source_id, z, x, y)): Path<(String, u32, u32, u32)>,
+    Path(path): Path<String>,
 ) -> Response {
+    // path = "source_id/z/x/y.png"
+    let parts: Vec<&str> = path.splitn(4, '/').collect();
+    if parts.len() != 4 {
+        return (StatusCode::BAD_REQUEST, "invalid tile path").into_response();
+    }
+    let source_id = parts[0].to_string();
+    let (Ok(z), Ok(x)) = (parts[1].parse::<u32>(), parts[2].parse::<u32>()) else {
+        return (StatusCode::BAD_REQUEST, "invalid tile coordinates").into_response();
+    };
+    // Strip optional ".png" suffix from the y segment.
+    let y_str = parts[3].strip_suffix(".png").unwrap_or(parts[3]);
+    let Ok(y) = y_str.parse::<u32>() else {
+        return (StatusCode::BAD_REQUEST, "invalid tile coordinates").into_response();
+    };
+
     // ── Validate source_id against the registered tile sources ───────────
     // This prevents path traversal: only source ids that appear in the
     // engine config are accepted, and those ids are alphanumeric slugs.
