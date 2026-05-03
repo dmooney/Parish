@@ -59,6 +59,23 @@ impl TileCache {
         x: u32,
         y: u32,
     ) -> Result<Vec<u8>, ParishError> {
+        // Defence-in-depth: reject source_ids that are not safe path components.
+        // The route handler already validates against a config allowlist, but
+        // CodeQL tracks user-controlled data from HTTP path params into
+        // PathBuf::join and the URL format string, so we add an explicit
+        // character-class guard here that the analyser can follow statically.
+        // Source ids must be non-empty slugs of ASCII alphanumeric chars plus
+        // hyphens/underscores — the same constraint the config imposes.
+        if source_id.is_empty()
+            || !source_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(ParishError::Config(format!(
+                "tile source id contains unsafe characters: {source_id:?}"
+            )));
+        }
+
         let tile_path = self
             .cache_dir
             .join(source_id)
@@ -77,13 +94,23 @@ impl TileCache {
         let url = format!("{NLS_BASE_URL}/{source_id}/{z}/{x}/{y}.png");
         tracing::debug!(url = %url, "tile cache miss — fetching from NLS S3");
 
-        let resp = self.http.get(&url).send().await?;
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ParishError::Network(e.to_string()))?;
         if !resp.status().is_success() {
-            // `error_for_status` converts into a reqwest error with status.
-            return Err(ParishError::Network(resp.error_for_status().unwrap_err()));
+            return Err(ParishError::Network(
+                resp.error_for_status().unwrap_err().to_string(),
+            ));
         }
 
-        let data = resp.bytes().await?.to_vec();
+        let data = resp
+            .bytes()
+            .await
+            .map_err(|e| ParishError::Network(e.to_string()))?
+            .to_vec();
 
         // ── Persist to disk ────────────────────────────────────────────────
         // Create parent dirs lazily (source_id / z / x).
