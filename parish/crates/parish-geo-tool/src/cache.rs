@@ -51,6 +51,7 @@ impl ResponseCache {
     }
 
     /// Clears all cached entries.
+    #[allow(dead_code)] // Public API for manual cache management
     pub fn clear(&self) -> Result<()> {
         if self.cache_dir.exists() {
             for entry in std::fs::read_dir(&self.cache_dir)? {
