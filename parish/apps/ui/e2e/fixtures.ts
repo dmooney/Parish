@@ -14,9 +14,26 @@ import {
 	MAP_DATA,
 	NPCS,
 	IRISH_HINTS,
-	TEXT_LOG
+	TEXT_LOG,
+	UI_CONFIG
 } from './mock-data';
 import type { ThemePalette, WorldSnapshot, TextLogEntry } from '../src/lib/types';
+
+/** Minimal 1×1 transparent PNG — fulfills tile requests instantly. */
+const BLANK_PNG = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+	'base64'
+);
+
+/**
+ * Intercept MapLibre tile requests so the tile proxy never contacts S3.
+ * Must be called before `page.goto()`.
+ */
+export async function installTileRouteMock(page: Page): Promise<void> {
+	await page.route('**/tiles/**', (route) =>
+		route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_PNG })
+	);
+}
 
 /**
  * Inject the Tauri IPC mock into a page before navigation.
@@ -26,13 +43,15 @@ export async function installTauriMock(
 	page: Page,
 	timeOfDay: string = 'morning'
 ): Promise<void> {
+	await installTileRouteMock(page);
 	const snapshot = SNAPSHOTS[timeOfDay];
 	const palette = PALETTES.default;
 	const mapData = MAP_DATA;
 	const npcs = NPCS;
+	const uiConfig = UI_CONFIG;
 
 	await page.addInitScript(
-		({ snapshot, palette, mapData, npcs }) => {
+		({ snapshot, palette, mapData, npcs, uiConfig }) => {
 			// ── Callback registry (mirrors Tauri's transformCallback) ────────
 			const callbacks: Record<number, (data: unknown) => void> = {};
 			let nextCallbackId = 1;
@@ -48,11 +67,7 @@ export async function installTauriMock(
 				get_map: mapData,
 				get_npcs_here: npcs,
 				get_theme: palette,
-				get_ui_config: {
-					hints_label: 'Focail',
-					default_accent: palette.accent,
-					splash_text: 'Rundale\nCopyright \u00A9 2026 David Mooney. Licensed under GPL-3.0 \u2014 see LICENSE.\ntest-branch - 2026-03-29 00:00'
-				}
+				get_ui_config: uiConfig
 			};
 
 			// Expose for test helpers
@@ -139,7 +154,7 @@ export async function installTauriMock(
 				convertFileSrc: (path: string) => path
 			};
 		},
-		{ snapshot, palette, mapData, npcs }
+		{ snapshot, palette, mapData, npcs, uiConfig }
 	);
 }
 

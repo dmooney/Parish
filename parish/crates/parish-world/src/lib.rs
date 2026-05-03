@@ -5,7 +5,9 @@ pub mod encounter;
 pub mod geo;
 pub mod graph;
 pub mod movement;
+pub mod session;
 pub mod transport;
+pub mod wayfarers;
 pub mod weather;
 
 /// Re-export time types from parish-types for cross-crate convenience.

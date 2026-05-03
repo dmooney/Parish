@@ -18,6 +18,7 @@ use std::time::Instant;
 use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use parish_core::config::{FeatureFlags, Provider, ProviderConfig};
 use parish_core::debug_snapshot::{DebugEvent, InferenceDebug};
@@ -125,6 +126,31 @@ pub struct SaveState {
     pub branch_id: Option<i64>,
     /// Current branch name, or None.
     pub branch_name: Option<String>,
+}
+
+/// Configuration for the LLM demo / auto-player mode.
+///
+/// Read-only after startup; set via `--demo` CLI flags.
+pub struct DemoConfig {
+    /// Whether to start the demo loop automatically on launch.
+    pub auto_start: bool,
+    /// Extra prompt instructions loaded from `--demo-prompt <file>`.
+    pub extra_prompt: Option<String>,
+    /// Seconds to pause between demo turns (default 2.0).
+    pub turn_pause_secs: f32,
+    /// Maximum number of turns before stopping (None = unlimited).
+    pub max_turns: Option<u32>,
+}
+
+impl Default for DemoConfig {
+    fn default() -> Self {
+        Self {
+            auto_start: false,
+            extra_prompt: None,
+            turn_pause_secs: 2.0,
+            max_turns: None,
+        }
+    }
 }
 
 /// Maximum number of debug events to retain.
@@ -283,6 +309,11 @@ pub struct AppState {
     /// Used by rebuild paths so `/provider` switches honour the configured
     /// values instead of falling back to compiled-in defaults. (#417)
     pub inference_config: parish_core::config::InferenceConfig,
+    /// Demo / auto-player configuration. Read-only after startup.
+    pub demo_config: DemoConfig,
+    /// Cancellation token — cancelled during app shutdown to stop background ticks
+    /// gracefully. Clones are passed into each spawned tick task (#104).
+    pub shutdown_token: CancellationToken,
 }
 
 // ── Data path resolution ─────────────────────────────────────────────────────
@@ -428,14 +459,96 @@ async fn dispatch_screenshot(_path: std::path::PathBuf) -> anyhow::Result<()> {
     anyhow::bail!("screenshot capture is only implemented on Linux")
 }
 
+// ── Setup progress reporter (GUI mode) ───────────────────────────────────────
+
+/// Forwards inference bootstrap progress to the frontend via Tauri events.
+/// Used inside the async `.setup()` spawn so the window exists before we call it.
+struct TauriProgress {
+    app: tauri::AppHandle,
+}
+
+impl parish_core::inference::setup::SetupProgress for TauriProgress {
+    fn on_status(&self, msg: &str) {
+        tracing::info!("{}", msg);
+        let _ = self.app.emit(
+            events::EVENT_SETUP_STATUS,
+            events::SetupStatusPayload {
+                message: msg.to_string(),
+            },
+        );
+    }
+
+    fn on_pull_progress(&self, completed: u64, total: u64) {
+        let _ = self.app.emit(
+            events::EVENT_SETUP_PROGRESS,
+            events::SetupProgressPayload { completed, total },
+        );
+    }
+
+    fn on_error(&self, msg: &str) {
+        tracing::error!("{}", msg);
+        let _ = self.app.emit(
+            events::EVENT_SETUP_STATUS,
+            events::SetupStatusPayload {
+                message: format!("Error: {}", msg),
+            },
+        );
+    }
+}
+
 // ── Tauri entry point ─────────────────────────────────────────────────────────
+
+/// Parses `--demo*` CLI flags from an argument list into a [`DemoConfig`].
+///
+/// Extracted for unit-testability: does not read env vars or touch the filesystem
+/// (except via `std::fs::read_to_string` for `--demo-prompt`, which silently
+/// returns `None` on error).
+pub(crate) fn parse_demo_args(args: &[String]) -> DemoConfig {
+    let auto_start = args.iter().any(|a| a == "--demo");
+    let extra_prompt = args
+        .iter()
+        .position(|a| a == "--demo-prompt")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let turn_pause_secs = args
+        .iter()
+        .position(|a| a == "--demo-pause")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(2.0);
+    let max_turns = args
+        .iter()
+        .position(|a| a == "--demo-max-turns")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<u32>().ok());
+    DemoConfig {
+        auto_start,
+        extra_prompt,
+        turn_pause_secs,
+        max_turns,
+    }
+}
 
 /// Called from `main.rs`. Initialises game state and launches the Tauri app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialise tracing so RUST_LOG is respected (e.g. RUST_LOG=info,parish_tauri_lib=debug).
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     dotenvy::dotenv().ok();
 
     let data_dir = find_data_dir();
+
+    // Parse optional --demo flags.
+    let demo_config: DemoConfig = {
+        let args: Vec<String> = std::env::args().collect();
+        parse_demo_args(&args)
+    };
 
     // Parse optional --screenshot <dir> flag.
     // Relative paths are resolved against the workspace root (parent of data/).
@@ -535,24 +648,13 @@ pub fn run() {
     let engine_config = parish_core::config::load_engine_config(None);
 
     // Read provider config from env vars (optional).
-    // On Ollama this runs the full install / auto-start / GPU-detect / pull
-    // / warmup sequence — so the desktop app matches the CLI on first launch.
     let (provider_config, provider_name, base_url, api_key) = provider_config_from_env();
-    let setup_runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build tokio runtime for provider bootstrap");
-    let (client, model_name, ollama_process) = setup_runtime
-        .block_on(bootstrap_provider(
-            &provider_config,
-            &engine_config.inference,
-        ))
-        .unwrap_or_else(|e| {
-            tracing::error!("Failed to initialise inference provider: {}", e);
-            eprintln!("[Parish] Failed to initialise inference provider: {}", e);
-            std::process::exit(1);
-        });
     let cloud_env = build_cloud_client_from_env(&engine_config.inference);
+
+    // Clone inference config before it is moved into AppState so the async
+    // setup spawn can still reference it during bootstrap. provider_config
+    // itself is not stored in AppState and will be moved directly into the spawn.
+    let inference_config_for_spawn = engine_config.inference.clone();
 
     // Build splash text from mod title + build info
     let game_title = game_mod
@@ -623,7 +725,7 @@ pub fn run() {
         provider_name,
         base_url,
         api_key,
-        model_name,
+        model_name: String::new(), // filled in after async bootstrap
         cloud_provider_name: cloud_env.provider_name,
         cloud_model_name: cloud_env.model_name,
         cloud_api_key: cloud_env.api_key,
@@ -632,16 +734,20 @@ pub fn run() {
         max_follow_up_turns: 2,
         idle_banter_after_secs: engine_config.session.idle_banter_after_secs,
         auto_pause_after_secs: engine_config.session.auto_pause_after_secs,
-        category_provider: [None, None, None, None],
-        category_model: [None, None, None, None],
-        category_api_key: [None, None, None, None],
-        category_base_url: [None, None, None, None],
+        category_provider: Default::default(),
+        category_model: Default::default(),
+        category_api_key: Default::default(),
+        category_base_url: Default::default(),
         flags,
-        category_rate_limit: [None, None, None, None],
+        category_rate_limit: Default::default(),
         active_tile_source,
         tile_sources: engine_config.map.id_label_pairs(),
         reveal_unexplored_locations: false,
     };
+    // Enable demo-mode flag when --demo was passed so the demo commands work.
+    if demo_config.auto_start {
+        game_config.flags.enable("demo-mode");
+    }
     // Fill any unset model fields from the chosen provider's presets so a
     // user who set only `PARISH_PROVIDER=anthropic` (or `--provider`) gets
     // sensible Dialogue/Simulation/Intent/Reaction defaults.
@@ -651,11 +757,14 @@ pub fn run() {
     // commands read `state.saves_dir` instead of re-probing the cwd.
     let saves_dir = parish_core::persistence::picker::resolve_project_saves_dir_from_cwd();
 
+    // Cancellation token for graceful background-task shutdown (#104).
+    let shutdown_token = CancellationToken::new();
+
     let state = Arc::new(AppState {
         world: Mutex::new(world),
         npc_manager: Mutex::new(npc_manager),
         inference_queue: Mutex::new(None),
-        client: Mutex::new(client.clone()),
+        client: Mutex::new(None), // populated after async bootstrap completes
         cloud_client: Mutex::new(cloud_env.client),
         conversation: Mutex::new(ConversationRuntimeState::new()),
         debug_events: Mutex::new(std::collections::VecDeque::with_capacity(
@@ -678,9 +787,11 @@ pub fn run() {
         worker_handle: Mutex::new(None),
         editor: std::sync::Mutex::new(parish_core::ipc::editor::EditorSession::default()),
         save_lock: Mutex::new(None),
-        ollama_process: Mutex::new(ollama_process),
+        ollama_process: Mutex::new(parish_core::inference::client::OllamaProcess::none()),
         inference_config: engine_config.inference, // (#417) store TOML-configured timeouts
         config: Mutex::new(game_config),
+        demo_config,
+        shutdown_token: shutdown_token.clone(),
     });
 
     tauri::Builder::default()
@@ -701,6 +812,9 @@ pub fn run() {
             commands::new_game,
             commands::get_save_state,
             commands::react_to_message,
+            commands::get_demo_config,
+            commands::get_demo_context,
+            commands::get_llm_player_action,
             editor_commands::editor_list_mods,
             editor_commands::editor_open_mod,
             editor_commands::editor_get_snapshot,
@@ -779,6 +893,51 @@ pub fn run() {
             // tauri::async_runtime::spawn, which uses the Tauri-managed tokio handle.
             let state_setup = Arc::clone(&state);
             tauri::async_runtime::spawn(async move {
+                // ── Bootstrap inference provider ─────────────────────────────
+                // Runs here (inside the async spawn) rather than synchronously in
+                // run() so the Tauri window is open and can receive setup-status /
+                // setup-progress events while Ollama is being installed/started.
+                {
+                    let progress = TauriProgress { app: handle.clone() };
+                    match bootstrap_provider(
+                        &provider_config,
+                        &inference_config_for_spawn,
+                        &progress,
+                    )
+                    .await
+                    {
+                        Ok((client, model_name, ollama_process)) => {
+                            *state_setup.client.lock().await = client;
+                            *state_setup.ollama_process.lock().await = ollama_process;
+                            {
+                                let mut config = state_setup.config.lock().await;
+                                config.model_name = model_name;
+                                config.fill_missing_models_from_presets();
+                            }
+                            let _ = handle.emit(
+                                events::EVENT_SETUP_DONE,
+                                events::SetupDonePayload {
+                                    success: true,
+                                    error: String::new(),
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to initialise inference provider: {}", e);
+                            let _ = handle.emit(
+                                events::EVENT_SETUP_DONE,
+                                events::SetupDonePayload {
+                                    success: false,
+                                    error: e.to_string(),
+                                },
+                            );
+                            // Do not call process::exit — leave the window open so
+                            // the user can read the error in the setup overlay.
+                            return;
+                        }
+                    }
+                }
+
                 // Initialise inference queue now that the tokio runtime is running
                 {
                     let provider_name = {
@@ -936,25 +1095,31 @@ pub fn run() {
                 // last N events in AppState.game_events for the debug panel.
                 {
                     let state_events = Arc::clone(&state_setup);
+                    let token_events = state_setup.shutdown_token.clone();
                     let mut rx = {
                         let world = state_events.world.lock().await;
                         world.event_bus.subscribe()
                     };
                     tokio::spawn(async move {
                         loop {
-                            match rx.recv().await {
-                                Ok(evt) => {
-                                    let mut buf = state_events.game_events.lock().await;
-                                    if buf.len() >= DEBUG_EVENT_CAPACITY {
-                                        buf.pop_front();
+                            tokio::select! {
+                                _ = token_events.cancelled() => break,
+                                result = rx.recv() => {
+                                    match result {
+                                        Ok(evt) => {
+                                            let mut buf = state_events.game_events.lock().await;
+                                            if buf.len() >= DEBUG_EVENT_CAPACITY {
+                                                buf.pop_front();
+                                            }
+                                            buf.push_back(evt);
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                            continue;
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            break;
+                                        }
                                     }
-                                    buf.push_back(evt);
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                    continue;
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                    break;
                                 }
                             }
                         }
@@ -971,10 +1136,14 @@ pub fn run() {
                 // the tick (see the AppState lock ordering contract).
                 let state_tick = Arc::clone(&state_setup);
                 let handle_tick = handle.clone();
+                let token_tick = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     let mut last_palette: Option<parish_palette::RawPalette> = None;
                     loop {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::select! {
+                            _ = token_tick.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        }
 
                         let mut world = state_tick.world.lock().await;
                         let mut npc_mgr = state_tick.npc_manager.lock().await;
@@ -1251,11 +1420,10 @@ pub fn run() {
                                             let queue_guard =
                                                 state_t3.inference_queue.lock().await;
                                             let queue = queue_guard.clone();
-                                            let idx = parish_core::ipc::GameConfig::cat_idx(
-                                                parish_core::config::InferenceCategory::Simulation,
-                                            );
-                                            let model = cfg.category_model[idx]
-                                                .clone()
+                                            let model = cfg
+                                                .category_model
+                                                .get(&parish_core::config::InferenceCategory::Simulation)
+                                                .cloned()
                                                 .unwrap_or_else(|| cfg.model_name.clone());
                                             (queue, model)
                                         };
@@ -1397,12 +1565,10 @@ pub fn run() {
                                                 let queue_guard =
                                                     state_t2.inference_queue.lock().await;
                                                 let queue = queue_guard.clone();
-                                                let idx =
-                                                    parish_core::ipc::GameConfig::cat_idx(
-                                                        parish_core::config::InferenceCategory::Simulation,
-                                                    );
-                                                let model = cfg.category_model[idx]
-                                                    .clone()
+                                                let model = cfg
+                                                    .category_model
+                                                    .get(&parish_core::config::InferenceCategory::Simulation)
+                                                    .cloned()
                                                     .unwrap_or_else(|| {
                                                         cfg.model_name.clone()
                                                     });
@@ -1495,9 +1661,13 @@ pub fn run() {
                 // Inactivity tick: drive idle banter and auto-pause.
                 let state_idle = Arc::clone(&state_setup);
                 let handle_idle = handle.clone();
+                let token_idle = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::select! {
+                            _ = token_idle.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        }
                         crate::commands::tick_inactivity(&state_idle, &handle_idle).await;
                     }
                 });
@@ -1510,9 +1680,13 @@ pub fn run() {
                 // inference_log (#483).
                 let state_debug = Arc::clone(&state_setup);
                 let handle_debug = handle.clone();
+                let token_debug = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        tokio::select! {
+                            _ = token_debug.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                        }
 
                         // 1. Peek inference_queue presence first (#483).
                         let has_inference_queue =
@@ -1608,9 +1782,13 @@ pub fn run() {
 
                 // Autosave tick: save snapshot every AUTOSAVE_INTERVAL_SECS (if a save file is active)
                 let state_autosave = Arc::clone(&state_setup);
+                let token_autosave = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)).await;
+                        tokio::select! {
+                            _ = token_autosave.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)) => {}
+                        }
 
                         // Only autosave if a save file and branch are active
                         let save_path = state_autosave.save_path.lock().await.clone();
@@ -1640,6 +1818,14 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_window_event({
+            let token = shutdown_token.clone();
+            move |_window, event| {
+                if let tauri::WindowEvent::Destroyed = event {
+                    token.cancel();
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running Parish application");
@@ -1682,6 +1868,7 @@ fn provider_config_from_env() -> (ProviderConfig, String, String, Option<String>
 async fn bootstrap_provider(
     config: &ProviderConfig,
     inference_config: &parish_core::config::InferenceConfig,
+    progress: &dyn parish_core::inference::setup::SetupProgress,
 ) -> anyhow::Result<(
     Option<AnyClient>,
     String,
@@ -1697,11 +1884,10 @@ async fn bootstrap_provider(
         ));
     }
 
-    let progress = parish_core::inference::setup::StdoutProgress;
     let (client, model, process) = parish_core::inference::setup::setup_provider_client(
         config,
         inference_config, // (#417) use TOML-configured timeouts
-        &progress,
+        progress,
     )
     .await?;
     Ok((Some(client), model, process))
@@ -1865,5 +2051,38 @@ mod tests {
         // Sanity: both tasks ran and incremented the counters.
         assert_eq!(*world_lock.lock().await, 11);
         assert_eq!(*npc_lock.lock().await, 11);
+    }
+
+    #[test]
+    fn parse_demo_args_defaults_when_no_flags() {
+        let args: Vec<String> = vec!["parish-tauri".to_string()];
+        let cfg = super::parse_demo_args(&args);
+        assert!(!cfg.auto_start);
+        assert!(cfg.extra_prompt.is_none());
+        assert!((cfg.turn_pause_secs - 2.0).abs() < f32::EPSILON);
+        assert!(cfg.max_turns.is_none());
+    }
+
+    #[test]
+    fn parse_demo_args_sets_auto_start() {
+        let args: Vec<String> = vec!["parish-tauri".to_string(), "--demo".to_string()];
+        let cfg = super::parse_demo_args(&args);
+        assert!(cfg.auto_start);
+    }
+
+    #[test]
+    fn parse_demo_args_custom_pause_and_max_turns() {
+        let args: Vec<String> = vec![
+            "parish-tauri".to_string(),
+            "--demo".to_string(),
+            "--demo-pause".to_string(),
+            "5".to_string(),
+            "--demo-max-turns".to_string(),
+            "10".to_string(),
+        ];
+        let cfg = super::parse_demo_args(&args);
+        assert!(cfg.auto_start);
+        assert!((cfg.turn_pause_secs - 5.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.max_turns, Some(10));
     }
 }

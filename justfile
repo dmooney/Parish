@@ -32,6 +32,10 @@ run:
 run-headless:
     cd parish && just run-headless
 
+# Run the LLM demo / auto-player (optional: PAUSE=seconds MAX_TURNS=n)
+demo PAUSE="2" MAX_TURNS="":
+    cd parish && just demo {{PAUSE}} {{MAX_TURNS}}
+
 # Run the axum web server
 web PORT="3001":
     cd parish && just web {{PORT}}
@@ -41,6 +45,10 @@ web PORT="3001":
 # Pre-commit gate: format, lint, tests, placeholder scan, doc-paths
 check:
     cd parish && just check
+
+# Agent proof gate: requires changed proof evidence and judge verdicts for proof-relevant PRs
+agent-check:
+    bash parish/scripts/agent-check.sh
 
 # Pre-push gate: check + game harness walkthrough
 verify:
