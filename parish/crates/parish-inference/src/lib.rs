@@ -11,6 +11,7 @@ pub mod rate_limit;
 pub mod setup;
 pub mod simulator;
 pub(crate) mod utf8_stream;
+pub mod webgpu_client;
 
 pub use anthropic_client::AnthropicClient;
 pub use parish_config::InferenceConfig;
@@ -64,6 +65,11 @@ pub fn build_client(
             inference_config,
         )),
         Provider::Simulator => AnyClient::simulator(),
+        // WebGPU inference runs in the browser; build_client is only called by
+        // backends (Tauri, CLI) that can't use WebGPU. Fall back to the simulator
+        // so the user still gets a response rather than a broken OpenAI request
+        // with an empty base URL.
+        Provider::WebGpu => AnyClient::simulator(),
         _ => AnyClient::OpenAi(OpenAiClient::new_with_config(
             base_url,
             api_key,
