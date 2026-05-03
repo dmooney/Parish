@@ -1,32 +1,40 @@
 //! Disk-backed cache for NLS historic map tiles.
 //!
 //! [`TileCache`] proxies tile requests from the client through the server
-//! rather than having the client hit NLS's S3 bucket directly.  On a cache
-//! miss it fetches `https://mapseries-tilesets.s3.amazonaws.com/os/{source_id}/{z}/{x}/{y}.png`,
-//! writes the bytes to `cache_dir/{source_id}/{z}/{x}/{y}.png`, and returns
-//! them.  On a cache hit it reads the file from disk.
+//! rather than having the client hit upstream tile servers directly.  On a
+//! cache miss it fetches the tile via the XYZ URL template registered for the
+//! source in config, writes the bytes to
+//! `cache_dir/{source_id}/{z}/{x}/{y}.png`, and returns them.  On a cache
+//! hit it reads the file from disk.
 //!
 //! The cache directory is resolved once at server startup from config / env
 //! (`PARISH_TILE_CACHE_DIR` or `<saves_dir>/tile-cache/`) and stored on
 //! `GlobalState` — per CLAUDE.md rule #9 ("resolve runtime paths from
 //! explicit config, not the cwd").
+//!
+//! URL templates (one per registered tile source) are loaded from `MapConfig`
+//! at startup and stored inside `TileCache`, so the upstream fetch URL is
+//! never derived from user-supplied HTTP path params (SSRF prevention).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::error::ParishError;
 
-/// Upstream NLS S3 base URL for historic OS tile sets.
-const NLS_BASE_URL: &str = "https://mapseries-tilesets.s3.amazonaws.com/os";
-
-/// Disk-backed HTTP cache for NLS historic map tiles.
+/// Disk-backed HTTP cache for tile sources.
 ///
 /// Constructed once at server boot and stored on `GlobalState` (web) or
 /// `AppState` (desktop/CLI).  All clone-and-pass patterns are fine because
-/// the inner [`reqwest::Client`] is already `Arc`-backed.
+/// the inner [`reqwest::Client`] and the URL-template map are both
+/// `Arc`-backed / cheaply cloneable.
 #[derive(Clone)]
 pub struct TileCache {
     /// Root directory for cached tile files.
     cache_dir: PathBuf,
+    /// XYZ URL templates keyed by source id, loaded from config at startup.
+    /// Using config-provided templates (not user input) in the upstream fetch
+    /// prevents SSRF: the remote host is always a config-vetted value.
+    url_templates: std::sync::Arc<HashMap<String, String>>,
     /// Shared HTTP client (reuses connections across requests).
     http: reqwest::Client,
 }
@@ -34,22 +42,28 @@ pub struct TileCache {
 impl TileCache {
     /// Creates a new cache rooted at `cache_dir`.
     ///
+    /// `url_templates` maps each registered tile source id to its XYZ URL
+    /// template (e.g. `https://…/{z}/{x}/{y}.png`).  It must be populated
+    /// from trusted config data at server startup — never from request params.
+    ///
     /// `cache_dir` must exist or be creatable at request time — the cache
     /// creates subdirectories lazily on first write per source/z/x combination.
-    pub fn new(cache_dir: PathBuf) -> Self {
+    pub fn new(cache_dir: PathBuf, url_templates: HashMap<String, String>) -> Self {
         Self {
             cache_dir,
+            url_templates: std::sync::Arc::new(url_templates),
             http: reqwest::Client::new(),
         }
     }
 
-    /// Returns a tile from cache (disk hit) or fetches it from NLS S3 (miss).
+    /// Returns a tile from cache (disk hit) or fetches it from upstream (miss).
     ///
     /// The `source_id` must be a safe path component — the route handler
     /// validates it against the registered tile sources before calling here.
     ///
     /// # Errors
     ///
+    /// - [`ParishError::Config`] if `source_id` is not in the registered sources.
     /// - [`ParishError::Io`] if the on-disk tile cannot be read or written.
     /// - [`ParishError::Network`] if the upstream fetch fails.
     pub async fn get(
@@ -62,10 +76,7 @@ impl TileCache {
         // Defence-in-depth: reject source_ids that are not safe path components.
         // The route handler already validates against a config allowlist, but
         // CodeQL tracks user-controlled data from HTTP path params into
-        // PathBuf::join and the URL format string, so we add an explicit
-        // character-class guard here that the analyser can follow statically.
-        // Source ids must be non-empty slugs of ASCII alphanumeric chars plus
-        // hyphens/underscores — the same constraint the config imposes.
+        // PathBuf::join, so we add an explicit character-class guard here.
         if source_id.is_empty()
             || !source_id
                 .bytes()
@@ -75,6 +86,12 @@ impl TileCache {
                 "tile source id contains unsafe characters: {source_id:?}"
             )));
         }
+
+        // Look up the URL template from config — this is trusted startup data,
+        // not user input, so the upstream host is never tainted by the request.
+        let url_template = self.url_templates.get(source_id).ok_or_else(|| {
+            ParishError::Config(format!("tile source not registered: {source_id:?}"))
+        })?;
 
         let tile_path = self
             .cache_dir
@@ -91,8 +108,11 @@ impl TileCache {
         }
 
         // ── Cache miss: fetch from upstream ───────────────────────────────
-        let url = format!("{NLS_BASE_URL}/{source_id}/{z}/{x}/{y}.png");
-        tracing::debug!(url = %url, "tile cache miss — fetching from NLS S3");
+        let url = url_template
+            .replace("{z}", &z.to_string())
+            .replace("{x}", &x.to_string())
+            .replace("{y}", &y.to_string());
+        tracing::debug!(url = %url, "tile cache miss — fetching from upstream");
 
         let resp = self
             .http
@@ -113,7 +133,6 @@ impl TileCache {
             .to_vec();
 
         // ── Persist to disk ────────────────────────────────────────────────
-        // Create parent dirs lazily (source_id / z / x).
         if let Some(parent) = tile_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -131,7 +150,12 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_cache(dir: &TempDir) -> TileCache {
-        TileCache::new(dir.path().to_path_buf())
+        let mut templates = HashMap::new();
+        templates.insert(
+            "roscommon1".to_string(),
+            "https://example.com/{z}/{x}/{y}.png".to_string(),
+        );
+        TileCache::new(dir.path().to_path_buf(), templates)
     }
 
     #[test]

@@ -417,7 +417,14 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
             "Could not create tile cache dir — tile proxy will fail on first miss"
         );
     }
-    let tile_cache = parish_core::tile_cache::TileCache::new(tile_cache_dir.clone());
+    let tile_url_templates: std::collections::HashMap<String, String> = engine_config
+        .map
+        .tile_sources
+        .iter()
+        .map(|(id, cfg)| (id.clone(), cfg.url.clone()))
+        .collect();
+    let tile_cache =
+        parish_core::tile_cache::TileCache::new(tile_cache_dir.clone(), tile_url_templates);
     tracing::info!(dir = %tile_cache_dir.display(), "Tile cache initialised");
 
     // ── Global state ──────────────────────────────────────────────────────────
