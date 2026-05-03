@@ -50,7 +50,7 @@ is_proof_relevant() {
         docs/proofs/*)
             return 1
             ;;
-        AGENTS.md|CLAUDE.md|justfile|parish/justfile|\
+        AGENTS.md|CLAUDE.md|justfile|parish/justfile|docs/agent/*|\
         .agents/*|.claude/*|\
         .github/workflows/*|.github/pull_request_template.md|\
         parish/Cargo.toml|parish/Cargo.lock|\
