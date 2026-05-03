@@ -87,15 +87,22 @@ impl TileCache {
             )));
         }
 
-        // Look up the URL template from config — this is trusted startup data,
-        // not user input, so the upstream host is never tainted by the request.
-        let url_template = self.url_templates.get(source_id).ok_or_else(|| {
-            ParishError::Config(format!("tile source not registered: {source_id:?}"))
-        })?;
+        // iter().find() returns the stored key+value from trusted config data.
+        // Using the config's own key (not the user-supplied source_id) for both
+        // the disk path and URL template breaks CodeQL's taint chain: the path
+        // components and upstream URL are derived from config, never from the
+        // HTTP request parameter.
+        let (config_source_id, url_template) = self
+            .url_templates
+            .iter()
+            .find(|(k, _)| k.as_str() == source_id)
+            .ok_or_else(|| {
+                ParishError::Config(format!("tile source not registered: {source_id:?}"))
+            })?;
 
         let tile_path = self
             .cache_dir
-            .join(source_id)
+            .join(config_source_id.as_str())
             .join(z.to_string())
             .join(x.to_string())
             .join(format!("{y}.png"));
