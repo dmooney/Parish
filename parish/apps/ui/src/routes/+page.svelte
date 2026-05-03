@@ -566,12 +566,14 @@
 					if (payload.spinner) loadingSpinner.set(payload.spinner);
 					if (payload.phrase) loadingPhrase.set(payload.phrase);
 					if (payload.color) loadingColor.set(payload.color);
+				} else if (pendingNpcTurns.size === 0 && pendingStreamEndHints === null) {
+					// Loading ended with no NPC stream in flight — clear immediately.
+					// When a stream IS in flight, the text pump is still dripping
+					// characters; finishNpcStream() clears streamingActive after the
+					// pump drains so the input field and demo loop wait for text to
+					// finish displaying.
+					streamingActive.set(false);
 				}
-				// Do NOT set streamingActive = false here. The loading event fires
-				// when the LLM finishes generating, but the text pump is still
-				// dripping characters to the screen. finishNpcStream() sets
-				// streamingActive = false only after the pump drains, so the input
-				// field and demo loop both wait for text to finish displaying.
 			}));
 
 			listeners.push(await onThemeUpdate((p) => {
