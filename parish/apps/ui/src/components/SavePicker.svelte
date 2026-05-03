@@ -119,7 +119,7 @@
 			});
 		} catch (e: unknown) {
 			console.error('Branch creation failed:', e);
-			forkError = String(e).substring(0, 60);
+			forkError = (e instanceof Error ? e.message : String(e)).substring(0, 60);
 		}
 		loadingCount--;
 	}
