@@ -797,7 +797,7 @@ async fn handle_movement(target: &str, state: &Arc<AppState>, app: &tauri::AppHa
                     StreamTokenPayload {
                         token: batch.to_string(),
                         turn_id,
-                        source: source.to_string().into(),
+                        source: std::borrow::Cow::Owned(source.to_string()),
                     },
                 );
             },

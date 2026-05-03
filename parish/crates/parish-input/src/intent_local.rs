@@ -90,7 +90,8 @@ pub fn parse_intent_local(raw_input: &str) -> Option<PlayerIntent> {
         if lower.starts_with(prefix) {
             // Match on lowercase, but extract target from original (trimmed) input.
             // Use char count to find the byte boundary, avoiding UTF-8 safety issues.
-            let byte_offset: usize = trimmed.char_indices()
+            let byte_offset: usize = trimmed
+                .char_indices()
                 .nth(prefix.chars().count())
                 .map(|(i, _)| i)
                 .unwrap_or(trimmed.len());
@@ -111,7 +112,8 @@ pub fn parse_intent_local(raw_input: &str) -> Option<PlayerIntent> {
         if lower.starts_with(prefix) {
             // Match on lowercase, but extract target from original (trimmed) input.
             // Use char count to find the byte boundary, avoiding UTF-8 safety issues.
-            let byte_offset: usize = trimmed.char_indices()
+            let byte_offset: usize = trimmed
+                .char_indices()
                 .nth(prefix.chars().count())
                 .map(|(i, _)| i)
                 .unwrap_or(trimmed.len());
