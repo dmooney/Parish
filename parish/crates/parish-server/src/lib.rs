@@ -272,12 +272,27 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     #[cfg(debug_assertions)]
     dotenvy::dotenv().ok();
     #[cfg(not(debug_assertions))]
-    if std::path::Path::new(".env").exists() {
-        tracing::warn!(
-            ".env file found in working directory but will NOT be loaded in \
-             release builds — set environment variables explicitly to avoid \
-             accidentally overriding security-critical config (#786)"
-        );
+    {
+        fn find_dotenv() -> Option<std::path::PathBuf> {
+            let mut dir = std::env::current_dir().ok()?;
+            loop {
+                let path = dir.join(".env");
+                if path.is_file() {
+                    return Some(path);
+                }
+                if !dir.pop() {
+                    return None;
+                }
+            }
+        }
+        if let Some(path) = find_dotenv() {
+            tracing::warn!(
+                ".env file found at '{}' but will NOT be loaded in \
+                 release builds — set environment variables explicitly to avoid \
+                 accidentally overriding security-critical config (#786)",
+                path.display()
+            );
+        }
     }
 
     // ── World path ────────────────────────────────────────────────────────────
