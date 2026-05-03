@@ -121,10 +121,12 @@ impl GameConfig {
             // (the latter matters when a category switches to Anthropic
             // while the base stays on Ollama — the Anthropic default URL
             // is not empty, so build_client can still reach a real host).
-            let url: String = match self.category_base_url.get(&cat).map(String::as_str) {
-                Some(u) => u.to_string(),
-                None if !self.base_url.is_empty() => self.base_url.clone(),
-                None => provider.default_base_url().to_string(),
+            let url = if let Some(u) = self.category_base_url.get(&cat) {
+                u.clone()
+            } else if !self.base_url.is_empty() {
+                self.base_url.clone()
+            } else {
+                provider.default_base_url().to_string()
             };
             let key = self
                 .category_api_key
@@ -157,13 +159,13 @@ impl GameConfig {
     /// it must be applied at base-client construction time in `setup.rs`,
     /// because cloning a client preserves its limiter.
     pub fn install_rate_limits(&mut self, cfg: &RateLimitConfig) {
-        for cat in InferenceCategory::ALL {
-            if let Some(limiter) = InferenceRateLimiter::from_config(cfg.for_category(cat)) {
-                self.category_rate_limit.insert(cat, limiter);
-            } else {
-                self.category_rate_limit.remove(&cat);
-            }
-        }
+        self.category_rate_limit = InferenceCategory::ALL
+            .iter()
+            .filter_map(|&cat| {
+                InferenceRateLimiter::from_config(cfg.for_category(cat))
+                    .map(|limiter| (cat, limiter))
+            })
+            .collect();
     }
 
     /// Fills in any unset model fields with the appropriate provider preset.
