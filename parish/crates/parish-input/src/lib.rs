@@ -973,6 +973,7 @@ mod tests {
         assert!(extract_mention("@john welcome").is_none());
         assert!(extract_mention("hello @siobhan").is_none());
         assert!(extract_mention("@mary").is_none());
+        assert!(extract_mention("@123abc hello").is_none());
 
         // But uppercase should work
         let result = extract_mention("@Padraig hello").unwrap();
