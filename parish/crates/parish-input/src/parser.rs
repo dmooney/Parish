@@ -29,24 +29,26 @@ pub fn parse_system_command(input: &str) -> Option<Command> {
     };
 
     match keyword {
-        "/pause" => Some(Command::Pause),
-        "/resume" => Some(Command::Resume),
-        "/quit" => Some(Command::Quit),
-        "/save" => Some(Command::Save),
-        "/branches" => Some(Command::Branches),
-        "/log" => Some(Command::Log),
-        "/status" | "/where" => Some(Command::Status),
-        "/help" => Some(Command::Help),
-        "/irish" => Some(Command::ToggleSidebar),
-        "/improv" => Some(Command::ToggleImprov),
-        "/about" => Some(Command::About),
-        "/designer" => Some(Command::Designer),
-        "/npcs" => Some(Command::NpcsHere),
-        "/time" => Some(Command::Time),
-        "/new" => Some(Command::NewGame),
-        "/tick" => Some(Command::Tick),
-        "/flags" => Some(Command::Flags),
-        "/session" | "/tune" | "/music" | "/fiddle" | "/seisiun" => Some(Command::Session),
+        "/pause" if rest_trimmed.is_empty() => Some(Command::Pause),
+        "/resume" if rest_trimmed.is_empty() => Some(Command::Resume),
+        "/quit" if rest_trimmed.is_empty() => Some(Command::Quit),
+        "/save" if rest_trimmed.is_empty() => Some(Command::Save),
+        "/branches" if rest_trimmed.is_empty() => Some(Command::Branches),
+        "/log" if rest_trimmed.is_empty() => Some(Command::Log),
+        "/status" | "/where" if rest_trimmed.is_empty() => Some(Command::Status),
+        "/help" if rest_trimmed.is_empty() => Some(Command::Help),
+        "/irish" if rest_trimmed.is_empty() => Some(Command::ToggleSidebar),
+        "/improv" if rest_trimmed.is_empty() => Some(Command::ToggleImprov),
+        "/about" if rest_trimmed.is_empty() => Some(Command::About),
+        "/designer" if rest_trimmed.is_empty() => Some(Command::Designer),
+        "/npcs" if rest_trimmed.is_empty() => Some(Command::NpcsHere),
+        "/time" if rest_trimmed.is_empty() => Some(Command::Time),
+        "/new" if rest_trimmed.is_empty() => Some(Command::NewGame),
+        "/tick" if rest_trimmed.is_empty() => Some(Command::Tick),
+        "/flags" if rest_trimmed.is_empty() => Some(Command::Flags),
+        "/session" | "/tune" | "/music" | "/fiddle" | "/seisiun" if rest_trimmed.is_empty() => {
+            Some(Command::Session)
+        }
 
         "/fork" => {
             if rest_trimmed.is_empty() {
