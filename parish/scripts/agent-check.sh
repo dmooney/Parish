@@ -187,6 +187,10 @@ fi
 
 debt_found=0
 while IFS= read -r file; do
+    # Skip scanning the check tools and docs themselves to avoid matching the regex patterns they contain
+    [[ "$file" == "parish/scripts/agent-check.sh" ]] && continue
+    [[ "$file" == "parish/justfile" ]] && continue
+    [[ "$file" == "docs/agent/witness.md" ]] && continue
     if scan_for_debt_markers "$file"; then
         debt_found=1
     fi
