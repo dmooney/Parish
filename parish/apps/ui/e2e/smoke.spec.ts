@@ -97,7 +97,7 @@ test.describe('Parish Web UI', () => {
 		const input = page.locator('[data-testid="input-field"]');
 		await input.fill('/status');
 		await input.press('Enter');
-		await expect(page.locator('[data-testid="chat-panel"]')).toContainText('/status', { timeout: 5_000 });
+		await expect(page.locator('[data-testid="chat-panel"]')).toContainText('Location:', { timeout: 5_000 });
 		await page.screenshot({ path: 'e2e-results/after-status.png', fullPage: true });
 	});
 });
