@@ -76,7 +76,7 @@ pub struct TextLogPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_turn_id: Option<u64>,
     /// Who produced this text: "player", "system", or the NPC's name.
-    pub source: &'static str,
+    pub source: std::borrow::Cow<'static, str>,
     /// The log entry text.
     pub content: String,
 }
