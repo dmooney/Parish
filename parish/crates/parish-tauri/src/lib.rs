@@ -18,6 +18,7 @@ use std::time::Instant;
 use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use parish_core::config::{FeatureFlags, Provider, ProviderConfig};
 use parish_core::debug_snapshot::{DebugEvent, InferenceDebug};
@@ -310,6 +311,9 @@ pub struct AppState {
     pub inference_config: parish_core::config::InferenceConfig,
     /// Demo / auto-player configuration. Read-only after startup.
     pub demo_config: DemoConfig,
+    /// Cancellation token — cancelled during app shutdown to stop background ticks
+    /// gracefully. Clones are passed into each spawned tick task (#104).
+    pub shutdown_token: CancellationToken,
 }
 
 // ── Data path resolution ─────────────────────────────────────────────────────
@@ -704,12 +708,12 @@ pub fn run() {
         max_follow_up_turns: 2,
         idle_banter_after_secs: engine_config.session.idle_banter_after_secs,
         auto_pause_after_secs: engine_config.session.auto_pause_after_secs,
-        category_provider: [None, None, None, None],
-        category_model: [None, None, None, None],
-        category_api_key: [None, None, None, None],
-        category_base_url: [None, None, None, None],
+        category_provider: Default::default(),
+        category_model: Default::default(),
+        category_api_key: Default::default(),
+        category_base_url: Default::default(),
         flags,
-        category_rate_limit: [None, None, None, None],
+        category_rate_limit: Default::default(),
         active_tile_source,
         tile_sources: engine_config.map.id_label_pairs(),
         reveal_unexplored_locations: false,
@@ -726,6 +730,9 @@ pub fn run() {
     // Resolve the saves directory once at startup (#771). Subsequent save/load
     // commands read `state.saves_dir` instead of re-probing the cwd.
     let saves_dir = parish_core::persistence::picker::resolve_project_saves_dir_from_cwd();
+
+    // Cancellation token for graceful background-task shutdown (#104).
+    let shutdown_token = CancellationToken::new();
 
     let state = Arc::new(AppState {
         world: Mutex::new(world),
@@ -758,6 +765,7 @@ pub fn run() {
         inference_config: engine_config.inference, // (#417) store TOML-configured timeouts
         config: Mutex::new(game_config),
         demo_config,
+        shutdown_token: shutdown_token.clone(),
     });
 
     tauri::Builder::default()
@@ -1016,25 +1024,31 @@ pub fn run() {
                 // last N events in AppState.game_events for the debug panel.
                 {
                     let state_events = Arc::clone(&state_setup);
+                    let token_events = state_setup.shutdown_token.clone();
                     let mut rx = {
                         let world = state_events.world.lock().await;
                         world.event_bus.subscribe()
                     };
                     tokio::spawn(async move {
                         loop {
-                            match rx.recv().await {
-                                Ok(evt) => {
-                                    let mut buf = state_events.game_events.lock().await;
-                                    if buf.len() >= DEBUG_EVENT_CAPACITY {
-                                        buf.pop_front();
+                            tokio::select! {
+                                _ = token_events.cancelled() => break,
+                                result = rx.recv() => {
+                                    match result {
+                                        Ok(evt) => {
+                                            let mut buf = state_events.game_events.lock().await;
+                                            if buf.len() >= DEBUG_EVENT_CAPACITY {
+                                                buf.pop_front();
+                                            }
+                                            buf.push_back(evt);
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                            continue;
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            break;
+                                        }
                                     }
-                                    buf.push_back(evt);
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                    continue;
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                    break;
                                 }
                             }
                         }
@@ -1051,10 +1065,14 @@ pub fn run() {
                 // the tick (see the AppState lock ordering contract).
                 let state_tick = Arc::clone(&state_setup);
                 let handle_tick = handle.clone();
+                let token_tick = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     let mut last_palette: Option<parish_palette::RawPalette> = None;
                     loop {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::select! {
+                            _ = token_tick.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        }
 
                         let mut world = state_tick.world.lock().await;
                         let mut npc_mgr = state_tick.npc_manager.lock().await;
@@ -1331,11 +1349,10 @@ pub fn run() {
                                             let queue_guard =
                                                 state_t3.inference_queue.lock().await;
                                             let queue = queue_guard.clone();
-                                            let idx = parish_core::ipc::GameConfig::cat_idx(
-                                                parish_core::config::InferenceCategory::Simulation,
-                                            );
-                                            let model = cfg.category_model[idx]
-                                                .clone()
+                                            let model = cfg
+                                                .category_model
+                                                .get(&parish_core::config::InferenceCategory::Simulation)
+                                                .cloned()
                                                 .unwrap_or_else(|| cfg.model_name.clone());
                                             (queue, model)
                                         };
@@ -1477,12 +1494,10 @@ pub fn run() {
                                                 let queue_guard =
                                                     state_t2.inference_queue.lock().await;
                                                 let queue = queue_guard.clone();
-                                                let idx =
-                                                    parish_core::ipc::GameConfig::cat_idx(
-                                                        parish_core::config::InferenceCategory::Simulation,
-                                                    );
-                                                let model = cfg.category_model[idx]
-                                                    .clone()
+                                                let model = cfg
+                                                    .category_model
+                                                    .get(&parish_core::config::InferenceCategory::Simulation)
+                                                    .cloned()
                                                     .unwrap_or_else(|| {
                                                         cfg.model_name.clone()
                                                     });
@@ -1575,9 +1590,13 @@ pub fn run() {
                 // Inactivity tick: drive idle banter and auto-pause.
                 let state_idle = Arc::clone(&state_setup);
                 let handle_idle = handle.clone();
+                let token_idle = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::select! {
+                            _ = token_idle.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        }
                         crate::commands::tick_inactivity(&state_idle, &handle_idle).await;
                     }
                 });
@@ -1590,9 +1609,13 @@ pub fn run() {
                 // inference_log (#483).
                 let state_debug = Arc::clone(&state_setup);
                 let handle_debug = handle.clone();
+                let token_debug = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        tokio::select! {
+                            _ = token_debug.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                        }
 
                         // 1. Peek inference_queue presence first (#483).
                         let has_inference_queue =
@@ -1688,9 +1711,13 @@ pub fn run() {
 
                 // Autosave tick: save snapshot every AUTOSAVE_INTERVAL_SECS (if a save file is active)
                 let state_autosave = Arc::clone(&state_setup);
+                let token_autosave = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)).await;
+                        tokio::select! {
+                            _ = token_autosave.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)) => {}
+                        }
 
                         // Only autosave if a save file and branch are active
                         let save_path = state_autosave.save_path.lock().await.clone();
@@ -1720,6 +1747,14 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_window_event({
+            let token = shutdown_token.clone();
+            move |_window, event| {
+                if let tauri::WindowEvent::Destroyed = event {
+                    token.cancel();
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running Parish application");
