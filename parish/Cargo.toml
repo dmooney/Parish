@@ -79,6 +79,7 @@ rand    = "0.9"
 strsim  = "0.11"
 regex   = "1"
 governor  = "0.10"
+lru       = "0.12"
 
 # Dev / test utilities
 tempfile    = "3"
