@@ -10,10 +10,12 @@ pub mod debug_snapshot;
 pub mod editor;
 pub mod game_mod;
 pub mod game_session;
+pub mod identity;
 pub mod inference_guard;
 pub mod ipc;
 pub mod loading;
 pub mod prompts;
+pub mod session_store;
 pub mod tile_cache;
 
 /// How often autosave tasks should snapshot active sessions (seconds).
