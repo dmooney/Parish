@@ -9,7 +9,7 @@ use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use tokio::sync::Semaphore;
+// Semaphore is used by parish_core::game_loop::emit_npc_reactions (shared).
 
 use parish_core::config::InferenceCategory;
 use parish_core::inference::{
@@ -18,15 +18,14 @@ use parish_core::inference::{
 };
 use parish_core::input::{Command, InputResult, classify_input, parse_intent};
 use parish_core::ipc::{
-    LoadingPayload, MapData, NPC_REACTION_CONCURRENCY, NpcInfo, NpcReactionPayload, ReactRequest,
-    StreamEndPayload, StreamTokenPayload, TextPresentation, ThemePalette, WorldSnapshot,
-    capitalize_first, text_log, text_log_typed,
+    LoadingPayload, MapData, NpcInfo, ReactRequest, StreamEndPayload, StreamTokenPayload,
+    TextPresentation, ThemePalette, WorldSnapshot, text_log, text_log_typed,
 };
 use parish_core::npc::manager::NpcManager;
-// ConversationLine, NpcId, and mpsc are only used in the test module.
-// Imported here so tests can access them via `super::*`.
+// These are only used in test code; imported with #[cfg(test)] to avoid
+// unused-import warnings in production builds. Tests access them via `super::*`.
 #[cfg(test)]
-use parish_core::ipc::ConversationLine;
+use parish_core::ipc::{ConversationLine, NpcReactionPayload, capitalize_first};
 #[cfg(test)]
 use parish_core::npc::NpcId;
 use parish_core::npc::reactions;
@@ -1175,105 +1174,35 @@ pub async fn react_to_message(
 ///
 /// Runs as a detached background task so player input handling remains
 /// responsive. When the `npc-llm-reactions` flag is enabled (default) and an
-/// LLM client is configured, each NPC at the player's location gets an
-/// inference call; on any failure the function falls back to rule-based
-/// keyword matching (#404). Reactions are persisted to the NPC's
-/// `reaction_log` for memory continuity (#403).
+/// Delegates to [`parish_core::game_loop::emit_npc_reactions`] (#696 slice 5).
+///
+/// Pre-captures the NPC list at `location`, resolves the reaction client and
+/// feature flags from the session config, constructs an `AppStateEmitter`, and
+/// calls the shared implementation which spawns the background reaction task.
+/// Resolution happens inside a short-lived spawned task because this function
+/// is non-async (called from the request handler) but needs to async-lock the
+/// tokio config Mutex.
 fn emit_npc_reactions(
     player_msg_id: &str,
     player_input: &str,
     location: LocationId,
     state: &Arc<AppState>,
 ) {
-    let state = Arc::clone(state);
+    let state_clone = Arc::clone(state);
     let player_msg_id = player_msg_id.to_string();
     let player_input = player_input.to_string();
+    let emitter: std::sync::Arc<dyn parish_core::ipc::EventEmitter> =
+        std::sync::Arc::new(crate::emitter::AppStateEmitter::new(Arc::clone(state)));
 
-    let handle = tokio::spawn(async move {
-        let (npcs_here, llm_enabled, reaction_client, reaction_model) = {
-            let npc_manager = state.npc_manager.lock().await;
-            let config = state.config.lock().await;
-            let base_client = state.client.lock().await;
-
-            // Use the pre-captured location — do not read world.player_location
-            // here, as the player may have moved since the message was sent.
-            let npcs = npc_manager
-                .npcs_at(location)
-                .iter()
-                .map(|npc| (*npc).clone())
-                .collect::<Vec<_>>();
-
-            let (client, model) =
-                config.resolve_category_client(InferenceCategory::Reaction, base_client.as_ref());
-            let enabled = !config.flags.is_disabled("npc-llm-reactions");
-
-            (npcs, enabled, client, model)
-        };
-
-        if npcs_here.is_empty() {
-            return;
-        }
-
-        // Run per-NPC inference concurrently, bounded to NPC_REACTION_CONCURRENCY
-        // simultaneous calls so a busy location can't exhaust the LLM connection
-        // pool (#406).
-        let sem = Arc::new(Semaphore::new(NPC_REACTION_CONCURRENCY));
-        let mut join_set = tokio::task::JoinSet::new();
-
-        for npc in npcs_here {
-            let sem = Arc::clone(&sem);
-            let client = reaction_client.clone();
-            let model = reaction_model.clone();
-            let input = player_input.clone();
-
-            join_set.spawn(async move {
-                // Acquire a permit before starting the (potentially slow) LLM call.
-                let _permit = sem.acquire().await.ok();
-
-                // Try LLM path first; fall back to rule-based on any failure (#404).
-                let emoji = if llm_enabled {
-                    if let Some(ref c) = client {
-                        reactions::infer_player_message_reaction(
-                            c,
-                            &model,
-                            &npc,
-                            &input,
-                            std::time::Duration::from_secs(2),
-                        )
-                        .await
-                        .or_else(|| reactions::generate_rule_reaction(&input))
-                    } else {
-                        reactions::generate_rule_reaction(&input)
-                    }
-                } else {
-                    reactions::generate_rule_reaction(&input)
-                };
-
-                (npc.name.clone(), emoji)
-            });
-        }
-
-        // Collect results as tasks finish, then persist + emit each reaction.
-        while let Some(result) = join_set.join_next().await {
-            let (npc_name, emoji) = match result {
-                Ok((name, Some(emoji))) => (name, emoji),
-                Ok((_, None)) => continue,
-                Err(e) if e.is_panic() => {
-                    tracing::error!(error = %e, "npc reaction task panicked");
-                    continue;
-                }
-                Err(e) if e.is_cancelled() => {
-                    tracing::debug!("npc reaction task cancelled (shutdown)");
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "npc reaction task ended unexpectedly");
-                    continue;
-                }
-            };
-
-            // Persist to reaction_log so NPC memory is maintained (#403).
-            {
+    // Persist callback: closes over Arc<AppState> and locks npc_manager to
+    // record each reaction in the NPC's reaction_log (#403). Uses
+    // `tokio::spawn` to avoid blocking the reaction task while waiting for
+    // the lock — locks are always released at statement-end in this style.
+    let state_for_persist = Arc::clone(state);
+    let persist: parish_core::game_loop::PersistReactionFn = std::sync::Arc::new(
+        move |npc_name: String, emoji: String, player_input: String| {
+            let state = Arc::clone(&state_for_persist);
+            tokio::spawn(async move {
                 let mut npc_manager = state.npc_manager.lock().await;
                 if let Some(npc_mut) = npc_manager.find_by_name_mut(&npc_name) {
                     npc_mut.reaction_log.add_player_message_reaction(
@@ -1282,35 +1211,38 @@ fn emit_npc_reactions(
                         chrono::Utc::now(),
                     );
                 }
-            }
+            });
+        },
+    );
 
-            state.event_bus.emit_named(
-                Topic::NpcReaction,
-                "npc-reaction",
-                &NpcReactionPayload {
-                    message_id: player_msg_id.clone(),
-                    emoji,
-                    source: capitalize_first(&npc_name),
-                },
-            );
-        }
-    });
-
-    // Watcher: keeps emit_npc_reactions non-blocking while making panics visible
-    // and quietly absorbing the cancellation seen during runtime shutdown.
     tokio::spawn(async move {
-        match handle.await {
-            Ok(_) => {}
-            Err(e) if e.is_panic() => {
-                tracing::error!(error = %e, "emit_npc_reactions task panicked");
-            }
-            Err(e) if e.is_cancelled() => {
-                tracing::debug!("emit_npc_reactions task cancelled (shutdown)");
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "emit_npc_reactions task ended unexpectedly");
-            }
-        }
+        // Pre-capture the NPC list at the given location (the player may have
+        // moved by the time the background task runs).
+        let (npcs_here, reaction_client, reaction_model, llm_enabled) = {
+            let npc_manager = state_clone.npc_manager.lock().await;
+            let config = state_clone.config.lock().await;
+            let base_client = state_clone.client.lock().await;
+            let npcs = npc_manager
+                .npcs_at(location)
+                .iter()
+                .map(|npc| (*npc).clone())
+                .collect::<Vec<_>>();
+            let (client, model) =
+                config.resolve_category_client(InferenceCategory::Reaction, base_client.as_ref());
+            let enabled = !config.flags.is_disabled("npc-llm-reactions");
+            (npcs, client, model, enabled)
+        };
+
+        parish_core::game_loop::emit_npc_reactions(
+            player_msg_id,
+            player_input,
+            npcs_here,
+            reaction_client,
+            reaction_model,
+            llm_enabled,
+            emitter,
+            persist,
+        );
     });
 }
 
