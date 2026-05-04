@@ -21,6 +21,8 @@ use parish_core::npc::manager::NpcManager;
 use parish_core::world::transport::TransportConfig;
 use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
 
+use parish_core::event_bus::{EventBus as EventBusTrait, Topic};
+
 use crate::state::{AppState, UiConfigSnapshot, build_app_state};
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -856,7 +858,8 @@ fn spawn_session_ticks(
                         &npc_manager,
                         &s.pronunciations,
                     );
-                    s.event_bus.emit("world-update", &snap);
+                    s.event_bus
+                        .emit_named(Topic::WorldUpdate, "world-update", &snap);
                 }
 
                 {
@@ -1003,7 +1006,8 @@ fn spawn_session_ticks(
                                 Ok(Err(e)) => {
                                     tracing::warn!("Autosave: failed to open DB: {}", e);
                                     if !last_autosave_failed {
-                                        s.event_bus.emit(
+                                        s.event_bus.emit_named(
+                                            Topic::TextLog,
                                             "text-log",
                                             &parish_core::ipc::text_log(
                                                 "system",
@@ -1028,7 +1032,8 @@ fn spawn_session_ticks(
                             Ok(_) => {
                                 tracing::debug!("Session autosave complete");
                                 if last_autosave_failed {
-                                    s.event_bus.emit(
+                                    s.event_bus.emit_named(
+                                        Topic::TextLog,
                                         "text-log",
                                         &parish_core::ipc::text_log(
                                             "system",
@@ -1041,7 +1046,8 @@ fn spawn_session_ticks(
                             Err(e) => {
                                 tracing::warn!("Session autosave failed: {}", e);
                                 if !last_autosave_failed {
-                                    s.event_bus.emit(
+                                    s.event_bus.emit_named(
+                                        Topic::TextLog,
                                         "text-log",
                                         &parish_core::ipc::text_log(
                                             "system",

@@ -3,9 +3,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::Mutex;
 // `tokio::sync::Mutex` used for `active_ws` so the guard can be held across
 // await points without blocking Tokio workers.
 use tokio::task::JoinHandle;
@@ -14,98 +13,32 @@ use parish_core::config::InferenceConfig;
 use parish_core::debug_snapshot::DebugEvent;
 use parish_core::game_mod::PronunciationEntry;
 use parish_core::inference::{AnyClient, InferenceLog, InferenceQueue};
-use parish_core::ipc::ConversationLine;
 use parish_core::ipc::ThemePalette;
 use parish_core::npc::manager::NpcManager;
+use parish_core::world::WorldState;
 use parish_core::world::events::GameEvent;
 use parish_core::world::transport::TransportConfig;
-use parish_core::world::{LocationId, WorldState};
+
+// Re-export event-bus types: the concrete impl used for the AppState field,
+// the trait (for emit_named calls at construction/test time), the wire type,
+// and Topic (for test code).
+pub use parish_core::event_bus::{
+    BroadcastEventBus, EventBus as EventBusTrait, ServerEvent, Topic,
+};
 
 /// Maximum number of debug/game events retained in the server's ring buffer.
 pub const DEBUG_EVENT_CAPACITY: usize = 100;
 
-/// UI configuration snapshot returned by the `/api/ui-config` endpoint.
-#[derive(serde::Serialize, Clone)]
-pub struct UiConfigSnapshot {
-    /// Label for the language-hints sidebar panel.
-    pub hints_label: String,
-    /// Default accent colour (CSS hex string).
-    pub default_accent: String,
-    /// Splash text displayed on game start (Zork-style).
-    pub splash_text: String,
-    /// Id of the currently-active tile source (matches a `tile_sources` key).
-    pub active_tile_source: String,
-    /// Registry of available map tile sources, alphabetical by id.
-    pub tile_sources: Vec<parish_core::ipc::TileSourceSnapshot>,
-    /// How many seconds of inactivity before auto-pausing the game.
-    pub auto_pause_timeout_seconds: u64,
-}
+// ── Shared state types (moved to parish-core::ipc::state as part of #696) ───
 
-/// Current save state for display in the StatusBar.
-#[derive(serde::Serialize, Clone)]
-pub struct SaveState {
-    /// Filename of the current save file (e.g. "parish_001.db"), or None.
-    pub filename: Option<String>,
-    /// Current branch database id, or None.
-    pub branch_id: Option<i64>,
-    /// Current branch name, or None.
-    pub branch_name: Option<String>,
-}
-
-/// Runtime conversation/session state used for multi-NPC continuity and idle timers.
-pub struct ConversationRuntimeState {
-    /// Player location associated with the current transcript.
-    pub location: Option<LocationId>,
-    /// Recent dialogue at the current location.
-    pub transcript: std::collections::VecDeque<ConversationLine>,
-    /// Last wall-clock moment when the player submitted input.
-    pub last_player_activity: Instant,
-    /// Last wall-clock moment when anyone said something in the local conversation.
-    pub last_spoken_at: Instant,
-    /// Whether a player- or idle-triggered NPC exchange is currently running.
-    pub conversation_in_progress: bool,
-}
-
-impl Default for ConversationRuntimeState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConversationRuntimeState {
-    pub fn new() -> Self {
-        let now = Instant::now();
-        Self {
-            location: None,
-            transcript: std::collections::VecDeque::with_capacity(16),
-            last_player_activity: now,
-            last_spoken_at: now,
-            conversation_in_progress: false,
-        }
-    }
-
-    pub fn sync_location(&mut self, location: LocationId) {
-        if self.location != Some(location) {
-            self.location = Some(location);
-            self.transcript.clear();
-        }
-    }
-
-    pub fn push_line(&mut self, line: ConversationLine) {
-        if line.text.trim().is_empty() {
-            return;
-        }
-        if self.transcript.len() >= 12 {
-            self.transcript.pop_front();
-        }
-        self.transcript.push_back(line);
-    }
-}
+/// Re-export from `parish_core` so all existing `crate::state::*` call sites
+/// continue to compile without modification.
+pub use parish_core::ipc::{ConversationRuntimeState, SaveState, UiConfigSnapshot};
 
 /// Shared mutable game state for the web server.
 ///
-/// Mirrors the Tauri `AppState` but uses an [`EventBus`] for push events
-/// instead of a Tauri `AppHandle`.
+/// Mirrors the Tauri `AppState` but uses a [`BroadcastEventBus`] for push
+/// events instead of a Tauri `AppHandle`.
 ///
 /// # Lock ordering invariant (#483)
 ///
@@ -202,7 +135,7 @@ pub struct AppState {
     /// Rolling ring buffer of `GameEvent`s captured from the world event bus.
     pub game_events: Mutex<std::collections::VecDeque<GameEvent>>,
     /// Broadcast channel for pushing events to WebSocket clients.
-    pub event_bus: EventBus,
+    pub event_bus: BroadcastEventBus,
     /// Transport mode configuration from the loaded game mod.
     pub transport: TransportConfig,
     /// UI configuration from the loaded game mod.
@@ -263,61 +196,6 @@ pub struct AppState {
 // GameConfig is now shared across all backends via parish-core.
 pub use parish_core::ipc::GameConfig;
 
-/// A JSON-serializable server event pushed to WebSocket clients.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct ServerEvent {
-    /// Event name (e.g. "stream-token", "text-log").
-    pub event: String,
-    /// JSON payload for this event.
-    pub payload: serde_json::Value,
-}
-
-/// Broadcast channel for server-push events.
-///
-/// Events emitted here are forwarded to all connected WebSocket clients.
-pub struct EventBus {
-    tx: broadcast::Sender<ServerEvent>,
-}
-
-impl EventBus {
-    /// Creates a new event bus with the given channel capacity.
-    pub fn new(capacity: usize) -> Self {
-        let (tx, _) = broadcast::channel(capacity);
-        Self { tx }
-    }
-
-    /// Sends an event to all subscribers. Returns the number of receivers.
-    pub fn send(&self, event: ServerEvent) -> usize {
-        match self.tx.send(event) {
-            Ok(count) => count,
-            Err(_) => {
-                tracing::warn!("EventBus: broadcast failed — no active subscribers");
-                0
-            }
-        }
-    }
-
-    /// Emits a named event with a serializable payload.
-    pub fn emit<T: serde::Serialize>(&self, event_name: &str, payload: &T) {
-        match serde_json::to_value(payload) {
-            Ok(value) => {
-                self.send(ServerEvent {
-                    event: event_name.to_string(),
-                    payload: value,
-                });
-            }
-            Err(e) => {
-                tracing::warn!(event = %event_name, error = %e, "EventBus: failed to serialize event payload");
-            }
-        }
-    }
-
-    /// Creates a new receiver for this bus.
-    pub fn subscribe(&self) -> broadcast::Receiver<ServerEvent> {
-        self.tx.subscribe()
-    }
-}
-
 /// Creates the shared [`AppState`] from game data.
 // AppState is a flat bundle of all server-wide singletons; a builder pattern
 // would add complexity without benefit, so the many-argument constructor is intentional.
@@ -359,7 +237,7 @@ pub fn build_app_state(
         game_events: Mutex::new(std::collections::VecDeque::with_capacity(
             DEBUG_EVENT_CAPACITY,
         )),
-        event_bus: EventBus::new(256),
+        event_bus: BroadcastEventBus::new(256),
         transport,
         ui_config,
         theme_palette,
@@ -383,25 +261,32 @@ pub fn build_app_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parish_core::event_bus::{EventBus as EventBusTrait, Topic};
 
     #[test]
-    fn event_bus_send_and_subscribe() {
-        let bus = EventBus::new(16);
-        let mut rx = bus.subscribe();
-        bus.emit("test-event", &serde_json::json!({"key": "value"}));
-        let event = rx.try_recv().unwrap();
+    fn event_bus_emit_named_and_subscribe() {
+        let bus = BroadcastEventBus::new(16);
+        let mut stream = bus.subscribe(&[]);
+        bus.emit_named(
+            Topic::TextLog,
+            "test-event",
+            &serde_json::json!({"key": "value"}),
+        );
+        let event = stream.try_recv().unwrap();
         assert_eq!(event.event, "test-event");
         assert_eq!(event.payload["key"], "value");
     }
 
     #[test]
-    fn event_bus_no_subscribers() {
-        let bus = EventBus::new(16);
+    fn event_bus_no_subscribers_does_not_panic() {
+        let bus = BroadcastEventBus::new(16);
         // No subscribers — should not panic
-        let count = bus.send(ServerEvent {
-            event: "orphan".to_string(),
-            payload: serde_json::Value::Null,
-        });
-        assert_eq!(count, 0);
+        bus.emit(
+            Topic::TextLog,
+            ServerEvent {
+                event: "orphan".to_string(),
+                payload: serde_json::Value::Null,
+            },
+        );
     }
 }
