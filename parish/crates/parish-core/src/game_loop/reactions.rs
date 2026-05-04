@@ -10,26 +10,28 @@
 //!
 //! # `emit_npc_reactions`
 //!
-//! Spawns a background task that runs per-NPC inference (or rule-based fallback)
-//! and emits `"npc-reaction"` events via the supplied [`EventEmitter`].
-//!
-//! The function is fire-and-forget: it returns immediately after spawning.
-//! Callers must supply the NPC list and inference client **pre-gathered** from
-//! their locked state so that no Mutex is held across the slow inference calls.
+//! The async core of the NPC-reaction pipeline.  Callers must spawn this as a
+//! background task and supply an `on_persist` callback that persists each
+//! `(npc_name, emoji)` pair back to the NPC's reaction log.
 //!
 //! # Architecture gate
 //!
 //! This module must remain backend-agnostic.  It does **not** import `axum`,
 //! `tauri`, or any crate in `FORBIDDEN_FOR_BACKEND_AGNOSTIC`.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 
+use crate::inference::AnyClient;
 use crate::ipc::{EventEmitter, NPC_REACTION_CONCURRENCY, NpcReactionPayload, capitalize_first};
 use crate::npc::{Npc, reactions};
-use crate::inference::AnyClient;
+
+/// Boxed async future for persistence callbacks.
+pub type PersistFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 // ── Injection-safety validation ───────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ pub fn is_snippet_injection_char(c: char) -> bool {
 
 // ── Background reaction task ──────────────────────────────────────────────────
 
-/// Spawns a background task that runs per-NPC reactions for a player message
-/// and emits `"npc-reaction"` events via `emitter`.
+/// Core of the NPC-reaction pipeline.  **Must be spawned** by the caller as a
+/// background task; the function itself does not spawn.
 ///
 /// # Parameters
 ///
@@ -62,129 +64,100 @@ pub fn is_snippet_injection_char(c: char) -> bool {
 /// - `llm_enabled`: whether the `npc-llm-reactions` feature flag is on.
 /// - `reaction_client`: optional LLM client for inference-backed reactions.
 /// - `reaction_model`: model name to pass to the reaction inference call.
-/// - `npc_manager_for_persist`: `Arc<Mutex<NpcManager>>` used only to persist
-///   the chosen emoji back to the NPC's reaction log after inference completes.
-///   Pass `None` to skip persistence (e.g. in tests).
+/// - `on_persist`: async callback called with `(npc_name, emoji)` for each
+///   reaction so the caller can persist it to the NPC's reaction log.  Pass
+///   a no-op closure (e.g. `|_, _| Box::pin(async {})`) to skip persistence.
 /// - `emitter`: event emitter for `"npc-reaction"` events.
 /// - `player_msg_id`: opaque message ID threaded through to the frontend.
 /// - `player_input`: the original player message text.
-///
-/// The function returns immediately; the spawned watcher task logs panics and
-/// cancellation cleanly.
 #[allow(clippy::too_many_arguments)]
-pub fn emit_npc_reactions(
+pub async fn emit_npc_reactions<F>(
     npcs_here: Vec<Npc>,
     llm_enabled: bool,
     reaction_client: Option<AnyClient>,
     reaction_model: String,
-    npc_manager_for_persist: Option<Arc<Mutex<crate::npc::manager::NpcManager>>>,
+    on_persist: F,
     emitter: Arc<dyn EventEmitter>,
     player_msg_id: String,
     player_input: String,
-) {
+) where
+    F: Fn(String, String) -> PersistFuture + Send + 'static,
+{
     if npcs_here.is_empty() {
         return;
     }
 
-    let handle = tokio::spawn(async move {
-        // Run per-NPC inference concurrently, bounded to NPC_REACTION_CONCURRENCY
-        // simultaneous calls so a busy location can't exhaust the LLM connection
-        // pool (#406).
-        let sem = Arc::new(Semaphore::new(NPC_REACTION_CONCURRENCY));
-        let mut join_set = tokio::task::JoinSet::new();
+    // Run per-NPC inference concurrently, bounded to NPC_REACTION_CONCURRENCY
+    // simultaneous calls so a busy location can't exhaust the LLM connection
+    // pool (#406).
+    let sem = Arc::new(Semaphore::new(NPC_REACTION_CONCURRENCY));
+    let mut join_set = tokio::task::JoinSet::new();
 
-        for npc in npcs_here {
-            let sem = Arc::clone(&sem);
-            let client = reaction_client.clone();
-            let model = reaction_model.clone();
-            let input = player_input.clone();
+    for npc in npcs_here {
+        let sem = Arc::clone(&sem);
+        let client = reaction_client.clone();
+        let model = reaction_model.clone();
+        let input = player_input.clone();
 
-            join_set.spawn(async move {
-                // Acquire a permit before starting the (potentially slow) LLM call.
-                let _permit = sem.acquire().await.ok();
+        join_set.spawn(async move {
+            // Acquire a permit before starting the (potentially slow) LLM call.
+            let _permit = sem.acquire().await.ok();
 
-                // Try LLM path first; fall back to rule-based on any failure (#404).
-                let emoji = if llm_enabled {
-                    if let Some(ref c) = client {
-                        reactions::infer_player_message_reaction(
-                            c,
-                            &model,
-                            &npc,
-                            &input,
-                            Duration::from_secs(2),
-                        )
-                        .await
-                        .or_else(|| reactions::generate_rule_reaction(&input))
-                    } else {
-                        reactions::generate_rule_reaction(&input)
-                    }
+            // Try LLM path first; fall back to rule-based on any failure (#404).
+            let emoji = if llm_enabled {
+                if let Some(ref c) = client {
+                    reactions::infer_player_message_reaction(
+                        c,
+                        &model,
+                        &npc,
+                        &input,
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    .or_else(|| reactions::generate_rule_reaction(&input))
                 } else {
                     reactions::generate_rule_reaction(&input)
-                };
-
-                (npc.name.clone(), emoji)
-            });
-        }
-
-        // Collect results as tasks finish, then persist + emit each reaction.
-        while let Some(result) = join_set.join_next().await {
-            let (npc_name, emoji) = match result {
-                Ok((name, Some(emoji))) => (name, emoji),
-                Ok((_, None)) => continue,
-                Err(e) if e.is_panic() => {
-                    tracing::error!(error = %e, "npc reaction task panicked");
-                    continue;
                 }
-                Err(e) if e.is_cancelled() => {
-                    tracing::debug!("npc reaction task cancelled (shutdown)");
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "npc reaction task ended unexpectedly");
-                    continue;
-                }
+            } else {
+                reactions::generate_rule_reaction(&input)
             };
 
-            // Persist to reaction_log so NPC memory is maintained (#403).
-            if let Some(ref mgr) = npc_manager_for_persist {
-                let mut npc_manager = mgr.lock().await;
-                if let Some(npc_mut) = npc_manager.find_by_name_mut(&npc_name) {
-                    npc_mut.reaction_log.add_player_message_reaction(
-                        &emoji,
-                        &player_input,
-                        chrono::Utc::now(),
-                    );
-                }
-            }
+            (npc.name.clone(), emoji)
+        });
+    }
 
-            emitter.emit_event(
-                "npc-reaction",
-                serde_json::to_value(NpcReactionPayload {
-                    message_id: player_msg_id.clone(),
-                    emoji,
-                    source: capitalize_first(&npc_name),
-                })
-                .unwrap_or(serde_json::Value::Null),
-            );
-        }
-    });
-
-    // Watcher: keeps emit_npc_reactions non-blocking while making panics visible
-    // and quietly absorbing the cancellation seen during runtime shutdown.
-    tokio::spawn(async move {
-        match handle.await {
-            Ok(_) => {}
+    // Collect results as tasks finish, then persist + emit each reaction.
+    while let Some(result) = join_set.join_next().await {
+        let (npc_name, emoji) = match result {
+            Ok((name, Some(emoji))) => (name, emoji),
+            Ok((_, None)) => continue,
             Err(e) if e.is_panic() => {
-                tracing::error!(error = %e, "emit_npc_reactions task panicked");
+                tracing::error!(error = %e, "npc reaction task panicked");
+                continue;
             }
             Err(e) if e.is_cancelled() => {
-                tracing::debug!("emit_npc_reactions task cancelled (shutdown)");
+                tracing::debug!("npc reaction task cancelled (shutdown)");
+                continue;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "emit_npc_reactions task ended unexpectedly");
+                tracing::warn!(error = %e, "npc reaction task ended unexpectedly");
+                continue;
             }
-        }
-    });
+        };
+
+        // Persist to reaction_log so NPC memory is maintained (#403).
+        on_persist(npc_name.clone(), emoji.clone()).await;
+
+        emitter.emit_event(
+            "npc-reaction",
+            serde_json::to_value(NpcReactionPayload {
+                message_id: player_msg_id.clone(),
+                emoji,
+                source: capitalize_first(&npc_name),
+            })
+            .unwrap_or(serde_json::Value::Null),
+        );
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

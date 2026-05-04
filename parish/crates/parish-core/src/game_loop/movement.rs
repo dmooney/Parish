@@ -19,10 +19,13 @@ use std::sync::Arc;
 
 use crate::config::InferenceCategory;
 use crate::game_loop::GameLoopContext;
-use crate::game_session::{GameEffects, apply_movement, enrich_travel_encounter, roll_travel_encounter, stream_reaction_texts};
+use crate::game_session::{
+    GameEffects, apply_movement, enrich_travel_encounter, roll_travel_encounter,
+    stream_reaction_texts,
+};
 use crate::ipc::{
-    StreamEndPayload, StreamTokenPayload, snapshot_from_world, compute_name_hints,
-    text_log, text_log_typed,
+    StreamEndPayload, StreamTokenPayload, compute_name_hints, snapshot_from_world, text_log,
+    text_log_typed,
 };
 use crate::npc::reactions::ReactionTemplates;
 use crate::world::transport::TransportMode;
@@ -137,7 +140,16 @@ pub async fn handle_movement(
 
     // Emit NPC arrival reactions — stream gradually like normal NPC dialogue
     if !effects.arrival_reactions.is_empty() {
-        let (all_npcs, current_location_id, loc_name, tod, weather, introduced, reaction_client, reaction_model) = {
+        let (
+            all_npcs,
+            current_location_id,
+            loc_name,
+            tod,
+            weather,
+            introduced,
+            reaction_client,
+            reaction_model,
+        ) = {
             let world = ctx.world.lock().await;
             let npc_manager = ctx.npc_manager.lock().await;
             let config = ctx.config.lock().await;
@@ -147,7 +159,10 @@ pub async fn handle_movement(
             (
                 npc_manager.all_npcs().cloned().collect::<Vec<_>>(),
                 world.player_location,
-                world.current_location_data().map(|d| d.name.clone()).unwrap_or_default(),
+                world
+                    .current_location_data()
+                    .map(|d| d.name.clone())
+                    .unwrap_or_default(),
                 world.clock.time_of_day(),
                 world.weather.to_string(),
                 npc_manager.introduced_set(),

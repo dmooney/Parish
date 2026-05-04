@@ -81,7 +81,7 @@ pub async fn handle_game_input(
             world.clock.inference_pause();
             world.tick_generation
         };
-        let result = parse_intent(&client, &raw, &model).await;
+        let result = parse_intent(client, &raw, &model).await;
         {
             let mut world = ctx.world.lock().await;
             world.clock.inference_resume();
@@ -182,8 +182,7 @@ pub async fn handle_game_input(
     // inline @mentions that aren't already in the chip set.  Deduping happens
     // in `resolve_npc_targets` via `find_by_name`, which matches both real
     // and display names.
-    let mut targets: Vec<String> =
-        Vec::with_capacity(addressed_to.len() + mentions.names.len());
+    let mut targets: Vec<String> = Vec::with_capacity(addressed_to.len() + mentions.names.len());
     for name in addressed_to {
         if !targets.iter().any(|t| t == &name) {
             targets.push(name);
@@ -285,7 +284,15 @@ mod tests {
         let templates = ReactionTemplates::default();
 
         // "hello there" → no NPC present → idle-message text-log
-        super::handle_game_input(&ctx, "hello there".to_string(), vec![], &transport, &templates, || None).await;
+        super::handle_game_input(
+            &ctx,
+            "hello there".to_string(),
+            vec![],
+            &transport,
+            &templates,
+            || None,
+        )
+        .await;
 
         let names = emitter.event_names();
         assert!(
