@@ -24,6 +24,34 @@
 //! `tauri`, or any crate in `FORBIDDEN_FOR_BACKEND_AGNOSTIC`.  The
 //! `architecture_fitness` test enforces this mechanically.
 //!
+//! # What is and is not extracted (third slice rationale)
+//!
+//! Third slice (#696) aimed to extract `handle_movement`, `handle_game_input`,
+//! `handle_system_command`, `emit_npc_reactions`, `rebuild_inference`,
+//! `do_save_game`, and `do_new_game` from all three runtimes.  After reading
+//! the actual call signatures and `AppState` layouts, the following were
+//! confirmed non-extractable at this slice without restructuring `AppState`:
+//!
+//! - **`handle_system_command`**: mode-specific side effects (`Quit` exits the
+//!   process/app, `ShowSpinner` drives a backend-specific animation, `ToggleMap`
+//!   dumps a text map in CLI vs. emitting a UI event in GUI modes).
+//! - **`rebuild_inference`**: depends on server's `BroadcastEventBus` /
+//!   `InferenceClient` trait stack vs. Tauri's `app.emit` path.
+//! - **`do_save_game` / `do_new_game`**: server uses `spawn_blocking +
+//!   Database::open`; CLI uses `Arc<AsyncDatabase>` directly; Tauri uses a
+//!   third variant. No shared `SessionStore` trait is in use at these call sites.
+//! - **`emit_npc_reactions`**: spawns a background task that needs `Arc::clone`
+//!   of the full `AppState`. State fields are `Mutex<T>` inside `Arc<AppState>`,
+//!   not individually arc-wrapped, so there is no portable parameter form.
+//! - **`handle_movement` / `handle_game_input`**: use `state.transport`,
+//!   `state.game_mod`, `state.reaction_templates`, and backend-specific event
+//!   patterns; no cost-free extraction exists without extending `GameLoopContext`
+//!   significantly.
+//!
+//! What WAS extracted in slice 3:
+//! - [`reactions::is_snippet_injection_char`] — shared injection-validation
+//!   logic used by `react_to_message` on every runtime (#687 security parity).
+//!
 //! # Headless CLI
 //!
 //! The headless CLI (`parish-cli`) uses a flat `App` struct with bare (non-Mutex)
