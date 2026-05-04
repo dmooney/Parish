@@ -1,19 +1,21 @@
 //! Shared orchestration layer — game-loop functions extracted from all three
-//! backends (#696).
+//! backends (#696 slices 2-5).
 //!
 //! # Design
 //!
 //! The three Parish runtimes (axum web server, Tauri desktop, headless CLI)
 //! previously duplicated long functions like `run_npc_turn`,
-//! `handle_npc_conversation`, and `run_idle_banter` verbatim, with only their
-//! event-emission calls differing.  This module resolves the duplication by:
+//! `handle_npc_conversation`, `run_idle_banter`, and `emit_npc_reactions`
+//! verbatim, with only their event-emission calls differing.  This module
+//! resolves the duplication by:
 //!
 //! 1. Defining a [`GameLoopContext`] borrow struct that carries references to
 //!    the shared Tokio-Mutex–wrapped game state that all runtimes need.
 //! 2. Exposing free async functions — [`run_npc_turn`], [`handle_npc_conversation`],
-//!    [`run_idle_banter`], [`reactions::emit_npc_reactions`] — that take a
-//!    [`GameLoopContext`] and/or a `&dyn EventEmitter` and operate identically
-//!    across all runtimes.
+//!    [`run_idle_banter`] — that take a [`GameLoopContext`] and a
+//!    `&dyn EventEmitter` and operate identically across all runtimes.
+//! 3. Exposing [`emit_npc_reactions`] which fires background NPC reaction tasks
+//!    accepting pre-resolved parameters (no `Arc<AppState>` dependency).
 //!
 //! Each backend constructs a `GameLoopContext` by borrowing its own `AppState`
 //! fields, then supplies its backend-specific [`EventEmitter`] implementation.
@@ -81,5 +83,5 @@ pub use inference::{InferenceSlots, rebuild_inference_worker};
 pub use input::{handle_game_input, handle_look};
 pub use movement::handle_movement;
 pub use npc_turn::{TurnOutcome, handle_npc_conversation, run_idle_banter, run_npc_turn};
-pub use reactions::{emit_npc_reactions, is_snippet_injection_char};
+pub use reactions::{PersistReactionFn, emit_npc_reactions, is_snippet_injection_char};
 pub use save::load_fresh_world_and_npcs;
