@@ -555,6 +555,7 @@ mod tests {
         CachedResponse, IDEMPOTENCY_CACHE_CAPACITY, IDEMPOTENCY_TTL, IdempotencyKey,
         SessionRegistry,
     };
+    use crate::session_store_impl::{SqliteIdentityStore, open_sessions_db};
 
     // ── Helper: minimal GlobalState for idempotency tests ───────────────────
 
@@ -594,7 +595,15 @@ mod tests {
             auto_pause_timeout_seconds: 60,
         };
         let theme_palette = parish_core::game_mod::default_theme_palette();
+        let session_store: std::sync::Arc<dyn parish_core::session_store::SessionStore> =
+            std::sync::Arc::new(crate::session_store_impl::DbSessionStore::new(
+                saves_dir.clone(),
+            ));
+        let identity_conn = open_sessions_db(&saves_dir).unwrap();
+        let identity_store: std::sync::Arc<dyn parish_core::identity::IdentityStore> =
+            std::sync::Arc::new(SqliteIdentityStore::new(identity_conn));
         let app_state = crate::state::build_app_state(
+            "test-session".to_string(),
             world,
             npc_manager,
             None,
@@ -630,6 +639,7 @@ mod tests {
             None,
             data_dir.join("parish-flags.json"),
             parish_core::config::InferenceConfig::default(),
+            session_store,
         );
 
         let tile_cache = parish_core::tile_cache::TileCache::new(
@@ -639,6 +649,7 @@ mod tests {
 
         Arc::new(crate::session::GlobalState {
             sessions,
+            identity_store,
             oauth_config: None,
             data_dir,
             world_path: std::path::PathBuf::from("/dev/null"),
