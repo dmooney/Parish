@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod cf_auth;
 pub mod editor_routes;
+pub mod emitter;
 pub mod middleware;
 pub mod route_registry;
 pub mod routes;
@@ -554,6 +555,34 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         parish_core::tile_cache::TileCache::new(tile_cache_dir.clone(), tile_url_templates);
     tracing::info!(dir = %tile_cache_dir.display(), "Tile cache initialised");
 
+    // ── Admission control: max concurrent sessions (#620) ────────────────────
+    // Resolution order: PARISH_MAX_SESSIONS env var > [engine.session] TOML >
+    // compiled-in default (50).  The feature flag "admission-control" is
+    // default-on per CLAUDE.md rule #6: use `is_disabled` as the pivot so an
+    // unknown flag (no entry) is treated as enabled.
+    let max_concurrent_sessions: Option<usize> = {
+        let flag_active = !config.flags.is_disabled("admission-control");
+        if flag_active {
+            let cap = std::env::var("PARISH_MAX_SESSIONS")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(engine_config.session.max_concurrent_sessions);
+            tracing::info!(
+                cap,
+                source = if std::env::var("PARISH_MAX_SESSIONS").is_ok() {
+                    "PARISH_MAX_SESSIONS env"
+                } else {
+                    "engine config / default"
+                },
+                "Admission control enabled"
+            );
+            Some(cap)
+        } else {
+            tracing::info!("Admission control disabled via feature flag");
+            None
+        }
+    };
+
     // ── Global state ──────────────────────────────────────────────────────────
     let global = Arc::new(GlobalState {
         sessions,
@@ -577,6 +606,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
                 NonZeroUsize::new(session::IDEMPOTENCY_CACHE_CAPACITY).unwrap(),
             ))
         },
+        max_concurrent_sessions,
     });
 
     // ── Session cleanup background task ───────────────────────────────────────

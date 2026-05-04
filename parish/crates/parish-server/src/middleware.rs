@@ -237,7 +237,22 @@ pub async fn session_middleware_tower(
         }
     }
 
-    let (session_id, entry, is_new) = get_or_create_session(&global, cookie_id.as_deref()).await;
+    let session_result = get_or_create_session(&global, cookie_id.as_deref()).await;
+    let (session_id, entry, is_new) = match session_result {
+        Ok(tuple) => tuple,
+        Err(e) => {
+            // Admission control: server is at capacity.
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::RETRY_AFTER, "30")],
+                format!(
+                    "Server at capacity ({}/{} sessions). Retry after 30 seconds.",
+                    e.current, e.cap
+                ),
+            )
+                .into_response();
+        }
+    };
 
     // If this request created (or replaced) the parish session, persist
     // the new id back into the tower-session so subsequent requests find
@@ -297,7 +312,22 @@ pub async fn session_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| extract_cookie_value(cookies, SESSION_COOKIE));
 
-    let (session_id, entry, is_new) = get_or_create_session(&global, cookie_id.as_deref()).await;
+    let session_result = get_or_create_session(&global, cookie_id.as_deref()).await;
+    let (session_id, entry, is_new) = match session_result {
+        Ok(tuple) => tuple,
+        Err(e) => {
+            // Admission control: server is at capacity.
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::RETRY_AFTER, "30")],
+                format!(
+                    "Server at capacity ({}/{} sessions). Retry after 30 seconds.",
+                    e.current, e.cap
+                ),
+            )
+                .into_response();
+        }
+    };
 
     // Inject the per-session AppState and session id as Axum extensions.
     req.extensions_mut().insert(Arc::clone(&entry.app_state));
@@ -649,6 +679,7 @@ mod tests {
             idempotency_cache: tokio::sync::Mutex::new(LruCache::new(
                 NonZeroUsize::new(IDEMPOTENCY_CACHE_CAPACITY).unwrap(),
             )),
+            max_concurrent_sessions: None,
         })
     }
 
