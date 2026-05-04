@@ -18,6 +18,7 @@ use parish_core::game_mod::default_theme_palette;
 use parish_core::inference::client::OllamaProcess;
 use parish_core::world::transport::TransportConfig;
 use parish_server::session::{GlobalState, SessionRegistry};
+use parish_server::session_store_impl::{SqliteIdentityStore, open_sessions_db};
 use parish_server::state::{GameConfig, UiConfigSnapshot};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -67,9 +68,13 @@ fn default_ui_config() -> UiConfigSnapshot {
 fn make_global_state(tmp: &tempfile::TempDir, cap: Option<usize>) -> Arc<GlobalState> {
     let saves_dir = tmp.path().to_path_buf();
     let sessions = SessionRegistry::open(&saves_dir).expect("SessionRegistry::open");
+    let identity_conn = open_sessions_db(&saves_dir).expect("open_sessions_db");
+    let identity_store: std::sync::Arc<dyn parish_core::identity::IdentityStore> =
+        std::sync::Arc::new(SqliteIdentityStore::new(identity_conn));
 
     Arc::new(GlobalState {
         sessions,
+        identity_store,
         oauth_config: None,
         data_dir: saves_dir.clone(),
         world_path: saves_dir.join("world.json"),
