@@ -1174,7 +1174,46 @@ async fn set_conversation_running(state: &Arc<AppState>, running: bool) {
     conversation.conversation_in_progress = running;
 }
 
+/// Routes input to one or more NPCs at the player's location, or shows an idle message.
+///
+/// Delegates to [`parish_core::game_loop::handle_npc_conversation`] for all
+/// shared logic (#696), then emits a world-update snapshot when inference
+/// finishes.
 async fn handle_npc_conversation(
+    raw: String,
+    target_names: Vec<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+) {
+    let emitter: std::sync::Arc<dyn parish_core::ipc::EventEmitter> =
+        std::sync::Arc::new(crate::events::TauriEmitter::new(app.clone()));
+    let ctx = parish_core::game_loop::GameLoopContext {
+        world: &state.world,
+        npc_manager: &state.npc_manager,
+        config: &state.config,
+        conversation: &state.conversation,
+        inference_queue: &state.inference_queue,
+        emitter: std::sync::Arc::clone(&emitter),
+        inference_config: &state.inference_config,
+        pronunciations: &state.pronunciations,
+        client: &state.client,
+        cloud_client: &state.cloud_client,
+    };
+
+    let app_for_loading = app.clone();
+    let spawn_loading = move || {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        crate::events::spawn_loading_animation(app_for_loading.clone(), cancel.clone());
+        Some(cancel)
+    };
+
+    emit_world_update(&state, &app).await;
+    parish_core::game_loop::handle_npc_conversation(&ctx, raw, target_names, spawn_loading).await;
+    emit_world_update(&state, &app).await;
+}
+
+#[allow(dead_code)]
+async fn handle_npc_conversation_legacy(
     raw: String,
     target_names: Vec<String>,
     state: tauri::State<'_, Arc<AppState>>,
@@ -1368,7 +1407,34 @@ async fn handle_npc_conversation(
     );
 }
 
+/// Generates spontaneous NPC banter when the player has been idle.
+///
+/// Delegates to [`parish_core::game_loop::run_idle_banter`] for all shared
+/// logic (#696), then emits a world-update snapshot when the sequence ends.
 async fn run_idle_banter(state: &Arc<AppState>, app: &tauri::AppHandle) {
+    let emitter: std::sync::Arc<dyn parish_core::ipc::EventEmitter> =
+        std::sync::Arc::new(crate::events::TauriEmitter::new(app.clone()));
+    let ctx = parish_core::game_loop::GameLoopContext {
+        world: &state.world,
+        npc_manager: &state.npc_manager,
+        config: &state.config,
+        conversation: &state.conversation,
+        inference_queue: &state.inference_queue,
+        emitter: std::sync::Arc::clone(&emitter),
+        inference_config: &state.inference_config,
+        pronunciations: &state.pronunciations,
+        client: &state.client,
+        cloud_client: &state.cloud_client,
+    };
+
+    emit_world_update(state, app).await;
+    // Idle banter spawns no loading animation.
+    parish_core::game_loop::run_idle_banter(&ctx, || None).await;
+    emit_world_update(state, app).await;
+}
+
+#[allow(dead_code)]
+async fn run_idle_banter_legacy(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let (queue, model, player_location, max_follow_up_turns, speakers) = {
         let world = state.world.lock().await;
         let npc_manager = state.npc_manager.lock().await;
