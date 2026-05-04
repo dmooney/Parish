@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 use parish_core::config::InferenceConfig;
 use parish_core::debug_snapshot::DebugEvent;
 use parish_core::game_mod::PronunciationEntry;
-use parish_core::inference::{AnyClient, InferenceLog, InferenceQueue};
+use parish_core::inference::{AnyClient, InferenceClient, InferenceLog, InferenceQueue};
 use parish_core::ipc::ThemePalette;
 use parish_core::npc::manager::NpcManager;
 use parish_core::session_store::SessionStore;
@@ -126,6 +126,18 @@ pub struct AppState {
     pub client: Mutex<Option<AnyClient>>,
     /// Cloud LLM client for dialogue (None if not configured).
     pub cloud_client: Mutex<Option<AnyClient>>,
+    /// Trait-erased inference client stack (caching + metrics decorator, #617).
+    ///
+    /// All inference call sites that use the new `InferenceClient` trait go
+    /// through this `Arc`.  It is constructed by
+    /// `parish_inference::build_inference_client_stack` and wraps `client` or
+    /// `cloud_client` with an optional LRU cache and a metrics layer.
+    ///
+    /// `None` when no provider is configured (same lifecycle as `client`).
+    ///
+    /// Not part of the lock-ordering chain — `Arc<dyn InferenceClient>` is
+    /// never held across lock acquisition of any `Mutex` field.
+    pub inference_client: Option<Arc<dyn InferenceClient>>,
     /// Mutable runtime configuration.
     pub config: Mutex<GameConfig>,
     /// Local conversation transcript and inactivity tracking.
@@ -232,6 +244,17 @@ pub fn build_app_state(
         .as_ref()
         .map(|gm| gm.pronunciations.clone())
         .unwrap_or_default();
+
+    // Build the trait-erased inference client stack (#617).
+    // Feature flags are not yet loaded at this point (flags_path not read),
+    // so we default both inference-client-trait and inference-response-cache
+    // to on (the per-CLAUDE.md §6 default-on convention).  Routes/handlers
+    // that need the flag-gated behaviour should check flags at call time.
+    let inference_client = client.as_ref().map(|c| {
+        let cache_capacity = parish_core::inference::cache_capacity_from_env();
+        parish_core::inference::build_inference_client_stack(c.clone(), true, cache_capacity)
+    });
+
     Arc::new(AppState {
         session_id,
         world: Mutex::new(world),
@@ -240,6 +263,7 @@ pub fn build_app_state(
         inference_log: parish_core::inference::new_inference_log(),
         client: Mutex::new(client),
         cloud_client: Mutex::new(cloud_client),
+        inference_client,
         config: Mutex::new(config),
         conversation: Mutex::new(ConversationRuntimeState::new()),
         debug_events: Mutex::new(std::collections::VecDeque::with_capacity(
