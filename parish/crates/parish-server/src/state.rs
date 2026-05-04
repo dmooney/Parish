@@ -175,6 +175,11 @@ impl ConversationRuntimeState {
 /// refresh, or `world` across a save-to-disk, will serialise every
 /// concurrent session behind that one path.
 pub struct AppState {
+    /// Stable identifier for this session — the same UUID that appears in the
+    /// `parish_sid` cookie.  Stored here so background tasks (tick loop, etc.)
+    /// can emit per-session tracing events without holding the middleware
+    /// extensions (#621).
+    pub session_id: String,
     /// The game world (clock, player position, graph, weather).
     pub world: Mutex<WorldState>,
     /// NPC manager (all NPCs, tier assignment, schedule ticking).
@@ -318,6 +323,7 @@ impl EventBus {
 // would add complexity without benefit, so the many-argument constructor is intentional.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state(
+    session_id: String,
     world: WorldState,
     npc_manager: NpcManager,
     client: Option<AnyClient>,
@@ -338,6 +344,7 @@ pub fn build_app_state(
         .map(|gm| gm.pronunciations.clone())
         .unwrap_or_default();
     Arc::new(AppState {
+        session_id,
         world: Mutex::new(world),
         npc_manager: Mutex::new(npc_manager),
         inference_queue: Mutex::new(None),
