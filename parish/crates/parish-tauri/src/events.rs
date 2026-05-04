@@ -94,12 +94,12 @@ pub struct SetupStatusPayload {
     pub message: String,
 }
 
-/// Payload for `setup-progress` events (model download progress).
+/// Payload for `setup-progress` events (aggregate model download progress).
 #[derive(serde::Serialize, Clone)]
 pub struct SetupProgressPayload {
-    /// Bytes downloaded so far.
+    /// Bytes downloaded so far across discovered Ollama pull artifacts.
     pub completed: u64,
-    /// Total bytes expected (0 if unknown).
+    /// Total bytes expected across discovered Ollama pull artifacts (0 if unknown).
     pub total: u64,
 }
 
