@@ -92,10 +92,8 @@ fn make_global_state(tmp: &tempfile::TempDir, cap: Option<usize>) -> Arc<GlobalS
             HashMap::new(),
         ),
         idempotency_cache: tokio::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(
-                parish_server::session::IDEMPOTENCY_CACHE_CAPACITY,
-            )
-            .unwrap(),
+            std::num::NonZeroUsize::new(parish_server::session::IDEMPOTENCY_CACHE_CAPACITY)
+                .unwrap(),
         )),
         max_concurrent_sessions: cap,
     })
