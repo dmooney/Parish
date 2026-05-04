@@ -60,7 +60,8 @@ pub use parish_core::ipc::{ConversationRuntimeState, SaveState, UiConfigSnapshot
 ///         → config
 ///           → client
 ///             → cloud_client
-///               → debug_events
+///               → inference_client
+///                 → debug_events
 ///                 → game_events
 ///                   → inference_log
 ///                     → editor_sessions
@@ -135,9 +136,10 @@ pub struct AppState {
     ///
     /// `None` when no provider is configured (same lifecycle as `client`).
     ///
-    /// Not part of the lock-ordering chain — `Arc<dyn InferenceClient>` is
-    /// never held across lock acquisition of any `Mutex` field.
-    pub inference_client: Option<Arc<dyn InferenceClient>>,
+    /// Behind a `Mutex` so that `rebuild_inference` can swap it atomically
+    /// when the provider/key changes at runtime — same lifecycle as `client`.
+    /// Lock ordering: acquire after `cloud_client`, before `debug_events`.
+    pub inference_client: Mutex<Option<Arc<dyn InferenceClient>>>,
     /// Mutable runtime configuration.
     pub config: Mutex<GameConfig>,
     /// Local conversation transcript and inactivity tracking.
@@ -263,7 +265,7 @@ pub fn build_app_state(
         inference_log: parish_core::inference::new_inference_log(),
         client: Mutex::new(client),
         cloud_client: Mutex::new(cloud_client),
-        inference_client,
+        inference_client: Mutex::new(inference_client),
         config: Mutex::new(config),
         conversation: Mutex::new(ConversationRuntimeState::new()),
         debug_events: Mutex::new(std::collections::VecDeque::with_capacity(
