@@ -24,50 +24,62 @@
 //! `tauri`, or any crate in `FORBIDDEN_FOR_BACKEND_AGNOSTIC`.  The
 //! `architecture_fitness` test enforces this mechanically.
 //!
-//! # What is and is not extracted (third slice rationale)
+//! # Extraction history — what was extracted and what remains
 //!
-//! Third slice (#696) aimed to extract `handle_movement`, `handle_game_input`,
-//! `handle_system_command`, `emit_npc_reactions`, `rebuild_inference`,
-//! `do_save_game`, and `do_new_game` from all three runtimes.  After reading
-//! the actual call signatures and `AppState` layouts, the following were
-//! confirmed non-extractable at this slice without restructuring `AppState`:
+//! ## Slices 1–5 (#696)
 //!
-//! - **`handle_system_command`**: mode-specific side effects (`Quit` exits the
-//!   process/app, `ShowSpinner` drives a backend-specific animation, `ToggleMap`
-//!   dumps a text map in CLI vs. emitting a UI event in GUI modes).
-//! - **`rebuild_inference`**: depends on server's `BroadcastEventBus` /
-//!   `InferenceClient` trait stack vs. Tauri's `app.emit` path.
-//! - **`do_save_game` / `do_new_game`**: server uses `spawn_blocking +
-//!   Database::open`; CLI uses `Arc<AsyncDatabase>` directly; Tauri uses a
-//!   third variant. No shared `SessionStore` trait is in use at these call sites.
-//! - **`emit_npc_reactions`**: spawns a background task that needs `Arc::clone`
-//!   of the full `AppState`. State fields are `Mutex<T>` inside `Arc<AppState>`,
-//!   not individually arc-wrapped, so there is no portable parameter form.
-//! - **`handle_movement` / `handle_game_input`**: use `state.transport`,
-//!   `state.game_mod`, `state.reaction_templates`, and backend-specific event
-//!   patterns; no cost-free extraction exists without extending `GameLoopContext`
-//!   significantly.
+//! Extracted: `run_npc_turn`, `handle_npc_conversation`, `run_idle_banter`,
+//! `handle_game_input`, `handle_movement`, `emit_npc_reactions`,
+//! `is_snippet_injection_char`.  Server and Tauri delegate to these via
+//! `GameLoopContext`; the headless CLI was deferred (see below).
 //!
-//! What WAS extracted in slice 3:
-//! - [`reactions::is_snippet_injection_char`] — shared injection-validation
-//!   logic used by `react_to_message` on every runtime (#687 security parity).
+//! ## Slice 6 (#696) — this slice
 //!
-//! # Headless CLI
+//! **Extracted into [`inference`]:**
+//! - [`rebuild_inference_worker`] — abort old worker, build new `AnyClient`,
+//!   spawn new worker, install queue.  Server and Tauri delegate to this via
+//!   [`InferenceSlots`]; each runtime still handles backend-specific side effects
+//!   (server updates the trait-erased `inference_client` slot and emits a URL
+//!   warning via the event bus; Tauri emits via `app.emit`).
 //!
-//! The headless CLI (`parish-cli`) uses a flat `App` struct with bare (non-Mutex)
-//! fields, which cannot borrow directly into [`GameLoopContext`].  Migration of
-//! `parish-cli` to the shared context is deferred to a future refactor — it
-//! requires wrapping `App`'s fields in `Arc<Mutex<>>` which is a wider change.
-//! In the meantime, `parish-cli` continues to use its own inline implementations.
+//! **Extracted into [`save`]:**
+//! - [`load_fresh_world_and_npcs`] — pure world + NPC reload from game mod or
+//!   legacy data files.  Both server and Tauri delegate to this.
+//!
+//! **Not extracted (confirmed non-extractable without larger AppState refactor):**
+//!
+//! - **`handle_system_command`**: all 16 `CommandEffect` variants have
+//!   backend-specific side effects (`Quit` exits the process/app differently,
+//!   `ShowSpinner` uses backend-specific animation, `ToggleMap` emits different
+//!   event shapes, etc.).  A trait covering all variants would add more code
+//!   than it removes.
+//! - **`do_save_game`**: server and Tauri use different `AppState` concrete types
+//!   and different `spawn_blocking + Database::open` call sites.  The shared
+//!   [`SessionStore`] trait exists (#614) but is not yet wired into the command
+//!   handler paths; threading `Arc<dyn SessionStore>` through every `AppState`
+//!   variant is a future slice.
+//!
+//! ## Headless CLI deferral
+//!
+//! `parish-cli` uses a flat `App` struct with bare (non-Mutex) fields, which
+//! cannot borrow directly into [`GameLoopContext`].  Migrating it requires
+//! wrapping fields in `Arc<Mutex<T>>` — a wider change tracked for a future
+//! slice.  The CLI continues to use its own inline implementations.
+//!
+//! [`SessionStore`]: crate::session_store::SessionStore
 
 pub mod context;
+pub mod inference;
 pub mod input;
 pub mod movement;
 pub mod npc_turn;
 pub mod reactions;
+pub mod save;
 
 pub use context::GameLoopContext;
+pub use inference::{InferenceSlots, rebuild_inference_worker};
 pub use input::{handle_game_input, handle_look};
 pub use movement::handle_movement;
 pub use npc_turn::{TurnOutcome, handle_npc_conversation, run_idle_banter, run_npc_turn};
 pub use reactions::{emit_npc_reactions, is_snippet_injection_char};
+pub use save::load_fresh_world_and_npcs;
