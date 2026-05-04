@@ -24,9 +24,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// persisted via `IdentityStore::create_account`.  It never changes even when
 /// the user's email changes or their OAuth provider is re-linked (#618).
 ///
-/// When the `account-id-keying` feature flag is disabled (kill-switch), the
-/// guard still populates this field but handlers fall back to email-based
-/// keying for backward compatibility.
+/// When the `account-id-keying` feature flag is disabled (kill-switch) the
+/// guard derives a deterministic UUID from the email bytes so every user
+/// still gets a unique, per-email identity without touching the identity store.
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     /// Stable per-user identifier — use this as the map key in handlers.

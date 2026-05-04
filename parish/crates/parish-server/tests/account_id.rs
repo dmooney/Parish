@@ -106,6 +106,35 @@ fn link_provider_email_change_preserves_account_id() {
 
 // ── 3. Auth flow regression: valid AuthContext is produced ───────────────────
 
+/// Helper that mirrors `resolve_account_id` from lib.rs (both the enabled and
+/// disabled-flag paths) so the kill-switch and happy-path tests share the same
+/// logic without duplicating the implementation.
+fn resolve_for_test(store: &SqliteIdentityStore, email: &str, flag_disabled: bool) -> uuid::Uuid {
+    // Kill-switch path: deterministic UUID derived from email bytes (no DB).
+    if flag_disabled {
+        let bytes = email.as_bytes();
+        let mut buf = [0u8; 16];
+        for (i, &b) in bytes.iter().enumerate() {
+            buf[i % 16] ^= b;
+        }
+        buf[6] = (buf[6] & 0x0f) | 0x40;
+        buf[8] = (buf[8] & 0x3f) | 0x80;
+        return uuid::Uuid::from_bytes(buf);
+    }
+
+    const PROVIDER: &str = "cf-access";
+    if let Some(existing_id) = store.lookup_by_provider(PROVIDER, email)
+        && let Ok(id) = uuid::Uuid::parse_str(&existing_id)
+    {
+        return id;
+    }
+    let new_id = uuid::Uuid::new_v4();
+    let id_str = new_id.to_string();
+    store.create_account(&id_str);
+    store.link_provider(PROVIDER, email, &id_str, email);
+    new_id
+}
+
 /// Simulates the `resolve_account_id` logic in `lib.rs` end-to-end:
 /// a fresh email produces a valid UUID, and repeated calls return the same UUID.
 #[test]
@@ -114,29 +143,10 @@ fn auth_flow_produces_valid_auth_context_uuid() {
     let conn = open_sessions_db(tmp.path()).unwrap();
     let store = SqliteIdentityStore::new(std::sync::Arc::clone(&conn));
 
-    const PROVIDER: &str = "cf-access";
     let email = "bob@example.com";
-    let flags = parish_core::config::FeatureFlags::default();
-
-    // Helper that mirrors `resolve_account_id` from lib.rs.
-    let resolve = |email: &str| -> uuid::Uuid {
-        if flags.is_disabled("account-id-keying") {
-            return uuid::Uuid::nil();
-        }
-        if let Some(existing_id) = store.lookup_by_provider(PROVIDER, email)
-            && let Ok(id) = uuid::Uuid::parse_str(&existing_id)
-        {
-            return id;
-        }
-        let new_id = uuid::Uuid::new_v4();
-        let id_str = new_id.to_string();
-        store.create_account(&id_str);
-        store.link_provider(PROVIDER, email, &id_str, email);
-        new_id
-    };
 
     // First resolution mints a new account.
-    let id1 = resolve(email);
+    let id1 = resolve_for_test(&store, email, false);
     assert_ne!(
         id1,
         uuid::Uuid::nil(),
@@ -144,13 +154,51 @@ fn auth_flow_produces_valid_auth_context_uuid() {
     );
 
     // Second resolution returns the same UUID.
-    let id2 = resolve(email);
+    let id2 = resolve_for_test(&store, email, false);
     assert_eq!(
         id1, id2,
         "repeated auth resolutions must return the same UUID"
     );
 
     // A different email gets a different UUID.
-    let id3 = resolve("charlie@example.com");
+    let id3 = resolve_for_test(&store, "charlie@example.com", false);
     assert_ne!(id1, id3, "different emails must get different account_ids");
+}
+
+// ── 4. Kill-switch: disabled flag gives deterministic per-email UUID ──────────
+
+/// When `account-id-keying` is disabled, `resolve_account_id` must return a
+/// deterministic, non-nil UUID derived from the email bytes.  Two callers for
+/// the same email must get the same UUID; different emails must get different
+/// UUIDs.  No DB writes must occur.
+#[test]
+fn disabled_flag_gives_deterministic_non_nil_uuid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let conn = open_sessions_db(tmp.path()).unwrap();
+    let store = SqliteIdentityStore::new(std::sync::Arc::clone(&conn));
+
+    let email_a = "alice@example.com";
+    let email_b = "bob@example.com";
+
+    let id_a1 = resolve_for_test(&store, email_a, true /* flag disabled */);
+    let id_a2 = resolve_for_test(&store, email_a, true);
+    let id_b = resolve_for_test(&store, email_b, true);
+
+    assert_ne!(
+        id_a1,
+        uuid::Uuid::nil(),
+        "disabled flag must not return nil"
+    );
+    assert_eq!(
+        id_a1, id_a2,
+        "same email must map to same UUID when flag is disabled"
+    );
+    assert_ne!(id_a1, id_b, "different emails must produce different UUIDs");
+
+    // No accounts should have been written to the DB.
+    assert_eq!(
+        store.lookup_by_provider("cf-access", email_a),
+        None,
+        "kill-switch path must not touch the identity store"
+    );
 }

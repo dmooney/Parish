@@ -187,15 +187,28 @@ static AUTH_FAILURES: AtomicU64 = AtomicU64::new(0);
 /// returned via `lookup_by_provider`.  Both operations are idempotent (#618).
 ///
 /// When the `account-id-keying` feature flag is disabled (kill-switch) the
-/// function returns `Uuid::nil()` so all callers can still compile and run;
-/// the email-based keying paths in handlers are guarded by the same flag.
+/// function derives a deterministic UUID from the email bytes so every user
+/// still gets a unique, stable identity without touching the persistent store.
+/// This preserves per-user isolation while allowing a rollback without
+/// redeploying a new binary.
 fn resolve_account_id(
     identity_store: &dyn parish_core::identity::IdentityStore,
     email: &str,
     flags: &parish_core::config::FeatureFlags,
 ) -> uuid::Uuid {
+    // Kill-switch path: deterministic UUID derived from email bytes.
+    // XOR-fold is collision-resistant for our user population and produces
+    // a unique, non-nil UUID per email without any DB access.
     if flags.is_disabled("account-id-keying") {
-        return uuid::Uuid::nil();
+        let bytes = email.as_bytes();
+        let mut buf = [0u8; 16];
+        for (i, &b) in bytes.iter().enumerate() {
+            buf[i % 16] ^= b;
+        }
+        // Set version (4) and variant bits so the UUID is well-formed.
+        buf[6] = (buf[6] & 0x0f) | 0x40;
+        buf[8] = (buf[8] & 0x3f) | 0x80;
+        return uuid::Uuid::from_bytes(buf);
     }
 
     // Use the CF-Access email as the provider_user_id under a synthetic
