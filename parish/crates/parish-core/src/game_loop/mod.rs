@@ -67,9 +67,13 @@
 //! it would touch hundreds of call sites throughout the CLI codebase.
 
 pub mod context;
+pub mod input;
+pub mod movement;
 pub mod npc_turn;
 pub mod reactions;
 
 pub use context::GameLoopContext;
+pub use input::{handle_game_input, handle_look};
+pub use movement::handle_movement;
 pub use npc_turn::{TurnOutcome, handle_npc_conversation, run_idle_banter, run_npc_turn};
 pub use reactions::{PersistReactionFn, emit_npc_reactions, is_snippet_injection_char};

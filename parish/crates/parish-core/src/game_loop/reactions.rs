@@ -1,6 +1,6 @@
 //! Shared reaction-pipeline helpers — extracted from all backends (#696).
 //!
-//! # What is here
+//! # `is_snippet_injection_char`
 //!
 //! - [`is_snippet_injection_char`] — security validation shared by the
 //!   `react_to_message` endpoint on every runtime so injection protection
@@ -25,6 +25,25 @@ use crate::npc::Npc;
 /// Implementations close over an `Arc<AppState>` and lock the NPC manager
 /// to call `reaction_log.add_player_message_reaction` (#403).
 pub type PersistReactionFn = Arc<dyn Fn(String, String, String) + Send + Sync + 'static>;
+
+// ── Injection-safety validation ───────────────────────────────────────────────
+
+/// Returns `true` if `c` should be rejected from a reaction's
+/// `message_snippet` because it could break out of the NPC system prompt
+/// (#498).
+///
+/// Rejects:
+/// - `"` and `\\` — escape out of surrounding JSON/string literals.
+/// - Any Unicode control character (`is_control()`), which covers ASCII
+///   C0 controls (`\n`, `\r`, `\t`, `\0`, etc.) and C1 controls including
+///   U+0085 NEXT LINE.
+/// - U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR — not `control`
+///   under Rust's definition but treated as line breaks by many LLMs.
+pub fn is_snippet_injection_char(c: char) -> bool {
+    c == '"' || c == '\\' || c == '\u{2028}' || c == '\u{2029}' || c.is_control()
+}
+
+// ── Background reaction task ──────────────────────────────────────────────────
 
 /// Fires NPC reactions to a player message as a detached background task.
 ///
@@ -170,23 +189,6 @@ pub fn emit_npc_reactions(
             }
         }
     });
-}
-
-/// Returns `true` for characters that are banned from `message_snippet` values
-/// to prevent NPC system-prompt injection (#498 / #687).
-///
-/// Banned set: double-quote, backslash, Unicode line/paragraph separators
-/// (U+0085 NEL, U+2028, U+2029), and all Unicode control characters
-/// (including `\n`, `\r`, `\t`). This broadened filter covers every sibling
-/// glyph attackers might reach for without enumerating them one at a time.
-///
-/// # Cross-mode parity
-///
-/// `react_to_message` on both the web server (`parish-server/src/routes.rs`)
-/// and the Tauri desktop (`parish-tauri/src/commands.rs`) delegate their
-/// snippet validation here, guaranteeing identical rejection behaviour.
-pub fn is_snippet_injection_char(c: char) -> bool {
-    c == '"' || c == '\\' || c == '\u{2028}' || c == '\u{2029}' || c.is_control()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -343,50 +345,80 @@ mod tests {
         }
     }
 
+    // ── is_snippet_injection_char ─────────────────────────────────────────────
+
     #[test]
     fn blocks_newline() {
         assert!(is_snippet_injection_char('\n'));
     }
 
     #[test]
-    fn blocks_carriage_return() {
-        assert!(is_snippet_injection_char('\r'));
-    }
-
-    #[test]
-    fn blocks_double_quote() {
+    fn rejects_double_quote() {
         assert!(is_snippet_injection_char('"'));
     }
 
     #[test]
-    fn blocks_backslash() {
+    fn rejects_backslash() {
         assert!(is_snippet_injection_char('\\'));
     }
 
     #[test]
-    fn blocks_unicode_line_sep() {
+    fn rejects_line_separator() {
         assert!(is_snippet_injection_char('\u{2028}'));
     }
 
     #[test]
-    fn blocks_unicode_para_sep() {
+    fn rejects_paragraph_separator() {
         assert!(is_snippet_injection_char('\u{2029}'));
     }
 
     #[test]
-    fn allows_normal_text() {
-        for c in "Hello, world! It's a grand day.".chars() {
+    fn rejects_control_chars() {
+        // ASCII C0 controls.
+        assert!(is_snippet_injection_char('\0'));
+        assert!(is_snippet_injection_char('\n'));
+        assert!(is_snippet_injection_char('\r'));
+        assert!(is_snippet_injection_char('\t'));
+        // U+0085 NEXT LINE (C1 control — covered by is_control()).
+        assert!(is_snippet_injection_char('\u{0085}'));
+    }
+
+    #[test]
+    fn allows_normal_ascii() {
+        for c in ('a'..='z').chain('A'..='Z').chain('0'..='9') {
             assert!(
                 !is_snippet_injection_char(c),
-                "char {:?} should be allowed",
-                c
+                "char {c:?} should be allowed"
+            );
+        }
+        for c in [' ', ',', '.', '!', '?', '\'', '-'] {
+            assert!(
+                !is_snippet_injection_char(c),
+                "char {c:?} should be allowed"
             );
         }
     }
 
     #[test]
-    fn blocks_nel_control() {
-        // U+0085 NEL — a Unicode control character
-        assert!(is_snippet_injection_char('\u{0085}'));
+    fn allows_safe_unicode() {
+        // Typical Unicode characters used in Irish text.
+        for c in ['á', 'é', 'í', 'ó', 'ú', 'Á', 'É', 'Í', 'Ó', 'Ú'] {
+            assert!(
+                !is_snippet_injection_char(c),
+                "char {c:?} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_snippet_passes_filter() {
+        let snippet = "He said hello to the priest.";
+        assert!(!snippet.chars().any(is_snippet_injection_char));
+    }
+
+    #[test]
+    fn injection_attempt_fails_filter() {
+        let attack = "\" injection attempt";
+        assert!(attack.chars().any(is_snippet_injection_char));
     }
 }
