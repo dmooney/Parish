@@ -25,6 +25,9 @@ use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
 
 use parish_core::event_bus::{EventBus as EventBusTrait, Topic};
 
+use parish_core::identity::IdentityStore;
+
+use crate::session_store_impl::DbSessionStore;
 use crate::state::{AppState, UiConfigSnapshot, build_app_state};
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -85,6 +88,9 @@ pub struct OAuthConfig {
 pub struct GlobalState {
     /// All active sessions, backed by `saves/sessions.db`.
     pub sessions: SessionRegistry,
+    /// Identity store — maps OAuth provider identities to stable `account_id`
+    /// UUIDs and persists new accounts on first auth (#618).
+    pub identity_store: std::sync::Arc<dyn IdentityStore>,
     /// Google OAuth config; `None` disables the login flow.
     pub oauth_config: Option<OAuthConfig>,
     /// Directory containing game data files (`world.json`, `npcs.json`, …).
@@ -594,7 +600,9 @@ async fn create_session(global: &Arc<GlobalState>, session_id: &str) -> Arc<Sess
     let game_mod = global.game_mod.clone();
 
     let flags_path = global.data_dir.join("parish-flags.json");
+    let session_store = Arc::new(DbSessionStore::new(session_saves.clone()));
     let app_state = build_app_state(
+        session_id.to_string(),
         world,
         npc_manager,
         client.clone(),
@@ -608,6 +616,7 @@ async fn create_session(global: &Arc<GlobalState>, session_id: &str) -> Arc<Sess
         game_mod,
         flags_path,
         global.inference_config.clone(), // (#417) propagate TOML-configured timeouts
+        session_store,
     );
 
     if let Some(ref c) = client {
@@ -692,7 +701,9 @@ async fn restore_session(
     let game_mod = global.game_mod.clone();
 
     let flags_path = global.data_dir.join("parish-flags.json");
+    let session_store = Arc::new(DbSessionStore::new(session_saves.clone()));
     let app_state = build_app_state(
+        session_id.to_string(),
         world,
         npc_manager,
         client.clone(),
@@ -706,6 +717,7 @@ async fn restore_session(
         game_mod,
         flags_path,
         global.inference_config.clone(), // (#417) propagate TOML-configured timeouts
+        session_store,
     );
 
     if let Some(ref c) = client {
@@ -967,6 +979,16 @@ fn spawn_session_ticks(
                     // Advance the generation counter so handle_game_input can
                     // detect TOCTOU races (see issue #283).
                     world.increment_tick_generation();
+
+                    // #621 — Per-session tick metric. Emitted as a structured
+                    // tracing event so log-based metric tools can aggregate
+                    // tick counts per session without a Prometheus exporter.
+                    tracing::debug!(
+                        target: "parish_server::metrics",
+                        session_id = %s.session_id,
+                        tick = world.tick_generation,
+                        "session.tick"
+                    );
                 }
             }
         }));

@@ -12,9 +12,10 @@ use tokio::task::JoinHandle;
 use parish_core::config::InferenceConfig;
 use parish_core::debug_snapshot::DebugEvent;
 use parish_core::game_mod::PronunciationEntry;
-use parish_core::inference::{AnyClient, InferenceLog, InferenceQueue};
+use parish_core::inference::{AnyClient, InferenceClient, InferenceLog, InferenceQueue};
 use parish_core::ipc::ThemePalette;
 use parish_core::npc::manager::NpcManager;
+use parish_core::session_store::SessionStore;
 use parish_core::world::WorldState;
 use parish_core::world::events::GameEvent;
 use parish_core::world::transport::TransportConfig;
@@ -59,7 +60,8 @@ pub use parish_core::ipc::{ConversationRuntimeState, SaveState, UiConfigSnapshot
 ///         → config
 ///           → client
 ///             → cloud_client
-///               → debug_events
+///               → inference_client
+///                 → debug_events
 ///                 → game_events
 ///                   → inference_log
 ///                     → editor_sessions
@@ -108,6 +110,11 @@ pub use parish_core::ipc::{ConversationRuntimeState, SaveState, UiConfigSnapshot
 /// refresh, or `world` across a save-to-disk, will serialise every
 /// concurrent session behind that one path.
 pub struct AppState {
+    /// Stable identifier for this session — the same UUID that appears in the
+    /// `parish_sid` cookie.  Stored here so background tasks (tick loop, etc.)
+    /// can emit per-session tracing events without holding the middleware
+    /// extensions (#621).
+    pub session_id: String,
     /// The game world (clock, player position, graph, weather).
     pub world: Mutex<WorldState>,
     /// NPC manager (all NPCs, tier assignment, schedule ticking).
@@ -120,6 +127,19 @@ pub struct AppState {
     pub client: Mutex<Option<AnyClient>>,
     /// Cloud LLM client for dialogue (None if not configured).
     pub cloud_client: Mutex<Option<AnyClient>>,
+    /// Trait-erased inference client stack (caching + metrics decorator, #617).
+    ///
+    /// All inference call sites that use the new `InferenceClient` trait go
+    /// through this `Arc`.  It is constructed by
+    /// `parish_inference::build_inference_client_stack` and wraps `client` or
+    /// `cloud_client` with an optional LRU cache and a metrics layer.
+    ///
+    /// `None` when no provider is configured (same lifecycle as `client`).
+    ///
+    /// Behind a `Mutex` so that `rebuild_inference` can swap it atomically
+    /// when the provider/key changes at runtime — same lifecycle as `client`.
+    /// Lock ordering: acquire after `cloud_client`, before `debug_events`.
+    pub inference_client: Mutex<Option<Arc<dyn InferenceClient>>>,
     /// Mutable runtime configuration.
     pub config: Mutex<GameConfig>,
     /// Local conversation transcript and inactivity tracking.
@@ -157,19 +177,28 @@ pub struct AppState {
     /// or shutdown so orphaned workers (each holding an HTTP client and channel)
     /// don't accumulate.  See bugs #224 and #231.
     pub worker_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Per-user editor sessions — keyed by CF-Access email.
+    /// Per-account editor sessions — keyed by `(account_id, mod_id)`.
+    ///
+    /// Keyed by `account_id` (stable UUID) so that multiple browser tabs from
+    /// the same authenticated user share one editor session rather than creating
+    /// per-cookie duplicates (#618).  The `String` component is the mod path /
+    /// id, kept for future multi-mod support (currently always `""` until a mod
+    /// is opened, at which point the session is re-keyed).
+    ///
+    /// When the `account-id-keying` feature flag is disabled the key is
+    /// `(Uuid::nil(), email)` for backward compatibility.
     ///
     /// Uses a `tokio::sync::Mutex` so handlers can hold the guard across
     /// `.await` points without blocking Tokio workers.
     pub editor_sessions: tokio::sync::Mutex<
-        std::collections::HashMap<String, parish_core::ipc::editor::EditorSession>,
+        std::collections::HashMap<(uuid::Uuid, String), parish_core::ipc::editor::EditorSession>,
     >,
-    /// Set of emails that currently have an active WebSocket connection.
+    /// Set of `account_id`s that currently have an active WebSocket connection.
     ///
-    /// Enforces single-WS-per-email (#334): a second upgrade from the same
-    /// email is rejected with 409 Conflict until the first socket closes.
+    /// Enforces single-WS-per-account (#334/#618): a second upgrade from the
+    /// same account is rejected with 409 Conflict until the first socket closes.
     /// Uses a `tokio::sync::Mutex` so it can be held across await points.
-    pub active_ws: tokio::sync::Mutex<HashSet<String>>,
+    pub active_ws: tokio::sync::Mutex<HashSet<uuid::Uuid>>,
     /// Advisory file lock for the currently active save file.
     pub save_lock: Mutex<Option<parish_core::persistence::SaveFileLock>>,
     /// TOML-configured inference timeouts loaded from `parish.toml` at session
@@ -186,6 +215,15 @@ pub struct AppState {
     /// Lock ordering: acquired after `save_lock`.
     pub save_db:
         tokio::sync::Mutex<Option<(std::path::PathBuf, parish_core::persistence::AsyncDatabase)>>,
+    /// Trait-erased per-session persistence.
+    ///
+    /// Route handlers and the autosave tick should prefer this over direct
+    /// `Database` / `AsyncDatabase` calls so that future remote or managed-auth
+    /// backends can be swapped in without touching handler code (#614).
+    ///
+    /// Not part of the lock-ordering chain: `Arc<dyn SessionStore>` is
+    /// never held across lock acquisition of any `Mutex` field.
+    pub session_store: Arc<dyn SessionStore>,
 }
 
 // GameConfig is now shared across all backends via parish-core.
@@ -196,6 +234,7 @@ pub use parish_core::ipc::GameConfig;
 // would add complexity without benefit, so the many-argument constructor is intentional.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state(
+    session_id: String,
     world: WorldState,
     npc_manager: NpcManager,
     client: Option<AnyClient>,
@@ -209,19 +248,33 @@ pub fn build_app_state(
     game_mod: Option<parish_core::game_mod::GameMod>,
     flags_path: PathBuf,
     inference_config: InferenceConfig,
+    session_store: Arc<dyn SessionStore>,
 ) -> Arc<AppState> {
     // Extract pronunciations from game mod before moving it.
     let pronunciations = game_mod
         .as_ref()
         .map(|gm| gm.pronunciations.clone())
         .unwrap_or_default();
+
+    // Build the trait-erased inference client stack (#617).
+    // Feature flags are not yet loaded at this point (flags_path not read),
+    // so we default both inference-client-trait and inference-response-cache
+    // to on (the per-CLAUDE.md §6 default-on convention).  Routes/handlers
+    // that need the flag-gated behaviour should check flags at call time.
+    let inference_client = client.as_ref().map(|c| {
+        let cache_capacity = parish_core::inference::cache_capacity_from_env();
+        parish_core::inference::build_inference_client_stack(c.clone(), true, cache_capacity)
+    });
+
     Arc::new(AppState {
+        session_id,
         world: Mutex::new(world),
         npc_manager: Mutex::new(npc_manager),
         inference_queue: Mutex::new(None),
         inference_log: parish_core::inference::new_inference_log(),
         client: Mutex::new(client),
         cloud_client: Mutex::new(cloud_client),
+        inference_client: Mutex::new(inference_client),
         config: Mutex::new(config),
         conversation: Mutex::new(ConversationRuntimeState::new()),
         debug_events: Mutex::new(std::collections::VecDeque::with_capacity(
@@ -244,10 +297,11 @@ pub fn build_app_state(
         flags_path,
         worker_handle: Mutex::new(None),
         editor_sessions: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-        active_ws: tokio::sync::Mutex::new(HashSet::new()),
+        active_ws: tokio::sync::Mutex::new(HashSet::<uuid::Uuid>::new()),
         save_lock: Mutex::new(None),
         inference_config,
         save_db: tokio::sync::Mutex::new(None),
+        session_store,
     })
 }
 

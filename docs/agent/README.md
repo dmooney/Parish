@@ -15,5 +15,6 @@ Quick reference for AI coding agents and human contributors working in this repo
 | **Harness map** — what fires when, every sensor and gate | [harness.md](harness.md) |
 | Running CI locally with `act` | [act-local.md](act-local.md) |
 | Idempotency-Key support (#619) | [idempotency.md](idempotency.md) |
+| **Scaling guardrails** — per-session state, seam review checklist | [scaling-rules.md](scaling-rules.md) |
 
 The root `CLAUDE.md` and `AGENTS.md` are slim indexes — start there if you're new, then come here for the details.
