@@ -15,7 +15,8 @@ use tokio::sync::{Semaphore, mpsc};
 use parish_core::config::InferenceCategory;
 use parish_core::inference::{
     AnyClient, INFERENCE_RESPONSE_TIMEOUT_SECS, InferenceAwaitOutcome, InferenceQueue,
-    await_inference_response, spawn_inference_worker,
+    await_inference_response, build_inference_client_stack, cache_capacity_from_env,
+    spawn_inference_worker,
 };
 use parish_core::input::{Command, InputResult, classify_input, parse_intent};
 use parish_core::ipc::{
@@ -352,6 +353,15 @@ async fn rebuild_inference(state: &Arc<AppState>) {
             *client_guard = Some(built.clone());
             built
         };
+
+    // Update the trait-erased InferenceClient stack (#617) so it tracks the
+    // new provider.  Clone the client before moving it into the worker task.
+    {
+        let cache_capacity = cache_capacity_from_env();
+        let trait_client = build_inference_client_stack(any_client.clone(), true, cache_capacity);
+        let mut ic = state.inference_client.lock().await;
+        *ic = Some(trait_client);
+    }
 
     // Abort the old inference worker before spawning a replacement to prevent
     // orphaned tasks from accumulating (each holds an HTTP client and channel).
@@ -970,6 +980,12 @@ async fn run_npc_turn(
     let (token_tx, token_rx) = mpsc::channel::<String>(parish_core::ipc::TOKEN_CHANNEL_CAPACITY);
     let display_label = capitalize_first(&setup.display_name);
     let req_id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
+
+    // #621 — Record the model on the active HTTP request span so OTel traces
+    // carry the `model` field through the inference pipeline without
+    // introducing a formal request envelope (see #617).
+    tracing::Span::current().record("model", model);
+
     state.event_bus.emit_named(
         Topic::TextLog,
         "text-log",
@@ -2589,7 +2605,12 @@ pub(crate) mod tests {
         };
         let theme_palette = parish_core::game_mod::default_theme_palette();
         let saves_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../saves");
+        let session_store: std::sync::Arc<dyn parish_core::session_store::SessionStore> =
+            std::sync::Arc::new(crate::session_store_impl::DbSessionStore::new(
+                saves_dir.clone(),
+            ));
         crate::state::build_app_state(
+            "test-session".to_string(),
             world,
             npc_manager,
             None,
@@ -2625,6 +2646,7 @@ pub(crate) mod tests {
             None,
             data_dir.join("parish-flags.json"),
             parish_core::config::InferenceConfig::default(),
+            session_store,
         )
     }
 
