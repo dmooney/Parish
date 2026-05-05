@@ -1935,6 +1935,7 @@ mod cmd_tests {
             ollama_process: Mutex::new(parish_core::inference::client::OllamaProcess::none()),
             inference_config: parish_core::config::InferenceConfig::default(),
             setup_status: std::sync::Mutex::new(crate::SetupStatusSnapshot::default()),
+            language_settings: parish_core::npc::LanguageSettings::english_only(),
             config: Mutex::new(game_config),
             demo_config: DemoConfig::default(),
             shutdown_token,
