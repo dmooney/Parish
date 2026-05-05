@@ -71,9 +71,11 @@ pub mod input;
 pub mod movement;
 pub mod npc_turn;
 pub mod reactions;
+pub mod system_command;
 
 pub use context::GameLoopContext;
 pub use input::{handle_game_input, handle_look};
 pub use movement::handle_movement;
 pub use npc_turn::{TurnOutcome, handle_npc_conversation, run_idle_banter, run_npc_turn};
 pub use reactions::{PersistReactionFn, emit_npc_reactions, is_snippet_injection_char};
+pub use system_command::{BoxFuture, SystemCommandHost, handle_system_command};
