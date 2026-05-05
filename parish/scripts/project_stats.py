@@ -47,7 +47,7 @@ def bar(value, max_val, width=30):
 
 def git_daily_loc():
     exts = CODE_EXTENSIONS.split()
-    cmd = ["git", "log", "--all", "--format=%ad", "--date=short", "--numstat", "--"] + exts
+    cmd = ["git", "log", "--first-parent", "--format=%ad", "--date=short", "--numstat", "--"] + exts
     result = subprocess.run(cmd, capture_output=True, text=True)
     added = {}
     deleted = {}
@@ -64,13 +64,13 @@ def git_daily_loc():
 
 
 def git_commit_count():
-    result = subprocess.run(["git", "log", "--all", "--oneline"], capture_output=True, text=True)
+    result = subprocess.run(["git", "log", "--first-parent", "--oneline"], capture_output=True, text=True)
     return len(result.stdout.strip().splitlines())
 
 
 def git_commits_since(days_ago):
     result = subprocess.run(
-        ["git", "log", "--all", "--oneline", f"--since={days_ago} days ago"],
+        ["git", "log", "--first-parent", "--oneline", f"--since={days_ago} days ago"],
         capture_output=True, text=True,
     )
     return len(result.stdout.strip().splitlines())
@@ -78,7 +78,7 @@ def git_commits_since(days_ago):
 
 def git_loc_since(days_ago):
     exts = CODE_EXTENSIONS.split()
-    cmd = ["git", "log", "--all", "--format=%ad", "--date=short", "--numstat",
+    cmd = ["git", "log", "--first-parent", "--format=%ad", "--date=short", "--numstat",
            f"--since={days_ago} days ago", "--"] + exts
     result = subprocess.run(cmd, capture_output=True, text=True)
     added = 0
@@ -136,7 +136,7 @@ def loc_by_extension_on_disk():
 
 def git_busiest_days(top_n=5):
     result = subprocess.run(
-        ["git", "log", "--all", "--format=%ad", "--date=short"],
+        ["git", "log", "--first-parent", "--format=%ad", "--date=short"],
         capture_output=True, text=True,
     )
     counts = {}
@@ -150,11 +150,11 @@ def git_busiest_days(top_n=5):
 
 ACTUAL = git_daily_loc()
 START_DATE = date.fromisoformat(ACTUAL[0][0]) if ACTUAL else date.today()
-CURRENT_LOC = sum(net for _, net in ACTUAL)
 CURRENT_DAY = (date.fromisoformat(ACTUAL[-1][0]) - START_DATE).days if ACTUAL else 0
 COMMIT_COUNT = git_commit_count()
 CONTRIBUTORS = git_contributors()
 LOC_BY_EXT, FILE_COUNTS = loc_by_extension_on_disk()
+CURRENT_LOC = sum(LOC_BY_EXT.values())
 BUSIEST = git_busiest_days()
 
 commits_7d = git_commits_since(7)
