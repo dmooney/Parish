@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { editorNpcs, editorSelectedNpcId, editorLocations } from '../../stores/editor';
 
-	let search = '';
+	let search = $state('');
 
-	$: npcs = $editorNpcs;
-	$: locations = $editorLocations;
-	$: filtered = search
+	const npcs = $derived($editorNpcs);
+	const locations = $derived($editorLocations);
+	const filtered = $derived(search
 		? npcs.filter(
 				(n) =>
 					n.name.toLowerCase().includes(search.toLowerCase()) ||
 					n.occupation.toLowerCase().includes(search.toLowerCase())
 			)
-		: npcs;
+		: npcs);
 
 	function locationName(id: number): string {
 		return locations.find((l) => l.id === id)?.name ?? `#${id}`;
@@ -34,7 +34,7 @@
 			<button
 				class="list-item"
 				class:active={$editorSelectedNpcId === npc.id}
-				on:click={() => editorSelectedNpcId.set(npc.id)}
+				onclick={() => editorSelectedNpcId.set(npc.id)}
 			>
 				<span class="item-name">{npc.name}</span>
 				<span class="item-meta">{npc.occupation} &middot; {locationName(npc.home)}</span>
@@ -74,7 +74,7 @@
 		background: var(--color-input-bg);
 		color: var(--color-fg);
 		font-size: 0.75rem;
-		font-family: 'IM Fell English', serif;
+		font-family: var(--font-body);
 		box-sizing: border-box;
 	}
 
@@ -94,7 +94,7 @@
 		background: none;
 		cursor: pointer;
 		text-align: left;
-		font-family: 'IM Fell English', serif;
+		font-family: var(--font-body);
 		color: var(--color-fg);
 	}
 	.list-item:hover {

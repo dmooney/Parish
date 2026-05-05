@@ -13,8 +13,10 @@ pub mod memory;
 pub mod mood;
 pub mod overhear;
 pub mod reactions;
+pub mod schedule;
 pub mod ticks;
 pub mod tier4;
+pub mod tier_assign;
 pub mod transitions;
 pub mod types;
 
@@ -937,7 +939,7 @@ mod tests {
         assert_eq!(strip_json_fence("```json\n{\"a\":1}\n```"), r#"{"a":1}"#);
     }
 
-    // ── Issue #731 — prompt template placeholder interpolation ────────────────
+    // ── Issue #731 — prompt template placeholder interpolation ───────────────
 
     /// Tier 1 system prompt: every `{placeholder}` must be substituted.
     ///
@@ -1103,5 +1105,143 @@ mod tests {
         assert!(prompt.contains("Seamus Fahey"), "NPC name 2 missing");
         assert!(prompt.contains("Weaver"), "occupation missing");
         assert!(prompt.contains("thoughtful"), "mood missing");
+    }
+}
+
+/// Shared NPC test fixtures used by unit tests across multiple modules.
+///
+/// Centralised here so that helper constructors like `make_test_npc` are
+/// defined once and re-used everywhere, avoiding duplication across
+/// `schedule`, `tier_assign`, `banshee`, and `manager` test suites.
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    use chrono::{TimeZone, Utc};
+
+    use crate::Npc;
+    use crate::memory::{LongTermMemory, ShortTermMemory};
+    use crate::reactions::ReactionLog;
+    use crate::types::{Intelligence, NpcState, ScheduleEntry, ScheduleVariant, SeasonalSchedule};
+    use parish_types::{LocationId, NpcId};
+    use parish_world::WorldState;
+    use parish_world::graph::WorldGraph;
+    use parish_world::time::GameClock;
+
+    /// Minimal NPC with all required fields populated.
+    pub fn make_test_npc(id: u32, location: u32) -> Npc {
+        Npc {
+            id: NpcId(id),
+            name: format!("NPC {id}"),
+            brief_description: "a person".to_string(),
+            age: 30,
+            occupation: "Test".to_string(),
+            personality: "Test personality".to_string(),
+            intelligence: Intelligence::default(),
+            location: LocationId(location),
+            mood: "calm".to_string(),
+            home: Some(LocationId(location)),
+            workplace: None,
+            schedule: None,
+            relationships: HashMap::new(),
+            memory: ShortTermMemory::new(),
+            long_term_memory: LongTermMemory::new(),
+            knowledge: Vec::new(),
+            state: NpcState::Present,
+            deflated_summary: None,
+            reaction_log: ReactionLog::default(),
+            last_activity: None,
+            is_ill: false,
+            doom: None,
+            banshee_heralded: false,
+        }
+    }
+
+    /// NPC with a three-slot daily schedule: sleep at home, work, evening at home.
+    pub fn make_scheduled_npc(id: u32, home: u32, work: u32) -> Npc {
+        let mut npc = make_test_npc(id, home);
+        npc.schedule = Some(SeasonalSchedule {
+            variants: vec![ScheduleVariant {
+                season: None,
+                day_type: None,
+                entries: vec![
+                    ScheduleEntry {
+                        start_hour: 0,
+                        end_hour: 7,
+                        location: LocationId(home),
+                        activity: "sleeping".to_string(),
+                        cuaird: false,
+                    },
+                    ScheduleEntry {
+                        start_hour: 8,
+                        end_hour: 17,
+                        location: LocationId(work),
+                        activity: "working".to_string(),
+                        cuaird: false,
+                    },
+                    ScheduleEntry {
+                        start_hour: 18,
+                        end_hour: 23,
+                        location: LocationId(home),
+                        activity: "evening rest".to_string(),
+                        cuaird: false,
+                    },
+                ],
+            }],
+        });
+        npc
+    }
+
+    /// Loads the real parish graph; skips the calling test if the file is absent.
+    pub fn load_test_graph() -> Option<WorldGraph> {
+        let path = Path::new("data/parish.json");
+        if path.exists() {
+            WorldGraph::load_from_file(path).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Builds a linear chain graph 0 — 1 — 2 — … — n.
+    pub fn make_chain_graph(n: u32) -> WorldGraph {
+        let locations: Vec<serde_json::Value> = (0..=n)
+            .map(|i| {
+                let mut conns = Vec::new();
+                if i > 0 {
+                    conns.push(serde_json::json!({"target": i - 1, "path_description": "a path"}));
+                }
+                if i < n {
+                    conns.push(serde_json::json!({"target": i + 1, "path_description": "a path"}));
+                }
+                serde_json::json!({
+                    "id": i,
+                    "name": format!("Loc {i}"),
+                    "description_template": "Test",
+                    "indoor": false,
+                    "public": true,
+                    "connections": conns
+                })
+            })
+            .collect();
+        let json = serde_json::json!({"locations": locations}).to_string();
+        WorldGraph::load_from_str(&json).unwrap()
+    }
+
+    /// WorldState with the given graph and player location.
+    pub fn make_test_world(graph: WorldGraph, player_location: u32) -> WorldState {
+        let mut world = WorldState::new();
+        world.graph = graph;
+        world.player_location = LocationId(player_location);
+        world
+    }
+
+    /// WorldState seeded at 22:00 (night, inside the banshee herald window).
+    pub fn make_mourning_world() -> WorldState {
+        let mut world = WorldState::new();
+        world.graph = make_chain_graph(4);
+        world.player_location = LocationId(0);
+        world.clock = GameClock::new(Utc.with_ymd_and_hms(1820, 6, 15, 22, 0, 0).unwrap());
+        world
     }
 }

@@ -13,16 +13,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use once_cell::sync::OnceCell;
-
 // ── Auth context (injected as Axum extension) ─────────────────────────────────
 
 /// Identity extracted from a validated Cloudflare Access JWT.
 ///
 /// Injected into request extensions by `cf_access_guard`; downstream handlers
 /// can retrieve it with `req.extensions().get::<AuthContext>()`.
+///
+/// `account_id` is the stable per-user UUID minted on first auth and
+/// persisted via `IdentityStore::create_account`.  It never changes even when
+/// the user's email changes or their OAuth provider is re-linked (#618).
+///
+/// When the `account-id-keying` feature flag is disabled (kill-switch) the
+/// guard derives a deterministic UUID from the email bytes so every user
+/// still gets a unique, per-email identity without touching the identity store.
 #[derive(Clone, Debug)]
 pub struct AuthContext {
+    /// Stable per-user identifier — use this as the map key in handlers.
+    pub account_id: uuid::Uuid,
+    /// Email address from the validated CF-Access JWT or OAuth token.
     pub email: String,
 }
 
@@ -299,8 +308,12 @@ impl CfAccessVerifier {
         Some(Arc::clone(cached))
     }
 
-    /// Validates a raw JWT string and returns the extracted [`AuthContext`].
-    pub async fn validate(&self, token: &str) -> Result<AuthContext, String> {
+    /// Validates a raw JWT string and returns the authenticated email address.
+    ///
+    /// The full [`AuthContext`] (including the stable `account_id`) is assembled
+    /// by `cf_access_guard` after calling `IdentityStore::lookup_by_provider`
+    /// or `create_account` (#618).
+    pub async fn validate(&self, token: &str) -> Result<String, String> {
         use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, decode, decode_header};
 
         // Decode the header to get `kid`.
@@ -346,15 +359,15 @@ impl CfAccessVerifier {
         let token_data = decode::<CfClaims>(token, &decoding_key, &validation)
             .map_err(|e| format!("JWT validation failed: {e}"))?;
 
-        Ok(AuthContext {
-            email: token_data.claims.email,
-        })
+        // Return only the email; `account_id` is resolved by `cf_access_guard`
+        // via `IdentityStore` after this call returns (#618).
+        Ok(token_data.claims.email)
     }
 }
 
 // ── Global verifier singleton ──────────────────────────────────────────────────
 
-static CF_VERIFIER: OnceCell<Option<Arc<CfAccessVerifier>>> = OnceCell::new();
+static CF_VERIFIER: std::sync::OnceLock<Option<Arc<CfAccessVerifier>>> = std::sync::OnceLock::new();
 
 /// Returns the global `CfAccessVerifier`, initialising it once from env.
 pub fn global_verifier() -> Option<Arc<CfAccessVerifier>> {
@@ -376,7 +389,7 @@ fn signing_key() -> &'static [u8] {
     // any other replica — any non-sticky LB path between `/api/session-init`
     // and `/api/ws` would 401 valid tokens and trigger reconnect loops.
     // Debug builds still auto-generate a key for local dev convenience.
-    static KEY: OnceCell<Vec<u8>> = OnceCell::new();
+    static KEY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     KEY.get_or_init(|| {
         if let Some(k) = std::env::var("PARISH_WS_SIGNING_KEY")
             .ok()

@@ -1,6 +1,5 @@
 //! IPC event names and streaming bridge between Rust inference and Svelte frontend.
 
-use parish_core::npc::LanguageHint;
 use tauri::Emitter;
 
 // ── Event name constants ─────────────────────────────────────────────────────
@@ -47,45 +46,13 @@ pub const BATCH_MS: u64 = 16;
 
 // ── Payload types ────────────────────────────────────────────────────────────
 
-/// Payload for `stream-token` events.
-#[derive(serde::Serialize, Clone)]
-pub struct StreamTokenPayload {
-    /// The batch of token text to append to the current chat entry.
-    pub token: String,
-    /// Stable ID for the NPC turn this token batch belongs to.
-    pub turn_id: u64,
-    /// Speaker label for this stream turn.
-    pub source: String,
-}
-
-/// Payload for `stream-turn-end` events.
-#[derive(serde::Serialize, Clone)]
-pub struct StreamTurnEndPayload {
-    /// Stable ID for the NPC turn that has finished streaming tokens.
-    pub turn_id: u64,
-}
-
-/// Payload for `stream-end` events.
-#[derive(serde::Serialize, Clone)]
-pub struct StreamEndPayload {
-    /// Language hints extracted from the completed NPC response.
-    pub hints: Vec<LanguageHint>,
-}
-
-/// Payload for `text-log` events.
-#[derive(serde::Serialize, Clone)]
-pub struct TextLogPayload {
-    /// Unique message ID for reaction targeting.
-    #[serde(default)]
-    pub id: String,
-    /// Stable ID for the NPC turn this placeholder belongs to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream_turn_id: Option<u64>,
-    /// Who produced this text: "player", "system", or the NPC's name.
-    pub source: String,
-    /// The log entry text.
-    pub content: String,
-}
+// StreamTokenPayload, StreamTurnEndPayload, StreamEndPayload, TextLogPayload,
+// NpcReactionPayload, and LoadingPayload are all defined in parish-core and
+// re-exported here (part of #696 — IPC struct deduplication).
+pub use parish_core::ipc::{
+    LoadingPayload, NpcReactionPayload, StreamEndPayload, StreamTokenPayload, StreamTurnEndPayload,
+    TextLogPayload,
+};
 
 /// Payload for `setup-status` and `setup-progress` / `setup-done` events.
 #[derive(serde::Serialize, Clone)]
@@ -94,12 +61,12 @@ pub struct SetupStatusPayload {
     pub message: String,
 }
 
-/// Payload for `setup-progress` events (aggregate model download progress).
+/// Payload for `setup-progress` events (model download progress).
 #[derive(serde::Serialize, Clone)]
 pub struct SetupProgressPayload {
-    /// Bytes downloaded so far across discovered Ollama pull artifacts.
+    /// Bytes downloaded so far.
     pub completed: u64,
-    /// Total bytes expected across discovered Ollama pull artifacts (0 if unknown).
+    /// Total bytes expected (0 if unknown).
     pub total: u64,
 }
 
@@ -111,20 +78,6 @@ pub struct SetupDonePayload {
     /// Error message if `success` is false; empty string otherwise.
     pub error: String,
 }
-
-/// Payload for `npc-reaction` events.
-#[derive(serde::Serialize, Clone)]
-pub struct NpcReactionPayload {
-    /// ID of the message being reacted to.
-    pub message_id: String,
-    /// The reaction emoji.
-    pub emoji: String,
-    /// Who reacted (NPC name).
-    pub source: String,
-}
-
-// LoadingPayload is now shared via parish_core::ipc::LoadingPayload
-pub use parish_core::ipc::LoadingPayload;
 
 // ── Loading animation bridge ─────────────────────────────────────────────
 
@@ -182,6 +135,36 @@ pub fn spawn_loading_animation(app: tauri::AppHandle, cancel: tokio_util::sync::
             },
         );
     });
+}
+
+// ── TauriEmitter ─────────────────────────────────────────────────────────────
+
+/// [`EventEmitter`] implementation for the Tauri desktop backend.
+///
+/// Wraps a [`tauri::AppHandle`] and delegates each `emit_event(name, payload)`
+/// call to `app.emit(name, payload)`.
+///
+/// Serialisation is already complete when `emit_event` is called (the payload
+/// is a `serde_json::Value`), so Tauri receives a pre-serialised JSON blob.
+/// Frontend listeners must parse it as the appropriate IPC type.
+#[derive(Clone)]
+pub struct TauriEmitter {
+    pub app: tauri::AppHandle,
+}
+
+impl TauriEmitter {
+    /// Creates a new emitter wrapping the given app handle.
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl parish_core::ipc::EventEmitter for TauriEmitter {
+    fn emit_event(&self, name: &str, payload: serde_json::Value) {
+        // Tauri's `emit` serialises the payload again; we pass a pre-serialised
+        // Value so the wire format is a JSON object (not a double-serialised string).
+        let _ = self.app.emit(name, payload);
+    }
 }
 
 // ── Streaming bridge ─────────────────────────────────────────────────────────

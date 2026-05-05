@@ -36,12 +36,12 @@ fn default_game_config() -> GameConfig {
         max_follow_up_turns: 2,
         idle_banter_after_secs: 25,
         auto_pause_after_secs: 60,
-        category_provider: [None, None, None, None],
-        category_model: [None, None, None, None],
-        category_api_key: [None, None, None, None],
-        category_base_url: [None, None, None, None],
+        category_provider: Default::default(),
+        category_model: Default::default(),
+        category_api_key: Default::default(),
+        category_base_url: Default::default(),
         flags: parish_core::config::FeatureFlags::default(),
-        category_rate_limit: [None, None, None, None],
+        category_rate_limit: Default::default(),
         active_tile_source: String::new(),
         tile_sources: Vec::new(),
         reveal_unexplored_locations: false,
@@ -83,7 +83,12 @@ async fn new_game_with_missing_world_file_returns_500() {
     // Build an AppState that has NO game_mod and a data_dir with no world file.
     // The initial world here is a default one (the AppState constructor needs
     // *something*); `do_new_game_inner` will attempt to reload from data_dir.
+    let session_store: std::sync::Arc<dyn parish_core::session_store::SessionStore> =
+        std::sync::Arc::new(parish_server::session_store_impl::DbSessionStore::new(
+            saves_dir.clone(),
+        ));
     let state = build_app_state(
+        "test-session".to_string(),
         WorldState::new(),
         NpcManager::new(),
         None,
@@ -97,6 +102,7 @@ async fn new_game_with_missing_world_file_returns_500() {
         None, // no game_mod → legacy fallback path is taken
         data_dir.join("parish-flags.json"),
         InferenceConfig::default(),
+        session_store,
     );
 
     let req = Request::builder()

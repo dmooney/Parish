@@ -197,14 +197,17 @@ fn debug_snapshot_call_log_has_prompt_len_not_prompt_text() {
     assert!(json["system_prompt"].is_null());
 }
 
-// ── #334 — Single WS per email ───────────────────────────────────────────────
+// ── #334 / #618 — Single WS per account_id ───────────────────────────────────
 
-/// A second WS upgrade for the same email must be blocked (409 Conflict).
+/// A second WS upgrade for the same `account_id` must be blocked (409 Conflict).
 ///
 /// We test the `active_ws` set logic directly against `AppState` rather than
 /// driving a real WebSocket upgrade (which requires a live TCP server).
+///
+/// #618: the key is now `uuid::Uuid` (account_id) rather than an email string,
+/// so multiple browser tabs from the same user get the same stable ID.
 #[tokio::test]
-async fn second_ws_upgrade_same_email_is_409() {
+async fn second_ws_upgrade_same_account_is_409() {
     use std::sync::Arc;
 
     // Build a minimal AppState using the public builder.
@@ -229,7 +232,12 @@ async fn second_ws_upgrade_same_email_is_409() {
     let theme_palette = parish_core::game_mod::default_theme_palette();
     let saves_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../saves");
 
+    let session_store: std::sync::Arc<dyn parish_core::session_store::SessionStore> =
+        std::sync::Arc::new(parish_server::session_store_impl::DbSessionStore::new(
+            saves_dir.clone(),
+        ));
     let state = Arc::new(build_app_state(
+        "test-session".to_string(),
         world,
         npc_manager,
         None,
@@ -246,12 +254,12 @@ async fn second_ws_upgrade_same_email_is_409() {
             max_follow_up_turns: 2,
             idle_banter_after_secs: 25,
             auto_pause_after_secs: 60,
-            category_provider: [None, None, None, None],
-            category_model: [None, None, None, None],
-            category_api_key: [None, None, None, None],
-            category_base_url: [None, None, None, None],
+            category_provider: Default::default(),
+            category_model: Default::default(),
+            category_api_key: Default::default(),
+            category_base_url: Default::default(),
             flags: parish_core::config::FeatureFlags::default(),
-            category_rate_limit: [None, None, None, None],
+            category_rate_limit: Default::default(),
             active_tile_source: String::new(),
             tile_sources: Vec::new(),
             reveal_unexplored_locations: false,
@@ -265,25 +273,19 @@ async fn second_ws_upgrade_same_email_is_409() {
         None,
         data_dir.join("parish-flags.json"),
         parish_core::config::InferenceConfig::default(),
+        session_store,
     ));
 
-    // Simulate first connection inserting the email.
-    let first_insert: bool = state
-        .active_ws
-        .lock()
-        .await
-        .insert("ws-user@example.com".to_string());
+    // Simulate first connection inserting the account_id (#618).
+    let account_id: uuid::Uuid = uuid::Uuid::new_v4();
+    let first_insert: bool = state.active_ws.lock().await.insert(account_id);
     assert!(first_insert, "first insert must succeed");
 
-    // Second attempt: the email is already present — insert returns false.
-    let second_insert: bool = state
-        .active_ws
-        .lock()
-        .await
-        .insert("ws-user@example.com".to_string());
+    // Second attempt: the account_id is already present — insert returns false.
+    let second_insert: bool = state.active_ws.lock().await.insert(account_id);
     assert!(
         !second_insert,
-        "second insert must fail (email already active)"
+        "second insert must fail (account already active)"
     );
 
     // Map the HashSet result to the 409 the handler would return.
@@ -344,7 +346,12 @@ async fn debug_snapshot_no_deadlock_with_concurrent_readers() {
     let theme_palette = parish_core::game_mod::default_theme_palette();
     let saves_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../saves");
 
+    let session_store2: std::sync::Arc<dyn parish_core::session_store::SessionStore> =
+        std::sync::Arc::new(parish_server::session_store_impl::DbSessionStore::new(
+            saves_dir.clone(),
+        ));
     let state = Arc::new(build_app_state(
+        "test-session".to_string(),
         world,
         npc_manager,
         None,
@@ -361,12 +368,12 @@ async fn debug_snapshot_no_deadlock_with_concurrent_readers() {
             max_follow_up_turns: 2,
             idle_banter_after_secs: 25,
             auto_pause_after_secs: 60,
-            category_provider: [None, None, None, None],
-            category_model: [None, None, None, None],
-            category_api_key: [None, None, None, None],
-            category_base_url: [None, None, None, None],
+            category_provider: Default::default(),
+            category_model: Default::default(),
+            category_api_key: Default::default(),
+            category_base_url: Default::default(),
             flags: parish_core::config::FeatureFlags::default(),
-            category_rate_limit: [None, None, None, None],
+            category_rate_limit: Default::default(),
             active_tile_source: String::new(),
             tile_sources: Vec::new(),
             reveal_unexplored_locations: false,
@@ -380,6 +387,7 @@ async fn debug_snapshot_no_deadlock_with_concurrent_readers() {
         None,
         data_dir.join("parish-flags.json"),
         parish_core::config::InferenceConfig::default(),
+        session_store2,
     ));
 
     // Pre-populate debug_events so the snapshot has something to copy.

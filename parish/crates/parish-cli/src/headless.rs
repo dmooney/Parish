@@ -16,7 +16,7 @@ use crate::npc::parse_npc_stream_response;
 use crate::world::description::{format_exits, render_description};
 use crate::world::movement::{self, MovementResult};
 use anyhow::Result;
-use parish_core::ipc::capitalize_first;
+use parish_core::ipc::{NPC_REACTION_CONCURRENCY, capitalize_first};
 use parish_core::world::transport::TransportMode;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -25,10 +25,6 @@ use tokio::sync::{Notify, Semaphore, mpsc};
 
 /// Interval between autosaves in seconds.
 const AUTOSAVE_INTERVAL_SECS: u64 = 45;
-
-/// Maximum number of NPC LLM inference calls that may run concurrently within
-/// a single `emit_headless_npc_reactions` batch (#406).
-const NPC_REACTION_CONCURRENCY: usize = 4;
 
 /// Runs the game in headless mode with a plain stdin/stdout REPL.
 ///
@@ -1384,7 +1380,9 @@ async fn emit_headless_npc_reactions(app: &mut App, player_input: &str) {
 async fn print_arrival_reactions(app: &mut App) {
     use parish_core::config::ReactionConfig;
     use parish_core::dice;
-    use parish_core::npc::reactions::{generate_arrival_reactions, resolve_llm_greeting};
+    use parish_core::npc::reactions::{
+        ArrivalContext, LlmGreetingParams, generate_arrival_reactions, resolve_llm_greeting,
+    };
 
     let npcs = app.npc_manager.npcs_at(app.world.player_location);
     if npcs.is_empty() {
@@ -1408,16 +1406,14 @@ async fn print_arrival_reactions(app: &mut App) {
     let config = ReactionConfig::default();
     let roll_dice = dice::roll_n(npcs.len() * 2);
 
-    let reactions = generate_arrival_reactions(
-        &npcs,
-        &introduced,
-        &loc_data,
-        tod,
-        &weather,
-        &templates,
-        &config,
-        &roll_dice,
-    );
+    let arrival_ctx = ArrivalContext {
+        location: &loc_data,
+        time_of_day: tod,
+        weather: &weather,
+        templates: &templates,
+        config: &config,
+    };
+    let reactions = generate_arrival_reactions(&npcs, &introduced, &arrival_ctx, &roll_dice);
 
     for reaction in &reactions {
         let text = if reaction.use_llm {
@@ -1425,19 +1421,17 @@ async fn print_arrival_reactions(app: &mut App) {
                 let npc = app.npc_manager.get(reaction.npc_id);
                 if let Some(npc) = npc {
                     let at_workplace = npc.workplace.is_some_and(|wp| wp == loc_data.id);
-                    resolve_llm_greeting(
-                        reaction,
-                        npc,
-                        &loc_data.name,
-                        tod,
-                        &weather,
-                        introduced.contains(&reaction.npc_id),
+                    let llm_params = LlmGreetingParams {
+                        location_name: &loc_data.name,
+                        time_of_day: tod,
+                        weather: &weather,
+                        is_introduced: introduced.contains(&reaction.npc_id),
                         at_workplace,
                         client,
-                        &app.reaction_model.clone(),
-                        config.llm_timeout_secs,
-                    )
-                    .await
+                        model: &app.reaction_model.clone(),
+                        timeout_secs: config.llm_timeout_secs,
+                    };
+                    resolve_llm_greeting(reaction, npc, &llm_params).await
                 } else {
                     reaction.canned_text.clone()
                 }
@@ -1479,6 +1473,9 @@ fn print_location_description(app: &App) {
 
 /// Handles movement in headless mode.
 async fn handle_headless_movement(app: &mut App, target: &str) {
+    use parish_core::dice::DiceRoll;
+    use parish_core::world::weather_travel::{apply_multiplier, compute_weather_effect};
+
     let transport = default_transport(app);
     let result = movement::resolve_movement_with_weather(
         target,
@@ -1495,11 +1492,52 @@ async fn handle_headless_movement(app: &mut App, target: &str) {
             minutes,
             narration,
         } => {
-            println!("{}", narration);
+            // Consult the weather before committing the journey. The feature
+            // flag is default-on via `is_disabled` semantics, same kill-switch
+            // pattern as `period-map-tiles`.
+            let apply_weather = !app.flags.is_disabled("weather-travel");
+            let weather_effect = if apply_weather {
+                compute_weather_effect(
+                    app.world.weather,
+                    app.world.clock.season(),
+                    DiceRoll::roll(),
+                    DiceRoll::roll(),
+                )
+            } else {
+                parish_core::world::weather_travel::WeatherTravelEffect::clear()
+            };
+
+            if let Some(flavour) = weather_effect.flavour {
+                println!("{}", flavour);
+            }
+
+            // A Storm can force the player back. They lose half the nominal
+            // travel time to the aborted attempt and stay at the origin.
+            if weather_effect.forced_back.is_some() {
+                let lost = (minutes / 2).max(1);
+                app.world.clock.advance(lost as i64);
+                println!(
+                    "You turn back. The storm has the better of it; you'll try again later. \
+                     ({} minutes lost to the attempt.)",
+                    lost
+                );
+                println!();
+                return;
+            }
+
+            let adjusted_minutes = apply_multiplier(minutes, weather_effect.multiplier);
+            if adjusted_minutes > minutes {
+                println!(
+                    "{} (slowed by the weather from {} to {} minutes)",
+                    narration, minutes, adjusted_minutes
+                );
+            } else {
+                println!("{}", narration);
+            }
             println!();
 
             app.world.record_path_traversal(&path);
-            app.world.clock.advance(minutes as i64);
+            app.world.clock.advance(adjusted_minutes as i64);
             app.world.player_location = destination;
             app.world.mark_visited(destination);
 
@@ -1516,6 +1554,25 @@ async fn handle_headless_movement(app: &mut App, target: &str) {
                         lat: data.lat,
                         lon: data.lon,
                     });
+            }
+
+            // Travel encounter — default-on, kill-switchable via the `travel-encounters` flag.
+            if !app.flags.is_disabled("travel-encounters") {
+                use crate::world::wayfarers;
+                let clock_minutes = app.world.clock.now().timestamp() / 60;
+                let seed = wayfarers::encounter_seed(
+                    clock_minutes,
+                    app.world.player_location,
+                    destination,
+                );
+                let time = app.world.clock.time_of_day();
+                let season = app.world.clock.season();
+                let weather = app.world.weather;
+                if let Some(enc) = wayfarers::resolve_encounter(time, season, weather, seed) {
+                    let line = format!("  · {}", enc.text);
+                    app.world.log(line.clone());
+                    println!("{line}");
+                }
             }
 
             print_location_arrival(app);

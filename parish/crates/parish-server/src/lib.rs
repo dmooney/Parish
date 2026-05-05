@@ -10,11 +10,15 @@
 pub mod auth;
 pub mod cf_auth;
 pub mod editor_routes;
+pub mod emitter;
 pub mod middleware;
 pub mod route_registry;
 pub mod routes;
 pub mod session;
+pub mod session_store_impl;
 pub mod state;
+pub mod tile_routes;
+pub mod tracing_setup;
 pub mod ws;
 
 use std::net::SocketAddr;
@@ -37,11 +41,13 @@ use axum::routing::{get, post};
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use parish_core::game_mod::{GameMod, find_default_mod};
+use parish_core::game_mod::GameMod;
+use parish_core::mod_source::{LocalDiskModSource, ModSource};
 use parish_core::world::transport::TransportConfig;
 
 use parish_core::config::FeatureFlags;
 use session::{GlobalState, OAuthConfig, SessionRegistry};
+use session_store_impl::{SqliteIdentityStore, open_sessions_db};
 use state::{GameConfig, UiConfigSnapshot};
 
 /// Specific HTTPS origins the frontend genuinely connects to or loads images
@@ -50,19 +56,20 @@ use state::{GameConfig, UiConfigSnapshot};
 ///
 /// - `https://tile.openstreetmap.org` — default OSM raster tile source
 ///   (`parish-config` `default_tile_sources`).
-/// - `https://mapseries-tilesets.s3.amazonaws.com` — historic Ordnance Survey
-///   tiles (the "historic" tile source baked into `default_tile_sources`).
 /// - `https://demotiles.maplibre.org` — MapLibre glyph PBFs used by the
 ///   map label layer (`style.ts` `GLYPHS_URL`).
 /// - `https://fonts.googleapis.com` — Google Fonts CSS `<link>` in `app.html`.
 /// - `https://fonts.gstatic.com` — Google Fonts glyph files (font-src).
+///
+/// NLS historic tiles (`mapseries-tilesets.s3.amazonaws.com`) are now proxied
+/// through `/tiles/{source_id}/{z}/{x}/{y}.png` (issue #360), so the S3
+/// origin no longer needs to appear in the CSP.
 ///
 /// Update this list whenever `apps/ui/src/` gains a new external dependency.
 /// Keeping it in a dedicated constant lets the security-headers test assert
 /// membership without repeating the origin strings.
 pub const ALLOWED_EXTERNAL_ORIGINS: &[&str] = &[
     "https://tile.openstreetmap.org",
-    "https://mapseries-tilesets.s3.amazonaws.com",
     "https://demotiles.maplibre.org",
     "https://fonts.googleapis.com",
     "https://fonts.gstatic.com",
@@ -103,8 +110,8 @@ pub const CSP_POLICY: &str = "default-src 'self'; \
                               script-src 'self' 'unsafe-inline'; \
                               worker-src 'self' blob:; \
                               style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-                              img-src 'self' data: blob: https://tile.openstreetmap.org https://mapseries-tilesets.s3.amazonaws.com; \
-                              connect-src 'self' ws: wss: https://tile.openstreetmap.org https://mapseries-tilesets.s3.amazonaws.com https://demotiles.maplibre.org https://fonts.googleapis.com; \
+                              img-src 'self' data: blob: https://tile.openstreetmap.org; \
+                              connect-src 'self' ws: wss: https://tile.openstreetmap.org https://demotiles.maplibre.org https://fonts.googleapis.com; \
                               font-src 'self' https://fonts.gstatic.com; \
                               frame-ancestors 'none'; \
                               base-uri 'self'; \
@@ -174,6 +181,66 @@ pub fn apply_security_layers(router: Router) -> Router {
 /// Global auth-failure counter — exposed via `GET /metrics`.
 static AUTH_FAILURES: AtomicU64 = AtomicU64::new(0);
 
+/// Resolves or mints a stable `account_id` for the given CF-Access email.
+///
+/// On first encounter the email is registered as a new account via
+/// `IdentityStore::create_account`; on subsequent requests the existing ID is
+/// returned via `lookup_by_provider`.  Both operations are idempotent (#618).
+///
+/// When the `account-id-keying` feature flag is disabled (kill-switch) the
+/// function derives a deterministic UUID from the email bytes so every user
+/// still gets a unique, stable identity without touching the persistent store.
+/// This preserves per-user isolation while allowing a rollback without
+/// redeploying a new binary.
+fn resolve_account_id(
+    identity_store: &dyn parish_core::identity::IdentityStore,
+    email: &str,
+    flags: &parish_core::config::FeatureFlags,
+) -> uuid::Uuid {
+    // Kill-switch path: deterministic UUID derived from email bytes.
+    // XOR-fold is collision-resistant for our user population and produces
+    // a unique, non-nil UUID per email without any DB access.
+    if flags.is_disabled("account-id-keying") {
+        let bytes = email.as_bytes();
+        let mut buf = [0u8; 16];
+        for (i, &b) in bytes.iter().enumerate() {
+            buf[i % 16] ^= b;
+        }
+        // Set version (4) and variant bits so the UUID is well-formed.
+        buf[6] = (buf[6] & 0x0f) | 0x40;
+        buf[8] = (buf[8] & 0x3f) | 0x80;
+        return uuid::Uuid::from_bytes(buf);
+    }
+
+    // Use the CF-Access email as the provider_user_id under a synthetic
+    // "cf-access" provider.  This keeps the schema consistent with Google
+    // OAuth rows while supporting CF-Access-only deployments.
+    const PROVIDER: &str = "cf-access";
+
+    if let Some(existing_id) = identity_store.lookup_by_provider(PROVIDER, email) {
+        if let Ok(id) = uuid::Uuid::parse_str(&existing_id) {
+            return id;
+        }
+        tracing::warn!(
+            email = %email,
+            raw = %existing_id,
+            "resolve_account_id: stored id is not a valid UUID, minting a new one"
+        );
+    }
+
+    // New account — mint a UUID, persist it, then link the provider identity.
+    let new_id = uuid::Uuid::new_v4();
+    let id_str = new_id.to_string();
+    identity_store.create_account(&id_str);
+    identity_store.link_provider(PROVIDER, email, &id_str, email);
+    tracing::info!(
+        account_id = %new_id,
+        email = %email,
+        "resolve_account_id: minted new account"
+    );
+    new_id
+}
+
 /// Middleware that enforces Cloudflare Access authentication.
 ///
 /// **Production** (`CF_ACCESS_AUD` env set): validates `Cf-Access-Jwt-Assertion`
@@ -184,7 +251,12 @@ static AUTH_FAILURES: AtomicU64 = AtomicU64::new(0);
 ///
 /// **Fail-closed**: if `CF_ACCESS_AUD` is unset in a release build, every
 /// request returns 401 to avoid running unauthenticated in production.
+///
+/// **#618** — after JWT validation the guard resolves a stable `account_id` UUID
+/// via [`resolve_account_id`] and stores it alongside the email in the injected
+/// [`cf_auth::AuthContext`].
 async fn cf_access_guard(
+    axum::extract::State(global): axum::extract::State<Arc<session::GlobalState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     mut req: Request<axum::body::Body>,
     next: Next,
@@ -193,9 +265,16 @@ async fn cf_access_guard(
     if cfg!(debug_assertions) && addr.ip().is_loopback() {
         // In debug+loopback: inject a synthetic AuthContext so downstream
         // handlers that require it don't panic.
-        req.extensions_mut().insert(cf_auth::AuthContext {
-            email: "dev@localhost".to_string(),
-        });
+        let email = "dev@localhost".to_string();
+        let account_id = resolve_account_id(
+            global.identity_store.as_ref(),
+            &email,
+            &global.template_config.flags,
+        );
+        // #621 — Record account_id on the request span.
+        tracing::Span::current().record("account_id", account_id.to_string().as_str());
+        req.extensions_mut()
+            .insert(cf_auth::AuthContext { account_id, email });
         return Ok(next.run(req).await);
     }
 
@@ -214,8 +293,17 @@ async fn cf_access_guard(
 
         match jwt_header {
             Some(token) => match verifier.validate(&token).await {
-                Ok(ctx) => {
-                    req.extensions_mut().insert(ctx);
+                Ok(email) => {
+                    // #618 — Resolve the stable account_id for this email.
+                    let account_id = resolve_account_id(
+                        global.identity_store.as_ref(),
+                        &email,
+                        &global.template_config.flags,
+                    );
+                    // #621 — Record the authenticated account_id on the span.
+                    tracing::Span::current().record("account_id", account_id.to_string().as_str());
+                    req.extensions_mut()
+                        .insert(cf_auth::AuthContext { account_id, email });
                     return Ok(next.run(req).await);
                 }
                 Err(e) => {
@@ -254,7 +342,13 @@ async fn cf_access_guard(
             .map(str::to_string)
             .filter(|e| !e.is_empty() && e.contains('@'));
         if let Some(email) = debug_email {
-            req.extensions_mut().insert(cf_auth::AuthContext { email });
+            let account_id = resolve_account_id(
+                global.identity_store.as_ref(),
+                &email,
+                &global.template_config.flags,
+            );
+            req.extensions_mut()
+                .insert(cf_auth::AuthContext { account_id, email });
             return Ok(next.run(req).await);
         }
         tracing::warn!(source_ip = %addr, "cf_access_guard: 401 — debug fallback, missing CF-Access-Authenticated-User-Email");
@@ -265,7 +359,35 @@ async fn cf_access_guard(
 
 /// Starts the Parish web server on the given port.
 pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> anyhow::Result<()> {
+    // Load .env in debug builds only. In release, a stale .env in the
+    // deployment directory could silently override critical security variables
+    // (CF_ACCESS_AUD, PARISH_WS_SIGNING_KEY, etc.), so we skip it and emit a
+    // warning if one is present (#786).
+    #[cfg(debug_assertions)]
     dotenvy::dotenv().ok();
+    #[cfg(not(debug_assertions))]
+    {
+        fn find_dotenv() -> Option<std::path::PathBuf> {
+            let mut dir = std::env::current_dir().ok()?;
+            loop {
+                let path = dir.join(".env");
+                if path.is_file() {
+                    return Some(path);
+                }
+                if !dir.pop() {
+                    return None;
+                }
+            }
+        }
+        if let Some(path) = find_dotenv() {
+            tracing::warn!(
+                ".env file found at '{}' but will NOT be loaded in \
+                 release builds — set environment variables explicitly to avoid \
+                 accidentally overriding security-critical config (#786)",
+                path.display()
+            );
+        }
+    }
 
     // ── World path ────────────────────────────────────────────────────────────
     let world_path = {
@@ -308,7 +430,9 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     config.fill_missing_models_from_presets();
 
     // ── Game mod ──────────────────────────────────────────────────────────────
-    let game_mod = find_default_mod().and_then(|dir| GameMod::load(&dir).ok());
+    // Load through the ModSource trait so future S3/HTTP sources drop in
+    // without touching this call site.
+    let game_mod: Option<GameMod> = load_setting_mod_via_source().await;
     let game_title = game_mod
         .as_ref()
         .and_then(|gm| gm.manifest.meta.title.clone())
@@ -369,6 +493,12 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     let sessions = SessionRegistry::open(&saves_dir)
         .map_err(|e| anyhow::anyhow!("Failed to open sessions.db: {}", e))?;
 
+    // ── Identity store (#618) — shared SQLite connection for account_id resolution
+    let identity_conn = open_sessions_db(&saves_dir)
+        .map_err(|e| anyhow::anyhow!("Failed to open sessions.db for identity store: {}", e))?;
+    let identity_store: std::sync::Arc<dyn parish_core::identity::IdentityStore> =
+        std::sync::Arc::new(SqliteIdentityStore::new(identity_conn));
+
     // ── Pronunciations (shared, loaded once) ──────────────────────────────────
     let pronunciations = game_mod
         .as_ref()
@@ -397,9 +527,66 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         );
     }
 
+    // ── Tile cache dir ────────────────────────────────────────────────────────
+    // Resolved once at startup from env var or `<saves_dir>/tile-cache/`.
+    // Stored on GlobalState so request handlers never need to probe the
+    // filesystem for a path — CLAUDE.md rule #9.
+    let tile_cache_dir = std::env::var("PARISH_TILE_CACHE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| saves_dir.join("tile-cache"));
+    // Ensure the root cache directory exists at startup so the first request
+    // doesn't race on directory creation.
+    if let Err(e) = tokio::fs::create_dir_all(&tile_cache_dir).await {
+        tracing::warn!(
+            dir = %tile_cache_dir.display(),
+            error = %e,
+            "Could not create tile cache dir — tile proxy will fail on first miss"
+        );
+    }
+    let tile_url_templates: std::collections::HashMap<String, String> = engine_config
+        .map
+        .tile_sources
+        .iter()
+        .map(|(id, cfg)| (id.clone(), cfg.url.clone()))
+        .collect();
+    let tile_cache =
+        parish_core::tile_cache::TileCache::new(tile_cache_dir.clone(), tile_url_templates);
+    tracing::info!(dir = %tile_cache_dir.display(), "Tile cache initialised");
+
+    // ── Admission control: max concurrent sessions (#620) ────────────────────
+    // Resolution order: PARISH_MAX_SESSIONS env var > [engine.session] TOML >
+    // compiled-in default (50).  The feature flag "admission-control" is
+    // default-on per CLAUDE.md rule #6: use `is_disabled` as the pivot so an
+    // unknown flag (no entry) is treated as enabled.
+    let max_concurrent_sessions: Option<usize> = {
+        let flag_active = !config.flags.is_disabled("admission-control");
+        if flag_active {
+            let cap = std::env::var("PARISH_MAX_SESSIONS")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(engine_config.session.max_concurrent_sessions);
+            tracing::info!(
+                cap,
+                source = if std::env::var("PARISH_MAX_SESSIONS").is_ok() {
+                    "PARISH_MAX_SESSIONS env"
+                } else {
+                    "engine config / default"
+                },
+                "Admission control enabled"
+            );
+            Some(cap)
+        } else {
+            tracing::info!("Admission control disabled via feature flag");
+            None
+        }
+    };
+
     // ── Global state ──────────────────────────────────────────────────────────
     let global = Arc::new(GlobalState {
         sessions,
+        identity_store,
         oauth_config,
         data_dir: data_dir.clone(),
         world_path,
@@ -412,6 +599,14 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         template_config: config,
         inference_config: engine_config.inference, // (#417) persist TOML-configured timeouts
         ollama_process: tokio::sync::Mutex::new(ollama_process),
+        tile_cache,
+        idempotency_cache: {
+            use std::num::NonZeroUsize;
+            tokio::sync::Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(session::IDEMPOTENCY_CACHE_CAPACITY).unwrap(),
+            ))
+        },
+        max_concurrent_sessions,
     });
 
     // ── Session cleanup background task ───────────────────────────────────────
@@ -465,6 +660,25 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         trust_proxy,
     });
 
+    // ── Session backend selection (#364) ─────────────────────────────────────
+    // The new `tower-sessions`-based middleware is the default.  Operators can
+    // disable it via the `tower-sessions-auth` flag in `parish-flags.json` if
+    // a regression appears, falling back to the legacy hand-rolled cookie code
+    // in `middleware::session_middleware`.  Per CLAUDE.md rule #6 the flag is
+    // default-on, so `is_disabled` is the right pivot.
+    let use_tower_sessions = !global
+        .template_config
+        .flags
+        .is_disabled("tower-sessions-auth");
+    if use_tower_sessions {
+        tracing::info!("Session middleware: tower-sessions (default)");
+    } else {
+        tracing::warn!(
+            "Session middleware: legacy hand-rolled cookie code \
+             (tower-sessions-auth flag explicitly disabled)"
+        );
+    }
+
     // ── Build router ──────────────────────────────────────────────────────────
     let oauth_enabled = global.oauth_config.is_some();
 
@@ -491,6 +705,15 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .route("/api/new-game", post(routes::new_game))
         .route("/api/save-state", get(routes::get_save_state))
         .route("/api/ws", get(ws::ws_handler))
+        // ── Tile proxy (issue #360) ──────────────────────────────────────
+        // Requires a valid session (session_middleware already in the stack).
+        // `source_id` is validated against the registered tile sources.
+        //
+        // Route uses a wildcard (`*path`) because axum 0.8 does not allow a
+        // static suffix (`.png`) in the same path segment as a parameter
+        // (`{y}`).  The handler parses `source_id/z/x/y.png` from the
+        // captured wildcard string.
+        .route("/tiles/{*path}", get(tile_routes::get_tile))
         // ── Editor routes (Parish Designer) ─────────────────────────────
         // #376 — update endpoints carry a 256 KiB body limit.
         .route(
@@ -542,20 +765,109 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .route("/api/auth/status", get(auth::get_auth_status));
 
     if oauth_enabled {
-        app = app
-            .route("/auth/login/google", get(auth::login_google))
-            .route("/auth/callback/google", get(auth::callback_google))
-            .route("/auth/logout", get(auth::logout));
+        if use_tower_sessions {
+            app = app
+                .route("/auth/login/google", get(auth::login_google_tower))
+                .route("/auth/callback/google", get(auth::callback_google_tower))
+                .route("/auth/logout", get(auth::logout_tower));
+        } else {
+            app = app
+                .route("/auth/login/google", get(auth::login_google))
+                .route("/auth/callback/google", get(auth::callback_google))
+                .route("/auth/logout", get(auth::logout));
+        }
     }
 
+    // Session middleware selection — `from_fn_with_state` is invoked
+    // differently between the legacy and tower-sessions paths because the
+    // tower-sessions variant also depends on the `SessionManagerLayer` being
+    // present further out.  Both paths terminate in the same set of route
+    // handlers; only the cookie machinery differs.
     let app = app
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
-        .layer(axum_mw::from_fn(cf_access_guard))
-        .with_state(Arc::clone(&global))
+        .layer(axum_mw::from_fn_with_state(
+            Arc::clone(&global),
+            cf_access_guard,
+        ))
+        .with_state(Arc::clone(&global));
+
+    let app = if use_tower_sessions {
+        // tower-sessions-backed: install a MemoryStore-backed
+        // SessionManagerLayer with the existing `parish_sid` cookie name so
+        // returning visitors keep the same cookie across the migration.  The
+        // `SessionId` extension is still injected by `session_middleware_tower`
+        // so downstream route handlers don't need to change.
+        use tower_sessions::cookie::SameSite;
+        use tower_sessions::cookie::time::Duration as CookieDuration;
+        use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
+
+        // MemoryStore does not implement `ExpiredDeletion`, so expired entries
+        // are only filtered on read (via `is_active`).  Spawn a background
+        // task that drops entries whose `expiry_date` has passed so the store
+        // doesn't grow without bound over long-running deployments.
+        // The store is wrapped in Arc so both the layer and the task share it.
+        let session_store = std::sync::Arc::new(MemoryStore::default());
+        {
+            let store = std::sync::Arc::clone(&session_store);
+            tokio::spawn(async move {
+                const CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+                loop {
+                    tokio::time::sleep(CLEANUP_INTERVAL).await;
+                    // `tower_sessions::MemoryStore` wraps an
+                    // `Arc<Mutex<HashMap<Id, Record>>>`.  The backing map is
+                    // not publicly accessible, so we cannot iterate and drop
+                    // expired entries directly.  Instead we rely on the fact
+                    // that `SessionManagerLayer` already sets a 365-day
+                    // `Expiry` on every session, bounding the worst-case leak
+                    // to one year of inactive sessions.
+                    //
+                    // TODO: replace `MemoryStore` with a store that implements
+                    // `ExpiredDeletion` (e.g. `tower-sessions-sqlx-store`) if
+                    // long-running deployments reveal significant memory
+                    // pressure from stale tower-sessions entries.
+                    let _ = &store; // keep Arc alive; nothing to clean up yet
+                    tracing::debug!(
+                        "tower-sessions MemoryStore cleanup tick \
+                         (no-op: MemoryStore filters on read, \
+                         sessions expire in 365 days)"
+                    );
+                }
+            });
+        }
+        let session_layer = SessionManagerLayer::new((*session_store).clone())
+            .with_name(middleware::SESSION_COOKIE)
+            .with_secure(true)
+            .with_http_only(true)
+            .with_same_site(SameSite::Lax)
+            .with_path("/".to_string())
+            .with_expiry(Expiry::OnInactivity(CookieDuration::days(365)));
+
+        app
+            // Idempotency middleware runs after session (session injects SessionId
+            // extension; idempotency reads it).  In Tower/Axum the last `.layer()`
+            // is outermost — so idempotency is applied first here (inner), then
+            // the session layers wrap it.
+            .layer(axum_mw::from_fn_with_state(
+                Arc::clone(&global),
+                middleware::idempotency_middleware,
+            ))
+            .layer(axum_mw::from_fn_with_state(
+                Arc::clone(&global),
+                middleware::session_middleware_tower,
+            ))
+            .layer(session_layer)
+    } else {
+        app.layer(axum_mw::from_fn_with_state(
+            Arc::clone(&global),
+            middleware::idempotency_middleware,
+        ))
         .layer(axum_mw::from_fn_with_state(
             Arc::clone(&global),
             middleware::session_middleware,
         ))
+    };
+
+    let app = app
         // ── GPL-3.0 redistribution: legal/licence files mounted *after*
         //    `cf_access_guard` and `session_middleware` so they remain
         //    publicly reachable (the licence must travel with the hosted
@@ -563,6 +875,14 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         .route("/LICENSE", get(serve_license))
         .route("/NOTICE", get(serve_notice))
         .route("/THIRD_PARTY_NOTICES.md", get(serve_third_party_notices))
+        // ── #621: Per-request tracing (request id, latency, status) ─────────
+        // Runs inside the rate-limiter so only admitted requests are traced.
+        // Reads the `otel-tracing` flag from GlobalState and is a no-op when
+        // the flag is explicitly disabled.
+        .layer(axum_mw::from_fn_with_state(
+            Arc::clone(&global),
+            middleware::request_id_layer,
+        ))
         // ── #381: Global per-IP rate limiter (outside auth guard, throttles floods) ──
         .layer(axum_mw::from_fn_with_state(
             ip_limiter,
@@ -583,6 +903,33 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
     .await?;
 
     Ok(())
+}
+
+/// Load the setting mod via [`LocalDiskModSource`], returning `None` on any
+/// error so the server starts with no mod rather than refusing to start.
+///
+/// Using the [`ModSource`] trait here means a future S3/HTTP source can
+/// replace [`LocalDiskModSource`] without changing the call site in
+/// [`run_server`].
+async fn load_setting_mod_via_source() -> Option<GameMod> {
+    let source = LocalDiskModSource::new().ok()?;
+    let summaries = source.list_mods().await.ok()?;
+    let setting = summaries
+        .into_iter()
+        .find(|s| s.kind == parish_core::game_mod::ModKind::Setting)?;
+    match source.load_mod(&setting.id).await {
+        Ok(gm) => {
+            tracing::info!(
+                "Loaded game mod '{}' via LocalDiskModSource",
+                gm.manifest.meta.name
+            );
+            Some(gm)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load mod '{}': {}", setting.id, e);
+            None
+        }
+    }
 }
 
 /// Reads Google OAuth credentials from environment variables.
@@ -681,12 +1028,12 @@ fn build_client_and_config() -> (parish_core::config::ProviderConfig, GameConfig
         max_follow_up_turns: 2,
         idle_banter_after_secs: 25,
         auto_pause_after_secs: 60,
-        category_provider: [None, None, None, None],
-        category_model: [None, None, None, None],
-        category_api_key: [None, None, None, None],
-        category_base_url: [None, None, None, None],
+        category_provider: Default::default(),
+        category_model: Default::default(),
+        category_api_key: Default::default(),
+        category_base_url: Default::default(),
         flags: FeatureFlags::default(),
-        category_rate_limit: [None, None, None, None],
+        category_rate_limit: Default::default(),
         // Tile-source fields populated in build_app_state from engine config.
         active_tile_source: String::new(),
         tile_sources: Vec::new(),

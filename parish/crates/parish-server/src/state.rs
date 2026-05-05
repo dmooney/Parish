@@ -3,9 +3,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::Mutex;
 // `tokio::sync::Mutex` used for `active_ws` so the guard can be held across
 // await points without blocking Tokio workers.
 use tokio::task::JoinHandle;
@@ -13,99 +12,34 @@ use tokio::task::JoinHandle;
 use parish_core::config::InferenceConfig;
 use parish_core::debug_snapshot::DebugEvent;
 use parish_core::game_mod::PronunciationEntry;
-use parish_core::inference::{AnyClient, InferenceLog, InferenceQueue};
-use parish_core::ipc::ConversationLine;
+use parish_core::inference::{AnyClient, InferenceClient, InferenceLog, InferenceQueue};
 use parish_core::ipc::ThemePalette;
 use parish_core::npc::manager::NpcManager;
+use parish_core::session_store::SessionStore;
+use parish_core::world::WorldState;
 use parish_core::world::events::GameEvent;
 use parish_core::world::transport::TransportConfig;
-use parish_core::world::{LocationId, WorldState};
+
+// Re-export event-bus types: the concrete impl used for the AppState field,
+// the trait (for emit_named calls at construction/test time), the wire type,
+// and Topic (for test code).
+pub use parish_core::event_bus::{
+    BroadcastEventBus, EventBus as EventBusTrait, ServerEvent, Topic,
+};
 
 /// Maximum number of debug/game events retained in the server's ring buffer.
 pub const DEBUG_EVENT_CAPACITY: usize = 100;
 
-/// UI configuration snapshot returned by the `/api/ui-config` endpoint.
-#[derive(serde::Serialize, Clone)]
-pub struct UiConfigSnapshot {
-    /// Label for the language-hints sidebar panel.
-    pub hints_label: String,
-    /// Default accent colour (CSS hex string).
-    pub default_accent: String,
-    /// Splash text displayed on game start (Zork-style).
-    pub splash_text: String,
-    /// Id of the currently-active tile source (matches a `tile_sources` key).
-    pub active_tile_source: String,
-    /// Registry of available map tile sources, alphabetical by id.
-    pub tile_sources: Vec<parish_core::ipc::TileSourceSnapshot>,
-    /// How many seconds of inactivity before auto-pausing the game.
-    pub auto_pause_timeout_seconds: u64,
-}
+// ── Shared state types (moved to parish-core::ipc::state as part of #696) ───
 
-/// Current save state for display in the StatusBar.
-#[derive(serde::Serialize, Clone)]
-pub struct SaveState {
-    /// Filename of the current save file (e.g. "parish_001.db"), or None.
-    pub filename: Option<String>,
-    /// Current branch database id, or None.
-    pub branch_id: Option<i64>,
-    /// Current branch name, or None.
-    pub branch_name: Option<String>,
-}
-
-/// Runtime conversation/session state used for multi-NPC continuity and idle timers.
-pub struct ConversationRuntimeState {
-    /// Player location associated with the current transcript.
-    pub location: Option<LocationId>,
-    /// Recent dialogue at the current location.
-    pub transcript: std::collections::VecDeque<ConversationLine>,
-    /// Last wall-clock moment when the player submitted input.
-    pub last_player_activity: Instant,
-    /// Last wall-clock moment when anyone said something in the local conversation.
-    pub last_spoken_at: Instant,
-    /// Whether a player- or idle-triggered NPC exchange is currently running.
-    pub conversation_in_progress: bool,
-}
-
-impl Default for ConversationRuntimeState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConversationRuntimeState {
-    pub fn new() -> Self {
-        let now = Instant::now();
-        Self {
-            location: None,
-            transcript: std::collections::VecDeque::with_capacity(16),
-            last_player_activity: now,
-            last_spoken_at: now,
-            conversation_in_progress: false,
-        }
-    }
-
-    pub fn sync_location(&mut self, location: LocationId) {
-        if self.location != Some(location) {
-            self.location = Some(location);
-            self.transcript.clear();
-        }
-    }
-
-    pub fn push_line(&mut self, line: ConversationLine) {
-        if line.text.trim().is_empty() {
-            return;
-        }
-        if self.transcript.len() >= 12 {
-            self.transcript.pop_front();
-        }
-        self.transcript.push_back(line);
-    }
-}
+/// Re-export from `parish_core` so all existing `crate::state::*` call sites
+/// continue to compile without modification.
+pub use parish_core::ipc::{ConversationRuntimeState, SaveState, UiConfigSnapshot};
 
 /// Shared mutable game state for the web server.
 ///
-/// Mirrors the Tauri `AppState` but uses an [`EventBus`] for push events
-/// instead of a Tauri `AppHandle`.
+/// Mirrors the Tauri `AppState` but uses a [`BroadcastEventBus`] for push
+/// events instead of a Tauri `AppHandle`.
 ///
 /// # Lock ordering invariant (#483)
 ///
@@ -126,7 +60,8 @@ impl ConversationRuntimeState {
 ///         → config
 ///           → client
 ///             → cloud_client
-///               → debug_events
+///               → inference_client
+///                 → debug_events
 ///                 → game_events
 ///                   → inference_log
 ///                     → editor_sessions
@@ -175,6 +110,11 @@ impl ConversationRuntimeState {
 /// refresh, or `world` across a save-to-disk, will serialise every
 /// concurrent session behind that one path.
 pub struct AppState {
+    /// Stable identifier for this session — the same UUID that appears in the
+    /// `parish_sid` cookie.  Stored here so background tasks (tick loop, etc.)
+    /// can emit per-session tracing events without holding the middleware
+    /// extensions (#621).
+    pub session_id: String,
     /// The game world (clock, player position, graph, weather).
     pub world: Mutex<WorldState>,
     /// NPC manager (all NPCs, tier assignment, schedule ticking).
@@ -187,6 +127,19 @@ pub struct AppState {
     pub client: Mutex<Option<AnyClient>>,
     /// Cloud LLM client for dialogue (None if not configured).
     pub cloud_client: Mutex<Option<AnyClient>>,
+    /// Trait-erased inference client stack (caching + metrics decorator, #617).
+    ///
+    /// All inference call sites that use the new `InferenceClient` trait go
+    /// through this `Arc`.  It is constructed by
+    /// `parish_inference::build_inference_client_stack` and wraps `client` or
+    /// `cloud_client` with an optional LRU cache and a metrics layer.
+    ///
+    /// `None` when no provider is configured (same lifecycle as `client`).
+    ///
+    /// Behind a `Mutex` so that `rebuild_inference` can swap it atomically
+    /// when the provider/key changes at runtime — same lifecycle as `client`.
+    /// Lock ordering: acquire after `cloud_client`, before `debug_events`.
+    pub inference_client: Mutex<Option<Arc<dyn InferenceClient>>>,
     /// Mutable runtime configuration.
     pub config: Mutex<GameConfig>,
     /// Local conversation transcript and inactivity tracking.
@@ -197,7 +150,7 @@ pub struct AppState {
     /// Rolling ring buffer of `GameEvent`s captured from the world event bus.
     pub game_events: Mutex<std::collections::VecDeque<GameEvent>>,
     /// Broadcast channel for pushing events to WebSocket clients.
-    pub event_bus: EventBus,
+    pub event_bus: BroadcastEventBus,
     /// Transport mode configuration from the loaded game mod.
     pub transport: TransportConfig,
     /// UI configuration from the loaded game mod.
@@ -224,19 +177,28 @@ pub struct AppState {
     /// or shutdown so orphaned workers (each holding an HTTP client and channel)
     /// don't accumulate.  See bugs #224 and #231.
     pub worker_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Per-user editor sessions — keyed by CF-Access email.
+    /// Per-account editor sessions — keyed by `(account_id, mod_id)`.
+    ///
+    /// Keyed by `account_id` (stable UUID) so that multiple browser tabs from
+    /// the same authenticated user share one editor session rather than creating
+    /// per-cookie duplicates (#618).  The `String` component is the mod path /
+    /// id, kept for future multi-mod support (currently always `""` until a mod
+    /// is opened, at which point the session is re-keyed).
+    ///
+    /// When the `account-id-keying` feature flag is disabled the key is
+    /// `(Uuid::nil(), email)` for backward compatibility.
     ///
     /// Uses a `tokio::sync::Mutex` so handlers can hold the guard across
     /// `.await` points without blocking Tokio workers.
     pub editor_sessions: tokio::sync::Mutex<
-        std::collections::HashMap<String, parish_core::ipc::editor::EditorSession>,
+        std::collections::HashMap<(uuid::Uuid, String), parish_core::ipc::editor::EditorSession>,
     >,
-    /// Set of emails that currently have an active WebSocket connection.
+    /// Set of `account_id`s that currently have an active WebSocket connection.
     ///
-    /// Enforces single-WS-per-email (#334): a second upgrade from the same
-    /// email is rejected with 409 Conflict until the first socket closes.
+    /// Enforces single-WS-per-account (#334/#618): a second upgrade from the
+    /// same account is rejected with 409 Conflict until the first socket closes.
     /// Uses a `tokio::sync::Mutex` so it can be held across await points.
-    pub active_ws: tokio::sync::Mutex<HashSet<String>>,
+    pub active_ws: tokio::sync::Mutex<HashSet<uuid::Uuid>>,
     /// Advisory file lock for the currently active save file.
     pub save_lock: Mutex<Option<parish_core::persistence::SaveFileLock>>,
     /// TOML-configured inference timeouts loaded from `parish.toml` at session
@@ -253,71 +215,26 @@ pub struct AppState {
     /// Lock ordering: acquired after `save_lock`.
     pub save_db:
         tokio::sync::Mutex<Option<(std::path::PathBuf, parish_core::persistence::AsyncDatabase)>>,
+    /// Trait-erased per-session persistence.
+    ///
+    /// Route handlers and the autosave tick should prefer this over direct
+    /// `Database` / `AsyncDatabase` calls so that future remote or managed-auth
+    /// backends can be swapped in without touching handler code (#614).
+    ///
+    /// Not part of the lock-ordering chain: `Arc<dyn SessionStore>` is
+    /// never held across lock acquisition of any `Mutex` field.
+    pub session_store: Arc<dyn SessionStore>,
 }
 
 // GameConfig is now shared across all backends via parish-core.
 pub use parish_core::ipc::GameConfig;
-
-/// A JSON-serializable server event pushed to WebSocket clients.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct ServerEvent {
-    /// Event name (e.g. "stream-token", "text-log").
-    pub event: String,
-    /// JSON payload for this event.
-    pub payload: serde_json::Value,
-}
-
-/// Broadcast channel for server-push events.
-///
-/// Events emitted here are forwarded to all connected WebSocket clients.
-pub struct EventBus {
-    tx: broadcast::Sender<ServerEvent>,
-}
-
-impl EventBus {
-    /// Creates a new event bus with the given channel capacity.
-    pub fn new(capacity: usize) -> Self {
-        let (tx, _) = broadcast::channel(capacity);
-        Self { tx }
-    }
-
-    /// Sends an event to all subscribers. Returns the number of receivers.
-    pub fn send(&self, event: ServerEvent) -> usize {
-        match self.tx.send(event) {
-            Ok(count) => count,
-            Err(_) => {
-                tracing::warn!("EventBus: broadcast failed — no active subscribers");
-                0
-            }
-        }
-    }
-
-    /// Emits a named event with a serializable payload.
-    pub fn emit<T: serde::Serialize>(&self, event_name: &str, payload: &T) {
-        match serde_json::to_value(payload) {
-            Ok(value) => {
-                self.send(ServerEvent {
-                    event: event_name.to_string(),
-                    payload: value,
-                });
-            }
-            Err(e) => {
-                tracing::warn!(event = %event_name, error = %e, "EventBus: failed to serialize event payload");
-            }
-        }
-    }
-
-    /// Creates a new receiver for this bus.
-    pub fn subscribe(&self) -> broadcast::Receiver<ServerEvent> {
-        self.tx.subscribe()
-    }
-}
 
 /// Creates the shared [`AppState`] from game data.
 // AppState is a flat bundle of all server-wide singletons; a builder pattern
 // would add complexity without benefit, so the many-argument constructor is intentional.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_state(
+    session_id: String,
     world: WorldState,
     npc_manager: NpcManager,
     client: Option<AnyClient>,
@@ -331,19 +248,33 @@ pub fn build_app_state(
     game_mod: Option<parish_core::game_mod::GameMod>,
     flags_path: PathBuf,
     inference_config: InferenceConfig,
+    session_store: Arc<dyn SessionStore>,
 ) -> Arc<AppState> {
     // Extract pronunciations from game mod before moving it.
     let pronunciations = game_mod
         .as_ref()
         .map(|gm| gm.pronunciations.clone())
         .unwrap_or_default();
+
+    // Build the trait-erased inference client stack (#617).
+    // Feature flags are not yet loaded at this point (flags_path not read),
+    // so we default both inference-client-trait and inference-response-cache
+    // to on (the per-CLAUDE.md §6 default-on convention).  Routes/handlers
+    // that need the flag-gated behaviour should check flags at call time.
+    let inference_client = client.as_ref().map(|c| {
+        let cache_capacity = parish_core::inference::cache_capacity_from_env();
+        parish_core::inference::build_inference_client_stack(c.clone(), true, cache_capacity)
+    });
+
     Arc::new(AppState {
+        session_id,
         world: Mutex::new(world),
         npc_manager: Mutex::new(npc_manager),
         inference_queue: Mutex::new(None),
         inference_log: parish_core::inference::new_inference_log(),
         client: Mutex::new(client),
         cloud_client: Mutex::new(cloud_client),
+        inference_client: Mutex::new(inference_client),
         config: Mutex::new(config),
         conversation: Mutex::new(ConversationRuntimeState::new()),
         debug_events: Mutex::new(std::collections::VecDeque::with_capacity(
@@ -352,7 +283,7 @@ pub fn build_app_state(
         game_events: Mutex::new(std::collections::VecDeque::with_capacity(
             DEBUG_EVENT_CAPACITY,
         )),
-        event_bus: EventBus::new(256),
+        event_bus: BroadcastEventBus::new(256),
         transport,
         ui_config,
         theme_palette,
@@ -366,35 +297,43 @@ pub fn build_app_state(
         flags_path,
         worker_handle: Mutex::new(None),
         editor_sessions: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-        active_ws: tokio::sync::Mutex::new(HashSet::new()),
+        active_ws: tokio::sync::Mutex::new(HashSet::<uuid::Uuid>::new()),
         save_lock: Mutex::new(None),
         inference_config,
         save_db: tokio::sync::Mutex::new(None),
+        session_store,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parish_core::event_bus::{EventBus as EventBusTrait, Topic};
 
     #[test]
-    fn event_bus_send_and_subscribe() {
-        let bus = EventBus::new(16);
-        let mut rx = bus.subscribe();
-        bus.emit("test-event", &serde_json::json!({"key": "value"}));
-        let event = rx.try_recv().unwrap();
+    fn event_bus_emit_named_and_subscribe() {
+        let bus = BroadcastEventBus::new(16);
+        let mut stream = bus.subscribe(&[]);
+        bus.emit_named(
+            Topic::TextLog,
+            "test-event",
+            &serde_json::json!({"key": "value"}),
+        );
+        let event = stream.try_recv().unwrap();
         assert_eq!(event.event, "test-event");
         assert_eq!(event.payload["key"], "value");
     }
 
     #[test]
-    fn event_bus_no_subscribers() {
-        let bus = EventBus::new(16);
+    fn event_bus_no_subscribers_does_not_panic() {
+        let bus = BroadcastEventBus::new(16);
         // No subscribers — should not panic
-        let count = bus.send(ServerEvent {
-            event: "orphan".to_string(),
-            payload: serde_json::Value::Null,
-        });
-        assert_eq!(count, 0);
+        bus.emit(
+            Topic::TextLog,
+            ServerEvent {
+                event: "orphan".to_string(),
+                payload: serde_json::Value::Null,
+            },
+        );
     }
 }

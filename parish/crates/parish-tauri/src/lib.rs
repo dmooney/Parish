@@ -13,11 +13,11 @@ use parish_core::AUTOSAVE_INTERVAL_SECS;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
 use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use parish_core::config::{FeatureFlags, Provider, ProviderConfig};
 use parish_core::debug_snapshot::{DebugEvent, InferenceDebug};
@@ -25,140 +25,90 @@ use parish_core::game_mod::PronunciationEntry;
 use parish_core::inference::{
     AnyClient, InferenceLog, InferenceQueue, new_inference_log, spawn_inference_worker,
 };
-use parish_core::ipc::ConversationLine;
 use parish_core::npc::manager::NpcManager;
 use parish_core::npc::reactions::ReactionTemplates;
 use parish_core::world::transport::TransportConfig;
-use parish_core::world::{DEFAULT_START_LOCATION, LocationId, WorldState};
+use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
 
 const INITIAL_SETUP_MESSAGE: &str = "Preparing the storyteller...";
 const SETUP_HISTORY_LIMIT: usize = 50;
 
 // ── IPC type definitions ─────────────────────────────────────────────────────
 
-/// A serializable snapshot of the world state sent to the frontend.
-#[derive(serde::Serialize, Clone)]
-pub struct WorldSnapshot {
-    /// Name of the player's current location.
-    pub location_name: String,
-    /// Short prose description of the current location.
-    pub location_description: String,
-    /// Human-readable time label (e.g. "Morning", "Dusk").
-    pub time_label: String,
-    /// Current game hour (0–23).
-    pub hour: u8,
-    /// Current game minute (0–59).
-    pub minute: u8,
-    /// Current weather description.
-    pub weather: String,
-    /// Current season name.
-    pub season: String,
-    /// Optional festival name if today is a festival day.
-    pub festival: Option<String>,
-    /// Whether the game clock is currently player-paused.
-    pub paused: bool,
-    /// Whether the game clock is frozen while waiting on inference.
-    pub inference_paused: bool,
-    /// Game time as milliseconds since Unix epoch (for client-side interpolation).
-    pub game_epoch_ms: f64,
-    /// Clock speed multiplier (1 real second = speed_factor game seconds).
-    pub speed_factor: f64,
-    /// Pronunciation hints for Irish names relevant to the current location.
-    pub name_hints: Vec<parish_core::npc::LanguageHint>,
-    /// Current day of week (e.g. "Monday", "Saturday").
-    pub day_of_week: String,
-}
+// WorldSnapshot, MapLocation, and NpcInfo are defined in parish-core and
+// re-exported here so all call sites remain stable.
+pub use parish_core::ipc::{MapLocation, WorldSnapshot};
 
 /// Latest setup progress state for the startup overlay.
 #[derive(serde::Serialize, Clone)]
 pub struct SetupStatusSnapshot {
-    /// Current human-readable setup step.
-    pub current_message: String,
-    /// Recent setup messages shown as the overlay activity trail.
-    pub messages: Vec<String>,
-    /// Bytes downloaded so far across discovered Ollama pull artifacts.
-    pub completed: u64,
-    /// Total bytes expected across discovered Ollama pull artifacts, or 0 when unknown.
-    pub total: u64,
-    /// Whether setup has completed.
-    pub done: bool,
-    /// Success state once setup is complete; `None` while setup is running.
-    pub success: Option<bool>,
-    /// Error message when setup failed.
-    pub error: String,
+	/// Current human-readable setup step.
+	pub current_message: String,
+	/// Recent setup messages shown as the overlay activity trail.
+	pub messages: Vec<String>,
+	/// Bytes downloaded so far across discovered Ollama pull artifacts.
+	pub completed: u64,
+	/// Total bytes expected across discovered Ollama pull artifacts, or 0 when unknown.
+	pub total: u64,
+	/// Whether setup has completed.
+	pub done: bool,
+	/// Success state once setup is complete; `None` while setup is running.
+	pub success: Option<bool>,
+	/// Error message when setup failed.
+	pub error: String,
 }
 
 impl Default for SetupStatusSnapshot {
-    fn default() -> Self {
-        Self {
-            current_message: INITIAL_SETUP_MESSAGE.to_string(),
-            messages: vec![INITIAL_SETUP_MESSAGE.to_string()],
-            completed: 0,
-            total: 0,
-            done: false,
-            success: None,
-            error: String::new(),
-        }
-    }
+	fn default() -> Self {
+		Self {
+			current_message: INITIAL_SETUP_MESSAGE.to_string(),
+			messages: vec![INITIAL_SETUP_MESSAGE.to_string()],
+			completed: 0,
+			total: 0,
+			done: false,
+			success: None,
+			error: String::new(),
+		}
+	}
 }
 
 impl SetupStatusSnapshot {
-    fn record_status(&mut self, msg: &str) {
-        self.current_message = msg.to_string();
-        if self.messages.last().is_some_and(|last| last == msg) {
-            return;
-        }
-        if self.messages.len() >= SETUP_HISTORY_LIMIT {
-            self.messages.remove(0);
-        }
-        self.messages.push(msg.to_string());
-    }
+	fn record_status(&mut self, msg: &str) {
+		self.current_message = msg.to_string();
+		if self.messages.last().is_some_and(|last| last == msg) {
+			return;
+		}
+		if self.messages.len() >= SETUP_HISTORY_LIMIT {
+			self.messages.remove(0);
+		}
+		self.messages.push(msg.to_string());
+	}
 
-    fn record_progress(&mut self, completed: u64, total: u64) {
-        self.completed = completed;
-        self.total = total;
-    }
+	fn record_progress(&mut self, completed: u64, total: u64) {
+		self.completed = completed;
+		self.total = total;
+	}
 
-    fn record_done(&mut self, success: bool, error: String) {
-        self.done = true;
-        self.success = Some(success);
-        self.error = error.clone();
-        if success {
-            self.record_status("The storyteller is ready.");
-        } else if error.is_empty() {
-            self.record_status("Setup failed.");
-        } else {
-            self.record_status(&format!("Setup failed: {}", error));
-        }
-    }
-}
-
-/// A location node in the map data.
-#[derive(serde::Serialize, Clone)]
-pub struct MapLocation {
-    /// Location ID as a string.
-    pub id: String,
-    /// Human-readable name.
-    pub name: String,
-    /// WGS-84 latitude (0.0 if not geocoded).
-    pub lat: f64,
-    /// WGS-84 longitude (0.0 if not geocoded).
-    pub lon: f64,
-    /// Whether this location is adjacent to (or is) the player's position.
-    pub adjacent: bool,
-    /// Number of graph hops from the player's current location.
-    pub hops: u32,
-    /// Whether this location is indoors (for tooltip display).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indoor: Option<bool>,
-    /// Estimated walking time from the player's current location, in minutes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub travel_minutes: Option<u16>,
-    /// Whether the player has visited this location (false = fog-of-war frontier).
-    pub visited: bool,
+	fn record_done(&mut self, success: bool, error: String) {
+		self.done = true;
+		self.success = Some(success);
+		self.error = error.clone();
+		if success {
+			self.record_status("The storyteller is ready.");
+		} else if error.is_empty() {
+			self.record_status("Setup failed.");
+		} else {
+			self.record_status(&format!("Setup failed: {}", error));
+		}
+	}
 }
 
 /// The full map graph sent to the frontend.
+///
+/// Tauri-specific extension of the core `MapData` type: adds `player_lat` and
+/// `player_lon` for minimap centering. The core type omits these because the
+/// axum web server derives them differently (the server builds the snapshot on
+/// behalf of the currently authenticated session rather than the local player).
 #[derive(serde::Serialize, Clone)]
 pub struct MapData {
     /// All locations in the graph.
@@ -180,92 +130,39 @@ pub struct MapData {
     pub transport_id: String,
 }
 
-// NpcInfo and ThemePalette are defined in parish-core and re-exported here.
-pub use parish_core::ipc::{GameConfig, NpcInfo, ThemePalette};
+// NpcInfo, ThemePalette, GameConfig, SaveState, UiConfigSnapshot, and
+// ConversationRuntimeState are defined in parish-core and re-exported here.
+pub use parish_core::ipc::{
+    ConversationRuntimeState, GameConfig, NpcInfo, SaveState, ThemePalette, UiConfigSnapshot,
+};
 
-/// Current save state for display in the StatusBar.
-#[derive(serde::Serialize, Clone)]
-pub struct SaveState {
-    /// Filename of the current save file (e.g. "parish_001.db"), or None.
-    pub filename: Option<String>,
-    /// Current branch database id, or None.
-    pub branch_id: Option<i64>,
-    /// Current branch name, or None.
-    pub branch_name: Option<String>,
+/// Configuration for the LLM demo / auto-player mode.
+///
+/// Read-only after startup; set via `--demo` CLI flags.
+pub struct DemoConfig {
+    /// Whether to start the demo loop automatically on launch.
+    pub auto_start: bool,
+    /// Extra prompt instructions loaded from `--demo-prompt <file>`.
+    pub extra_prompt: Option<String>,
+    /// Seconds to pause between demo turns (default 2.0).
+    pub turn_pause_secs: f32,
+    /// Maximum number of turns before stopping (None = unlimited).
+    pub max_turns: Option<u32>,
+}
+
+impl Default for DemoConfig {
+    fn default() -> Self {
+        Self {
+            auto_start: false,
+            extra_prompt: None,
+            turn_pause_secs: 2.0,
+            max_turns: None,
+        }
+    }
 }
 
 /// Maximum number of debug events to retain.
 pub const DEBUG_EVENT_CAPACITY: usize = 100;
-
-/// UI configuration sent to the frontend via `get_ui_config`.
-///
-/// Sourced from the loaded [`GameMod`](parish_core::game_mod::GameMod)'s `ui.toml`
-/// or defaults if no mod is loaded.
-#[derive(serde::Serialize, Clone)]
-pub struct UiConfigSnapshot {
-    /// Label for the language-hints sidebar panel.
-    pub hints_label: String,
-    /// Default accent colour (CSS hex string).
-    pub default_accent: String,
-    /// Splash text displayed on game start (Zork-style).
-    pub splash_text: String,
-    /// Id of the currently-active tile source (matches a `tile_sources` key).
-    pub active_tile_source: String,
-    /// Registry of available map tile sources, alphabetical by id.
-    pub tile_sources: Vec<parish_core::ipc::TileSourceSnapshot>,
-    /// How many seconds of inactivity before auto-pausing the game.
-    pub auto_pause_timeout_seconds: u64,
-}
-
-/// Runtime conversation/session state used for continuity and inactivity timers.
-pub struct ConversationRuntimeState {
-    /// Player location associated with the current transcript.
-    pub location: Option<LocationId>,
-    /// Recent dialogue at the current location.
-    pub transcript: std::collections::VecDeque<ConversationLine>,
-    /// Last wall-clock moment when the player submitted input.
-    pub last_player_activity: Instant,
-    /// Last wall-clock moment when anyone spoke at this location.
-    pub last_spoken_at: Instant,
-    /// Whether an NPC conversation sequence is currently active.
-    pub conversation_in_progress: bool,
-}
-
-impl Default for ConversationRuntimeState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConversationRuntimeState {
-    pub fn new() -> Self {
-        let now = Instant::now();
-        Self {
-            location: None,
-            transcript: std::collections::VecDeque::with_capacity(16),
-            last_player_activity: now,
-            last_spoken_at: now,
-            conversation_in_progress: false,
-        }
-    }
-
-    pub fn sync_location(&mut self, location: LocationId) {
-        if self.location != Some(location) {
-            self.location = Some(location);
-            self.transcript.clear();
-        }
-    }
-
-    pub fn push_line(&mut self, line: ConversationLine) {
-        if line.text.trim().is_empty() {
-            return;
-        }
-        if self.transcript.len() >= 12 {
-            self.transcript.pop_front();
-        }
-        self.transcript.push_back(line);
-    }
-}
 
 /// Shared mutable game state managed by Tauri.
 ///
@@ -353,9 +250,56 @@ pub struct AppState {
     /// Latest provider-bootstrap status for the startup overlay. Uses a
     /// standard mutex because setup progress callbacks are synchronous.
     pub setup_status: std::sync::Mutex<SetupStatusSnapshot>,
+    /// Demo / auto-player configuration. Read-only after startup.
+    pub demo_config: DemoConfig,
+    /// Cancellation token — cancelled during app shutdown to stop background ticks
+    /// gracefully. Clones are passed into each spawned tick task (#104).
+    pub shutdown_token: CancellationToken,
 }
 
 // ── Data path resolution ─────────────────────────────────────────────────────
+
+// ── #621: Optional OTel provider for the Tauri runtime ──────────────────────
+
+/// Attempts to build an OTLP span exporter from environment variables.
+///
+/// Returns `Some(SdkTracerProvider)` when `PARISH_OTEL_ENDPOINT` is set and
+/// the exporter builds successfully.  Returns `None` otherwise (the default
+/// for local development — no network I/O, no background export threads).
+///
+/// This mirrors [`parish_server::tracing_setup::try_build_otel_provider`] so
+/// the Tauri and web runtimes use the same OTel initialisation path
+/// (CLAUDE.md rule #2 — mode parity).
+fn build_tauri_otel_provider() -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    let endpoint = std::env::var("PARISH_OTEL_ENDPOINT")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+
+    use opentelemetry_otlp::WithExportConfig as _;
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(endpoint.clone())
+        .build()
+        .map_err(|e| {
+            eprintln!(
+                "[parish-tauri] WARNING: Failed to build OTLP exporter for {} — \
+                 OTel tracing disabled: {}",
+                endpoint, e
+            );
+        })
+        .ok()?;
+
+    let resource = opentelemetry_sdk::Resource::builder()
+        .with_service_name("parish-tauri".to_string())
+        .build();
+
+    Some(
+        opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_resource(resource)
+            .with_batch_exporter(exporter)
+            .build(),
+    )
+}
 
 /// Resolves the `data/` directory once at app startup.
 ///
@@ -516,14 +460,35 @@ impl TauriProgress {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         update(&mut status);
     }
+}
 
-    fn emit_status(&self, msg: &str) {
+impl parish_core::inference::setup::SetupProgress for TauriProgress {
+    fn on_status(&self, msg: &str) {
         self.with_setup_status(|status| status.record_status(msg));
         tracing::info!("{}", msg);
         let _ = self.app.emit(
             events::EVENT_SETUP_STATUS,
             events::SetupStatusPayload {
                 message: msg.to_string(),
+            },
+        );
+    }
+
+    fn on_pull_progress(&self, completed: u64, total: u64) {
+        self.with_setup_status(|status| status.record_progress(completed, total));
+        let _ = self.app.emit(
+            events::EVENT_SETUP_PROGRESS,
+            events::SetupProgressPayload { completed, total },
+        );
+    }
+
+    fn on_error(&self, msg: &str) {
+        self.with_setup_status(|status| status.record_status(&format!("Error: {}", msg)));
+        tracing::error!("{}", msg);
+        let _ = self.app.emit(
+            events::EVENT_SETUP_STATUS,
+            events::SetupStatusPayload {
+                message: format!("Error: {}", msg),
             },
         );
     }
@@ -537,39 +502,94 @@ fn record_setup_done(state: &Arc<AppState>, success: bool, error: String) {
     status.record_done(success, error);
 }
 
-impl parish_core::inference::setup::SetupProgress for TauriProgress {
-    fn on_status(&self, msg: &str) {
-        self.emit_status(msg);
-    }
+// ── Tauri entry point ─────────────────────────────────────────────────────────
 
-    fn on_pull_progress(&self, completed: u64, total: u64) {
-        self.with_setup_status(|status| status.record_progress(completed, total));
-        let _ = self.app.emit(
-            events::EVENT_SETUP_PROGRESS,
-            events::SetupProgressPayload { completed, total },
-        );
-    }
-
-    fn on_error(&self, msg: &str) {
-        tracing::error!("{}", msg);
-        self.with_setup_status(|status| status.record_status(&format!("Error: {}", msg)));
-        let _ = self.app.emit(
-            events::EVENT_SETUP_STATUS,
-            events::SetupStatusPayload {
-                message: format!("Error: {}", msg),
-            },
-        );
+/// Parses `--demo*` CLI flags from an argument list into a [`DemoConfig`].
+///
+/// Extracted for unit-testability: does not read env vars or touch the filesystem
+/// (except via `std::fs::read_to_string` for `--demo-prompt`, which silently
+/// returns `None` on error).
+pub(crate) fn parse_demo_args(args: &[String]) -> DemoConfig {
+    let auto_start = args.iter().any(|a| a == "--demo");
+    let extra_prompt = args
+        .iter()
+        .position(|a| a == "--demo-prompt")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let turn_pause_secs = args
+        .iter()
+        .position(|a| a == "--demo-pause")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(2.0);
+    let max_turns = args
+        .iter()
+        .position(|a| a == "--demo-max-turns")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<u32>().ok());
+    DemoConfig {
+        auto_start,
+        extra_prompt,
+        turn_pause_secs,
+        max_turns,
     }
 }
-
-// ── Tauri entry point ─────────────────────────────────────────────────────────
 
 /// Called from `main.rs`. Initialises game state and launches the Tauri app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── #621: Tracing subscriber with optional OTel layer ────────────────────
+    // Uses the registry pattern (same as CLI) so the OTel OTLP exporter can be
+    // composed in when `PARISH_OTEL_ENDPOINT` is set.  The exporter is
+    // technically only useful in server mode, but supporting it here satisfies
+    // CLAUDE.md rule #2 (mode parity) and lets operators route desktop traces
+    // to a local collector during development.
+    //
+    // dotenvy is loaded before subscriber init so PARISH_OTEL_ENDPOINT from
+    // `.env` is visible when building the provider.
     dotenvy::dotenv().ok();
 
+    // Build the optional OTel provider before any tracing is emitted.
+    let otel_provider = build_tauri_otel_provider();
+    let otel_tracer = otel_provider.as_ref().map(|p| {
+        use opentelemetry::trace::TracerProvider as _;
+        p.tracer("parish-tauri")
+    });
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let registry = tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_ansi(false));
+
+    if let Some(tracer) = otel_tracer {
+        registry
+            .with(Some(tracing_opentelemetry::OpenTelemetryLayer::new(tracer)))
+            .init();
+    } else {
+        registry
+            .with(
+                Option::<
+                    tracing_opentelemetry::OpenTelemetryLayer<
+                        _,
+                        opentelemetry::trace::noop::NoopTracer,
+                    >,
+                >::None,
+            )
+            .init();
+    }
+
     let data_dir = find_data_dir();
+
+    // Parse optional --demo flags.
+    let demo_config: DemoConfig = {
+        let args: Vec<String> = std::env::args().collect();
+        parse_demo_args(&args)
+    };
 
     // Parse optional --screenshot <dir> flag.
     // Relative paths are resolved against the workspace root (parent of data/).
@@ -618,23 +638,10 @@ pub fn run() {
             })
     };
 
-    // Try to load game mod (auto-detect from workspace root)
-    let game_mod = parish_core::game_mod::find_default_mod().and_then(|dir| {
-        match parish_core::game_mod::GameMod::load(&dir) {
-            Ok(gm) => {
-                tracing::info!(
-                    "Loaded game mod: {} ({})",
-                    gm.manifest.meta.name,
-                    dir.display()
-                );
-                Some(gm)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load mod from {}: {}", dir.display(), e);
-                None
-            }
-        }
-    });
+    // Try to load game mod (auto-detect from workspace root) via the
+    // ModSource abstraction.  load_setting_mod_sync is used here because
+    // Tauri's run() is synchronous and no tokio runtime exists yet.
+    let game_mod = parish_core::mod_source::load_setting_mod_sync();
 
     // Load world — prefer mod data, fall back to legacy data/ directory
     let world = if let Some(ref gm) = game_mod {
@@ -755,16 +762,20 @@ pub fn run() {
         max_follow_up_turns: 2,
         idle_banter_after_secs: engine_config.session.idle_banter_after_secs,
         auto_pause_after_secs: engine_config.session.auto_pause_after_secs,
-        category_provider: [None, None, None, None],
-        category_model: [None, None, None, None],
-        category_api_key: [None, None, None, None],
-        category_base_url: [None, None, None, None],
+        category_provider: Default::default(),
+        category_model: Default::default(),
+        category_api_key: Default::default(),
+        category_base_url: Default::default(),
         flags,
-        category_rate_limit: [None, None, None, None],
+        category_rate_limit: Default::default(),
         active_tile_source,
         tile_sources: engine_config.map.id_label_pairs(),
         reveal_unexplored_locations: false,
     };
+    // Enable demo-mode flag when --demo was passed so the demo commands work.
+    if demo_config.auto_start {
+        game_config.flags.enable("demo-mode");
+    }
     // Fill any unset model fields from the chosen provider's presets so a
     // user who set only `PARISH_PROVIDER=anthropic` (or `--provider`) gets
     // sensible Dialogue/Simulation/Intent/Reaction defaults.
@@ -773,6 +784,9 @@ pub fn run() {
     // Resolve the saves directory once at startup (#771). Subsequent save/load
     // commands read `state.saves_dir` instead of re-probing the cwd.
     let saves_dir = parish_core::persistence::picker::resolve_project_saves_dir_from_cwd();
+
+    // Cancellation token for graceful background-task shutdown (#104).
+    let shutdown_token = CancellationToken::new();
 
     let state = Arc::new(AppState {
         world: Mutex::new(world),
@@ -805,6 +819,8 @@ pub fn run() {
         inference_config: engine_config.inference, // (#417) store TOML-configured timeouts
         setup_status: std::sync::Mutex::new(SetupStatusSnapshot::default()),
         config: Mutex::new(game_config),
+        demo_config,
+        shutdown_token: shutdown_token.clone(),
     });
 
     tauri::Builder::default()
@@ -826,6 +842,9 @@ pub fn run() {
             commands::new_game,
             commands::get_save_state,
             commands::react_to_message,
+            commands::get_demo_config,
+            commands::get_demo_context,
+            commands::get_llm_player_action,
             editor_commands::editor_list_mods,
             editor_commands::editor_open_mod,
             editor_commands::editor_get_snapshot,
@@ -913,7 +932,14 @@ pub fn run() {
                         app: handle.clone(),
                         state: Arc::clone(&state_setup),
                     };
-                    progress.emit_status("Starting inference provider setup...");
+                    progress.with_setup_status(|status| status.record_status("Starting inference provider setup..."));
+                    tracing::info!("Starting inference provider setup...");
+                    let _ = handle.emit(
+                        events::EVENT_SETUP_STATUS,
+                        events::SetupStatusPayload {
+                            message: "Starting inference provider setup...".to_string(),
+                        },
+                    );
                     match bootstrap_provider(
                         &provider_config,
                         &inference_config_for_spawn,
@@ -1113,25 +1139,31 @@ pub fn run() {
                 // last N events in AppState.game_events for the debug panel.
                 {
                     let state_events = Arc::clone(&state_setup);
+                    let token_events = state_setup.shutdown_token.clone();
                     let mut rx = {
                         let world = state_events.world.lock().await;
                         world.event_bus.subscribe()
                     };
                     tokio::spawn(async move {
                         loop {
-                            match rx.recv().await {
-                                Ok(evt) => {
-                                    let mut buf = state_events.game_events.lock().await;
-                                    if buf.len() >= DEBUG_EVENT_CAPACITY {
-                                        buf.pop_front();
+                            tokio::select! {
+                                _ = token_events.cancelled() => break,
+                                result = rx.recv() => {
+                                    match result {
+                                        Ok(evt) => {
+                                            let mut buf = state_events.game_events.lock().await;
+                                            if buf.len() >= DEBUG_EVENT_CAPACITY {
+                                                buf.pop_front();
+                                            }
+                                            buf.push_back(evt);
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                            continue;
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            break;
+                                        }
                                     }
-                                    buf.push_back(evt);
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                    continue;
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                    break;
                                 }
                             }
                         }
@@ -1148,10 +1180,14 @@ pub fn run() {
                 // the tick (see the AppState lock ordering contract).
                 let state_tick = Arc::clone(&state_setup);
                 let handle_tick = handle.clone();
+                let token_tick = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     let mut last_palette: Option<parish_palette::RawPalette> = None;
                     loop {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::select! {
+                            _ = token_tick.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        }
 
                         let mut world = state_tick.world.lock().await;
                         let mut npc_mgr = state_tick.npc_manager.lock().await;
@@ -1428,11 +1464,10 @@ pub fn run() {
                                             let queue_guard =
                                                 state_t3.inference_queue.lock().await;
                                             let queue = queue_guard.clone();
-                                            let idx = parish_core::ipc::GameConfig::cat_idx(
-                                                parish_core::config::InferenceCategory::Simulation,
-                                            );
-                                            let model = cfg.category_model[idx]
-                                                .clone()
+                                            let model = cfg
+                                                .category_model
+                                                .get(&parish_core::config::InferenceCategory::Simulation)
+                                                .cloned()
                                                 .unwrap_or_else(|| cfg.model_name.clone());
                                             (queue, model)
                                         };
@@ -1574,12 +1609,10 @@ pub fn run() {
                                                 let queue_guard =
                                                     state_t2.inference_queue.lock().await;
                                                 let queue = queue_guard.clone();
-                                                let idx =
-                                                    parish_core::ipc::GameConfig::cat_idx(
-                                                        parish_core::config::InferenceCategory::Simulation,
-                                                    );
-                                                let model = cfg.category_model[idx]
-                                                    .clone()
+                                                let model = cfg
+                                                    .category_model
+                                                    .get(&parish_core::config::InferenceCategory::Simulation)
+                                                    .cloned()
                                                     .unwrap_or_else(|| {
                                                         cfg.model_name.clone()
                                                     });
@@ -1672,9 +1705,13 @@ pub fn run() {
                 // Inactivity tick: drive idle banter and auto-pause.
                 let state_idle = Arc::clone(&state_setup);
                 let handle_idle = handle.clone();
+                let token_idle = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::select! {
+                            _ = token_idle.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        }
                         crate::commands::tick_inactivity(&state_idle, &handle_idle).await;
                     }
                 });
@@ -1687,9 +1724,13 @@ pub fn run() {
                 // inference_log (#483).
                 let state_debug = Arc::clone(&state_setup);
                 let handle_debug = handle.clone();
+                let token_debug = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        tokio::select! {
+                            _ = token_debug.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                        }
 
                         // 1. Peek inference_queue presence first (#483).
                         let has_inference_queue =
@@ -1785,9 +1826,13 @@ pub fn run() {
 
                 // Autosave tick: save snapshot every AUTOSAVE_INTERVAL_SECS (if a save file is active)
                 let state_autosave = Arc::clone(&state_setup);
+                let token_autosave = state_setup.shutdown_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)).await;
+                        tokio::select! {
+                            _ = token_autosave.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)) => {}
+                        }
 
                         // Only autosave if a save file and branch are active
                         let save_path = state_autosave.save_path.lock().await.clone();
@@ -1817,6 +1862,14 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_window_event({
+            let token = shutdown_token.clone();
+            move |_window, event| {
+                if let tauri::WindowEvent::Destroyed = event {
+                    token.cancel();
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running Parish application");
@@ -2042,5 +2095,38 @@ mod tests {
         // Sanity: both tasks ran and incremented the counters.
         assert_eq!(*world_lock.lock().await, 11);
         assert_eq!(*npc_lock.lock().await, 11);
+    }
+
+    #[test]
+    fn parse_demo_args_defaults_when_no_flags() {
+        let args: Vec<String> = vec!["parish-tauri".to_string()];
+        let cfg = super::parse_demo_args(&args);
+        assert!(!cfg.auto_start);
+        assert!(cfg.extra_prompt.is_none());
+        assert!((cfg.turn_pause_secs - 2.0).abs() < f32::EPSILON);
+        assert!(cfg.max_turns.is_none());
+    }
+
+    #[test]
+    fn parse_demo_args_sets_auto_start() {
+        let args: Vec<String> = vec!["parish-tauri".to_string(), "--demo".to_string()];
+        let cfg = super::parse_demo_args(&args);
+        assert!(cfg.auto_start);
+    }
+
+    #[test]
+    fn parse_demo_args_custom_pause_and_max_turns() {
+        let args: Vec<String> = vec![
+            "parish-tauri".to_string(),
+            "--demo".to_string(),
+            "--demo-pause".to_string(),
+            "5".to_string(),
+            "--demo-max-turns".to_string(),
+            "10".to_string(),
+        ];
+        let cfg = super::parse_demo_args(&args);
+        assert!(cfg.auto_start);
+        assert!((cfg.turn_pause_secs - 5.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.max_turns, Some(10));
     }
 }

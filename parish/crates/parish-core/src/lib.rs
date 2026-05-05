@@ -8,12 +8,18 @@
 // Retained modules — IPC, orchestration glue, and mod loading
 pub mod debug_snapshot;
 pub mod editor;
+pub mod event_bus;
+pub mod game_loop;
 pub mod game_mod;
 pub mod game_session;
+pub mod identity;
 pub mod inference_guard;
 pub mod ipc;
 pub mod loading;
+pub mod mod_source;
 pub mod prompts;
+pub mod session_store;
+pub mod tile_cache;
 
 /// How often autosave tasks should snapshot active sessions (seconds).
 /// Used by both the Axum web server and the Tauri desktop backend.

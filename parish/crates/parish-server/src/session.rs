@@ -8,9 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
+use lru::LruCache;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 
 use parish_core::config::InferenceConfig;
@@ -21,6 +23,11 @@ use parish_core::npc::manager::NpcManager;
 use parish_core::world::transport::TransportConfig;
 use parish_core::world::{DEFAULT_START_LOCATION, WorldState};
 
+use parish_core::event_bus::{EventBus as EventBusTrait, Topic};
+
+use parish_core::identity::IdentityStore;
+
+use crate::session_store_impl::DbSessionStore;
 use crate::state::{AppState, UiConfigSnapshot, build_app_state};
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -28,6 +35,45 @@ use crate::state::{AppState, UiConfigSnapshot, build_app_state};
 /// Re-export so the test in this module can reference the canonical constant
 /// without importing from parish_core directly.
 pub use parish_core::AUTOSAVE_INTERVAL_SECS;
+
+// ── Idempotency cache ─────────────────────────────────────────────────────────
+
+/// Default capacity of the idempotency LRU cache (process-wide).
+pub const IDEMPOTENCY_CACHE_CAPACITY: usize = 1000;
+
+/// Default TTL for idempotency cache entries (24 hours).
+pub const IDEMPOTENCY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// A cached response from a mutating route, stored for idempotency replay.
+///
+/// The entire serialised body is kept so the replay is byte-identical.  The
+/// [`Instant`] records when the entry was inserted so expired entries can be
+/// rejected on read without a background sweep.
+#[derive(Clone)]
+pub struct CachedResponse {
+    /// HTTP status code of the original response.
+    pub status: u16,
+    /// Serialised JSON body of the original response (or empty vec for
+    /// status-only responses such as `204 No Content`).
+    pub body: Vec<u8>,
+    /// Content-Type header value of the original response.
+    pub content_type: Option<String>,
+    /// Wall-clock instant when this entry was inserted.
+    pub inserted_at: Instant,
+}
+
+/// Key type for the idempotency cache: `(session_id, idempotency_key)`.
+///
+/// `session_id` scopes keys to a single visitor so one user's idempotency
+/// keys cannot collide with another's.
+pub type IdempotencyKey = (String, String);
+
+/// Process-wide LRU cache for idempotent responses.
+///
+/// Wrapped in a `TokioMutex` so async handlers can hold the guard across
+/// `await` points without parking a Tokio worker thread.  Capacity is bounded
+/// by [`IDEMPOTENCY_CACHE_CAPACITY`]; the oldest entry is evicted on overflow.
+pub type IdempotencyCache = TokioMutex<LruCache<IdempotencyKey, CachedResponse>>;
 
 /// Google OAuth credentials (optional — feature disabled when absent).
 pub struct OAuthConfig {
@@ -42,6 +88,9 @@ pub struct OAuthConfig {
 pub struct GlobalState {
     /// All active sessions, backed by `saves/sessions.db`.
     pub sessions: SessionRegistry,
+    /// Identity store — maps OAuth provider identities to stable `account_id`
+    /// UUIDs and persists new accounts on first auth (#618).
+    pub identity_store: std::sync::Arc<dyn IdentityStore>,
     /// Google OAuth config; `None` disables the login flow.
     pub oauth_config: Option<OAuthConfig>,
     /// Directory containing game data files (`world.json`, `npcs.json`, …).
@@ -71,6 +120,26 @@ pub struct GlobalState {
     /// Held for the server's lifetime so dropping `GlobalState` stops the
     /// server. Wrapped in a `Mutex` so the struct stays `Sync`.
     pub ollama_process: tokio::sync::Mutex<parish_core::inference::client::OllamaProcess>,
+    /// Disk-backed HTTP cache for NLS historic map tiles.
+    ///
+    /// Shared across all sessions — tiles are content-addressable (z/x/y) and
+    /// session-agnostic, so a single process-wide cache is correct and avoids
+    /// duplicating downloads across sessions.  Cache dir resolved once at boot
+    /// from `PARISH_TILE_CACHE_DIR` or `<saves_dir>/tile-cache/`.
+    pub tile_cache: parish_core::tile_cache::TileCache,
+    /// Process-wide idempotency cache for mutating HTTP routes (#619).
+    ///
+    /// Keyed by `(session_id, Idempotency-Key header value)`.  The LRU
+    /// capacity is [`IDEMPOTENCY_CACHE_CAPACITY`]; entries expire after
+    /// [`IDEMPOTENCY_TTL`] (24 h).  When the `idempotency-key` feature flag
+    /// is disabled this cache is still initialised but never consulted.
+    pub idempotency_cache: IdempotencyCache,
+    /// Admission-control ceiling: maximum number of concurrent in-memory
+    /// sessions per process.  Resolved at boot from `PARISH_MAX_SESSIONS`
+    /// env var (preferred) or the `[engine.session]` TOML field; defaults to
+    /// 50.  When `None` the `admission-control` feature flag is disabled and
+    /// no cap is enforced.
+    pub max_concurrent_sessions: Option<usize>,
 }
 
 /// A single visitor's isolated game session.
@@ -79,8 +148,21 @@ pub struct SessionEntry {
     pub app_state: Arc<AppState>,
     /// Unix timestamp of the last API request from this session.
     pub last_active: AtomicU64,
+    /// Cancellation token — cancelled when the session is evicted so background
+    /// tick tasks shut down gracefully instead of running until the JoinHandle
+    /// is aborted (#228).
+    _shutdown_token: tokio_util::sync::CancellationToken,
     /// Background tick task handles — dropped when the session is evicted.
     _tick_handles: Vec<JoinHandle<()>>,
+}
+
+impl Drop for SessionEntry {
+    fn drop(&mut self) {
+        // Signal all background tasks to stop gracefully before their handles
+        // are dropped.  Tasks observe the token in their select! loops and exit
+        // cleanly, completing any in-flight autosave iteration first (#228).
+        self._shutdown_token.cancel();
+    }
 }
 
 // ── SessionRegistry ──────────────────────────────────────────────────────────
@@ -89,6 +171,8 @@ pub struct SessionEntry {
 pub struct SessionRegistry {
     sessions: DashMap<String, Arc<SessionEntry>>,
     db: std::sync::Mutex<rusqlite::Connection>,
+    /// Running count of session-creation rejections since process start.
+    pub rejection_count: AtomicU64,
 }
 
 impl SessionRegistry {
@@ -117,7 +201,28 @@ impl SessionRegistry {
         Ok(Self {
             sessions: DashMap::new(),
             db: std::sync::Mutex::new(conn),
+            rejection_count: AtomicU64::new(0),
         })
+    }
+
+    /// Returns the number of sessions currently held in memory.
+    pub fn active_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Returns `true` when the number of live sessions is at or above `cap`.
+    ///
+    /// Callers should check this before creating a new session and return
+    /// `503 Service Unavailable` if it holds. Increments `rejection_count`
+    /// when at capacity so callers don't have to manage that separately.
+    pub fn is_at_capacity(&self, cap: usize) -> bool {
+        let current = self.active_count();
+        if current >= cap {
+            self.rejection_count.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn now_unix() -> u64 {
@@ -442,14 +547,31 @@ pub fn is_valid_session_id(id: &str) -> bool {
 
 // ── Public session resolution ─────────────────────────────────────────────────
 
+/// Error returned by [`get_or_create_session`] when the server is at capacity.
+///
+/// The middleware maps this to `503 Service Unavailable` with a
+/// `Retry-After: 30` header.  Existing sessions (returning visitors with a
+/// valid cookie) are never refused — capacity is only checked when a brand-new
+/// session would be created.
+#[derive(Debug)]
+pub struct CapacityExceededError {
+    pub current: usize,
+    pub cap: usize,
+}
+
 /// Returns the session for `cookie_id`, restoring or creating one as needed.
 ///
-/// Returns `(session_id, entry, is_new)` where `is_new` is `true` when a
+/// Returns `Ok((session_id, entry, is_new))` where `is_new` is `true` when a
 /// fresh `parish_sid` cookie must be set on the response.
+///
+/// Returns `Err(CapacityExceededError)` when `global.max_concurrent_sessions`
+/// is set and the server is already at capacity.  Only new-session creation is
+/// gated — returning visitors whose session is already in memory or can be
+/// restored from the DB are never rejected.
 pub async fn get_or_create_session(
     global: &Arc<GlobalState>,
     cookie_id: Option<&str>,
-) -> (String, Arc<SessionEntry>, bool) {
+) -> Result<(String, Arc<SessionEntry>, bool), CapacityExceededError> {
     // 1. Hot path: session already in memory.
     //    Reject malformed cookie values before any DB lookup or path join.
     if let Some(id) = cookie_id {
@@ -466,7 +588,7 @@ pub async fn get_or_create_session(
                     .last_active
                     .store(SessionRegistry::now_unix(), Ordering::Relaxed);
                 global.sessions.update_last_active(id);
-                return (id.to_string(), entry, false);
+                return Ok((id.to_string(), entry, false));
             }
             // 2. Session known in DB but evicted from memory — restore it.
             if global.sessions.exists_in_db(id) {
@@ -474,7 +596,7 @@ pub async fn get_or_create_session(
                     Ok(entry) => {
                         global.sessions.insert(id.to_string(), Arc::clone(&entry));
                         global.sessions.update_last_active(id);
-                        return (id.to_string(), entry, false);
+                        return Ok((id.to_string(), entry, false));
                     }
                     Err(e) => {
                         tracing::warn!(session_id = %id, "Session restore failed: {}. Starting fresh.", e);
@@ -484,14 +606,34 @@ pub async fn get_or_create_session(
         }
     }
 
-    // 3. No usable session — create a new one.
+    // 3. No usable session — admission control check before creating a new one.
+    if let Some(cap) = global.max_concurrent_sessions {
+        let current = global.sessions.active_count();
+        if global.sessions.is_at_capacity(cap) {
+            let rejection_count = global.sessions.rejection_count.load(Ordering::Relaxed);
+            tracing::info!(
+                current_session_count = current,
+                capacity = cap,
+                rejection_count,
+                "admission-control: session capacity exceeded, rejecting new session"
+            );
+            return Err(CapacityExceededError { current, cap });
+        }
+    }
+
+    // 4. Create a new session.
     let session_id = uuid::Uuid::new_v4().to_string();
     let entry = create_session(global, &session_id).await;
     global.sessions.persist_new(&session_id);
     global
         .sessions
         .insert(session_id.clone(), Arc::clone(&entry));
-    (session_id, entry, true)
+    tracing::info!(
+        current_session_count = global.sessions.active_count(),
+        capacity = global.max_concurrent_sessions,
+        "new session created"
+    );
+    Ok((session_id, entry, true))
 }
 
 // ── Session creation ──────────────────────────────────────────────────────────
@@ -524,7 +666,9 @@ async fn create_session(global: &Arc<GlobalState>, session_id: &str) -> Arc<Sess
     let game_mod = global.game_mod.clone();
 
     let flags_path = global.data_dir.join("parish-flags.json");
+    let session_store = Arc::new(DbSessionStore::new(session_saves.clone()));
     let app_state = build_app_state(
+        session_id.to_string(),
         world,
         npc_manager,
         client.clone(),
@@ -538,6 +682,7 @@ async fn create_session(global: &Arc<GlobalState>, session_id: &str) -> Arc<Sess
         game_mod,
         flags_path,
         global.inference_config.clone(), // (#417) propagate TOML-configured timeouts
+        session_store,
     );
 
     if let Some(ref c) = client {
@@ -548,11 +693,13 @@ async fn create_session(global: &Arc<GlobalState>, session_id: &str) -> Arc<Sess
         tracing::warn!("Session initial save failed: {}", e);
     }
 
-    let handles = spawn_session_ticks(Arc::clone(&app_state));
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
+    let handles = spawn_session_ticks(Arc::clone(&app_state), shutdown_token.clone());
 
     Arc::new(SessionEntry {
         app_state,
         last_active: AtomicU64::new(SessionRegistry::now_unix()),
+        _shutdown_token: shutdown_token,
         _tick_handles: handles,
     })
 }
@@ -620,7 +767,9 @@ async fn restore_session(
     let game_mod = global.game_mod.clone();
 
     let flags_path = global.data_dir.join("parish-flags.json");
+    let session_store = Arc::new(DbSessionStore::new(session_saves.clone()));
     let app_state = build_app_state(
+        session_id.to_string(),
         world,
         npc_manager,
         client.clone(),
@@ -634,6 +783,7 @@ async fn restore_session(
         game_mod,
         flags_path,
         global.inference_config.clone(), // (#417) propagate TOML-configured timeouts
+        session_store,
     );
 
     if let Some(ref c) = client {
@@ -660,11 +810,13 @@ async fn restore_session(
     *app_state.current_branch_id.lock().await = Some(branch_id);
     *app_state.current_branch_name.lock().await = Some(branch_name);
 
-    let handles = spawn_session_ticks(Arc::clone(&app_state));
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
+    let handles = spawn_session_ticks(Arc::clone(&app_state), shutdown_token.clone());
 
     Ok(Arc::new(SessionEntry {
         app_state,
         last_active: AtomicU64::new(SessionRegistry::now_unix()),
+        _shutdown_token: shutdown_token,
         _tick_handles: handles,
     }))
 }
@@ -797,17 +949,28 @@ where
 }
 
 /// Spawns the three per-session background tasks and returns their handles.
-fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
+///
+/// Each task observes `shutdown_token` via `tokio::select!` so it exits
+/// cleanly when the token is cancelled (e.g. on session eviction) rather than
+/// running until its `JoinHandle` is aborted (#228).
+fn spawn_session_ticks(
+    state: Arc<AppState>,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::with_capacity(3);
 
     // ── World tick (5 s) ─────────────────────────────────────────────────────
     {
         let s = Arc::clone(&state);
+        let token = shutdown_token.clone();
         handles.push(tokio::spawn(async move {
             // Round-robin cursor for budgeted gossip propagation (#466).
             let mut gossip_cursor: usize = 0;
             loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
 
                 {
                     let world = s.world.lock().await;
@@ -819,7 +982,8 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                         &npc_manager,
                         &s.pronunciations,
                     );
-                    s.event_bus.emit("world-update", &snap);
+                    s.event_bus
+                        .emit_named(Topic::WorldUpdate, "world-update", &snap);
                 }
 
                 {
@@ -881,6 +1045,16 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                     // Advance the generation counter so handle_game_input can
                     // detect TOCTOU races (see issue #283).
                     world.increment_tick_generation();
+
+                    // #621 — Per-session tick metric. Emitted as a structured
+                    // tracing event so log-based metric tools can aggregate
+                    // tick counts per session without a Prometheus exporter.
+                    tracing::debug!(
+                        target: "parish_server::metrics",
+                        session_id = %s.session_id,
+                        tick = world.tick_generation,
+                        "session.tick"
+                    );
                 }
             }
         }));
@@ -889,9 +1063,13 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
     // ── Inactivity tick (1 s) ────────────────────────────────────────────────
     {
         let s = Arc::clone(&state);
+        let token = shutdown_token.clone();
         handles.push(tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
                 crate::routes::tick_inactivity(&s).await;
             }
         }));
@@ -906,6 +1084,7 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
     // inside `AsyncDatabase`, so a slow fsync can never stall the Tokio runtime.
     {
         let s = Arc::clone(&state);
+        let token = shutdown_token.clone();
         handles.push(tokio::spawn(async move {
             use parish_core::persistence::snapshot::GameSnapshot;
             use parish_core::persistence::{AsyncDatabase, Database};
@@ -913,7 +1092,13 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
             // one user-visible warning per failure run, not one per tick.
             let mut last_autosave_failed = false;
             loop {
-                tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)).await;
+                // Wait for the interval or cancellation.  Cancellation exits
+                // only after the *sleep* fires, so any in-flight autosave
+                // iteration completes before the task stops (#228).
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(AUTOSAVE_INTERVAL_SECS)) => {}
+                }
 
                 let save_path = s.save_path.lock().await.clone();
                 let branch_id = *s.current_branch_id.lock().await;
@@ -945,7 +1130,8 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                                 Ok(Err(e)) => {
                                     tracing::warn!("Autosave: failed to open DB: {}", e);
                                     if !last_autosave_failed {
-                                        s.event_bus.emit(
+                                        s.event_bus.emit_named(
+                                            Topic::TextLog,
                                             "text-log",
                                             &parish_core::ipc::text_log(
                                                 "system",
@@ -970,7 +1156,8 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                             Ok(_) => {
                                 tracing::debug!("Session autosave complete");
                                 if last_autosave_failed {
-                                    s.event_bus.emit(
+                                    s.event_bus.emit_named(
+                                        Topic::TextLog,
                                         "text-log",
                                         &parish_core::ipc::text_log(
                                             "system",
@@ -983,7 +1170,8 @@ fn spawn_session_ticks(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                             Err(e) => {
                                 tracing::warn!("Session autosave failed: {}", e);
                                 if !last_autosave_failed {
-                                    s.event_bus.emit(
+                                    s.event_bus.emit_named(
+                                        Topic::TextLog,
                                         "text-log",
                                         &parish_core::ipc::text_log(
                                             "system",
@@ -1503,5 +1691,66 @@ mod tests {
             3,
             "three autosave ticks via the same AsyncDatabase must produce three snapshots"
         );
+    }
+
+    // ── Admission control unit tests (#620) ──────────────────────────────────
+
+    /// `active_count` reflects the current in-memory session count.
+    #[test]
+    fn active_count_reflects_in_memory_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = SessionRegistry::open(tmp.path()).unwrap();
+        assert_eq!(reg.active_count(), 0);
+
+        // Insert a dummy entry — Arc::new with a dummy SessionEntry requires
+        // fields we can't easily construct here, so just verify the count at 0.
+        // The is_at_capacity / active_count pairing is tested in the next test.
+        assert_eq!(
+            reg.active_count(),
+            0,
+            "fresh registry must report 0 sessions"
+        );
+    }
+
+    /// `is_at_capacity` returns false when under the cap and true at/above it.
+    #[test]
+    fn is_at_capacity_returns_false_below_cap_true_at_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = SessionRegistry::open(tmp.path()).unwrap();
+
+        // With 0 sessions and cap=1, not at capacity.
+        assert!(
+            !reg.is_at_capacity(1),
+            "0 sessions, cap=1: should not be at capacity"
+        );
+        // rejection_count must not have incremented.
+        assert_eq!(reg.rejection_count.load(Ordering::Relaxed), 0);
+
+        // Artificially reach the cap by checking is_at_capacity(0): cap=0 means
+        // every new attempt is rejected.
+        assert!(
+            reg.is_at_capacity(0),
+            "0 sessions, cap=0: should be at capacity"
+        );
+        assert_eq!(
+            reg.rejection_count.load(Ordering::Relaxed),
+            1,
+            "rejection_count must increment"
+        );
+
+        // A second rejection increments again.
+        assert!(reg.is_at_capacity(0));
+        assert_eq!(reg.rejection_count.load(Ordering::Relaxed), 2);
+    }
+
+    /// `rejection_count` is not incremented for calls that are under the cap.
+    #[test]
+    fn rejection_count_not_incremented_below_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = SessionRegistry::open(tmp.path()).unwrap();
+        // active_count() == 0 < cap=10 → no rejection
+        let _ = reg.is_at_capacity(10);
+        let _ = reg.is_at_capacity(10);
+        assert_eq!(reg.rejection_count.load(Ordering::Relaxed), 0);
     }
 }

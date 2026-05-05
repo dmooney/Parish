@@ -44,6 +44,15 @@ export interface MapData {
 	transport_id?: string;
 }
 
+/** Tooltip data shown when hovering a map location marker.
+ *  Used by both MapPanel (minimap) and FullMapOverlay (full map). */
+export interface MapTooltipInfo {
+	name: string;
+	indoor?: boolean;
+	travel_minutes?: number;
+	visited?: boolean;
+}
+
 /** A waypoint along a travel path. */
 export interface TravelWaypoint {
 	id: string;
@@ -84,8 +93,6 @@ export interface LanguageHint {
 	meaning: string | null;
 }
 
-/** Backward-compatible alias. */
-export type IrishWordHint = LanguageHint;
 
 export interface UiConfig {
 	hints_label: string;
@@ -139,7 +146,7 @@ export interface StreamTurnEndPayload {
 }
 
 export interface StreamEndPayload {
-	hints: IrishWordHint[];
+	hints: LanguageHint[];
 }
 
 export interface TextLogPayload {
@@ -479,4 +486,36 @@ export interface SaveState {
 	filename: string | null;
 	branch_id: number | null;
 	branch_name: string | null;
+}
+
+// ── Demo / auto-player types ─────────────────────────────────────────────────
+
+export interface DemoNpcInfo {
+	name: string;
+	description: string;
+}
+
+export interface DemoAdjacentLocation {
+	name: string;
+	travel_minutes: number | null;
+	visited: boolean;
+}
+
+export interface DemoContextSnapshot {
+	location_name: string;
+	location_description: string;
+	game_time: string;
+	season: string;
+	weather: string;
+	npcs_here: DemoNpcInfo[];
+	adjacent: DemoAdjacentLocation[];
+	recent_log: string[];
+	extra_prompt: string | null;
+}
+
+export interface DemoConfigPayload {
+	auto_start: boolean;
+	extra_prompt: string | null;
+	turn_pause_secs: number;
+	max_turns: number | null;
 }

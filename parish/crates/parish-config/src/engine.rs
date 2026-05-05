@@ -88,6 +88,21 @@ pub struct SessionConfig {
     /// Real-time inactivity threshold before the game auto-pauses.
     #[serde(default = "default_auto_pause_after_secs")]
     pub auto_pause_after_secs: u64,
+    /// Maximum number of concurrent in-memory sessions per server process.
+    ///
+    /// When the live session count reaches this ceiling, new session
+    /// creation is refused with `503 Service Unavailable`.  Each session
+    /// holds ~50 MB of game state (world graph, NPC manager, inference
+    /// queue), so this knob is the primary lever for the per-process memory
+    /// budget: `max_concurrent_sessions * ~50 MB ≈ memory ceiling`.
+    ///
+    /// Override at runtime with the `PARISH_MAX_SESSIONS` environment
+    /// variable (takes precedence over both the TOML setting and this
+    /// compiled-in default).
+    ///
+    /// Defaults to 50, matching the ceiling noted in issue #620.
+    #[serde(default = "default_max_concurrent_sessions")]
+    pub max_concurrent_sessions: usize,
 }
 
 impl Default for SessionConfig {
@@ -95,6 +110,7 @@ impl Default for SessionConfig {
         Self {
             idle_banter_after_secs: 25,
             auto_pause_after_secs: 300,
+            max_concurrent_sessions: 50,
         }
     }
 }
@@ -104,6 +120,9 @@ fn default_idle_banter_after_secs() -> u64 {
 }
 fn default_auto_pause_after_secs() -> u64 {
     300
+}
+fn default_max_concurrent_sessions() -> usize {
+    50
 }
 
 // ---------------------------------------------------------------------------
@@ -761,9 +780,12 @@ fn default_tile_sources() -> BTreeMap<String, TileSourceConfig> {
             // style (see issue #360).
             //
             // Terms: CC-BY-SA 3.0 per https://maps.nls.uk/copyright.html.
-            // Free, public, CORS-open (S3).
-            url: "https://mapseries-tilesets.s3.amazonaws.com/os/roscommon1/{z}/{x}/{y}.png"
-                .to_string(),
+            //
+            // The URL template points at the parish-server tile proxy
+            // (`/tiles/{source_id}/{z}/{x}/{y}.png`) rather than NLS S3
+            // directly (issue #360).  The proxy caches tiles on disk and
+            // the browser never needs to reach `mapseries-tilesets.s3.amazonaws.com`.
+            url: "/tiles/roscommon1/{z}/{x}/{y}.png".to_string(),
             tile_size: 256,
             minzoom: 1,
             maxzoom: 17,
@@ -1011,9 +1033,13 @@ memory_capacity = 30
         assert!(!osm.tms);
         let historic = &cfg.tile_sources["historic"];
         assert!(!historic.tms, "NLS serves standard XYZ, not TMS");
+        // Since issue #360, tiles are proxied through the local server so the
+        // client never hits NLS S3 directly.  The URL is now a same-origin
+        // relative path rather than an absolute S3 URL.
         assert!(
-            historic.url.starts_with("https://"),
-            "Historic 6\" ships with a live NLS URL"
+            historic.url.starts_with("/tiles/"),
+            "Historic 6\" tiles are proxied through the local server (issue #360); got: {}",
+            historic.url
         );
         assert!(
             historic.url.contains("roscommon1"),

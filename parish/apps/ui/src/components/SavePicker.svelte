@@ -1,19 +1,18 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { savePickerVisible, saveFiles, currentSaveState } from '../stores/save';
-	import { discoverSaveFiles, loadBranch, saveGame, newSaveFile, newGame, createBranch, getSaveState, getWorldSnapshot, getMap, getNpcsHere } from '$lib/ipc';
+	import { discoverSaveFiles, loadBranch, newSaveFile, newGame, createBranch, getSaveState, getWorldSnapshot, getMap, getNpcsHere } from '$lib/ipc';
 	import { worldState, mapData, npcsHere } from '../stores/game';
 	import type { SaveFileInfo, SaveBranchDisplay } from '$lib/types';
 	import { layoutTree, NODE_W, NODE_H, GAP_Y } from '$lib/save-picker/dag';
 
-	let loadingCount = 0;
-	$: loading = loadingCount > 0;
-	let forkingBranchId: number | null = null;
-	let forkName = '';
-	let forkError = '';
-	let showLedgers = false;
-
-	$: activeFile = files.find(f => f.filename === saveState?.filename) ?? files[0] ?? null;
+	let loadingCount = $state(0);
+	const loading = $derived(loadingCount > 0);
+	let forkingBranchId: number | null = $state(null);
+	let forkName = $state('');
+	let forkError = $state('');
+	let showLedgers = $state(false);
+	let modalBodyEl: HTMLDivElement | undefined = $state();
 
 	// ── Handlers ────────────────────────────────────────────────────
 
@@ -107,7 +106,7 @@
 			forkingBranchId = null;
 			forkName = '';
 			// Save scroll position before refresh re-renders the tree
-			const body = document.querySelector('.modal-body');
+			const body = modalBodyEl;
 			const scrollTop = body?.scrollTop ?? 0;
 			const scrollLeft = body?.scrollLeft ?? 0;
 			await refreshSaves();
@@ -118,9 +117,9 @@
 					body.scrollLeft = scrollLeft;
 				}
 			});
-		} catch (e: any) {
+		} catch (e: unknown) {
 			console.error('Branch creation failed:', e);
-			forkError = String(e).substring(0, 60);
+			forkError = (e instanceof Error ? e.message : String(e)).substring(0, 60);
 		}
 		loadingCount--;
 	}
@@ -160,7 +159,7 @@
 		// Scroll the phantom node into view with extra room for scrollbar
 		requestAnimationFrame(() => {
 			const dagNode = node.closest('.dag-node') as HTMLElement | null;
-			const body = document.querySelector('.modal-body');
+			const body = modalBodyEl;
 			if (dagNode && body) {
 				const nodeRect = dagNode.getBoundingClientRect();
 				const bodyRect = body.getBoundingClientRect();
@@ -209,28 +208,29 @@
 
 	async function scrollToCurrentNode() {
 		await tick();
-		const current = document.querySelector('.dag-current');
+		const current = modalBodyEl?.querySelector('.dag-current');
 		if (current) {
 			current.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
 		}
 	}
 
-	let prevVisible = false;
-	$: {
+	const files = $derived($saveFiles);
+	const saveState = $derived($currentSaveState);
+	const activeFile = $derived(files.find(f => f.filename === saveState?.filename) ?? files[0] ?? null);
+
+	let prevVisible = $state(false);
+	$effect(() => {
 		const visible = $savePickerVisible;
 		if (visible && !prevVisible) {
 			refreshSaves().then(scrollToCurrentNode);
 		}
 		prevVisible = visible;
-	}
-
-	$: files = $saveFiles;
-	$: saveState = $currentSaveState;
+	});
 
 	// Phantom branch ID used to identify the new-branch node in the layout
 	const PHANTOM_ID = -999;
 
-	$: layoutBranches = (() => {
+	const layoutBranches = $derived.by(() => {
 		if (!activeFile) return [];
 		const branches = [...activeFile.branches];
 		if (forkingBranchId !== null) {
@@ -248,11 +248,11 @@
 			}
 		}
 		return branches;
-	})();
-	$: layout = layoutBranches.length > 0 ? layoutTree(layoutBranches) : null;
+	});
+	const layout = $derived(layoutBranches.length > 0 ? layoutTree(layoutBranches) : null);
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 {#if $savePickerVisible}
 	<div class="overlay" role="dialog" aria-modal="true" aria-label="The Parish Ledger">
@@ -267,7 +267,7 @@
 				</span>
 			</div>
 
-			<div class="modal-body">
+			<div class="modal-body" bind:this={modalBodyEl}>
 				{#if loading && files.length === 0}
 					<div class="loading-msg">Scanning save files...</div>
 				{/if}
@@ -289,17 +289,17 @@
 							{:else if file.locked}
 								<span class="ledger-locked">In Use</span>
 							{:else}
-								<button class="action-btn" on:click={() => handleSwitchLedger(file)} disabled={loading}>Open</button>
+								<button class="action-btn" onclick={() => handleSwitchLedger(file)} disabled={loading}>Open</button>
 							{/if}
 						</div>
 					{/each}
 
-					<div class="ledger-row new-ledger" on:click={() => { if (!loading) handleForkLedger(); }} role="button" tabindex="0" aria-disabled={loading} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!loading && !e.repeat) handleForkLedger(); } }}>
+					<div class="ledger-row new-ledger" onclick={() => { if (!loading) handleForkLedger(); }} role="button" tabindex="0" aria-disabled={loading} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!loading && !e.repeat) handleForkLedger(); } }}>
 						<span class="file-number">+</span>
 						<span class="file-name">Fork New Ledger</span>
 					</div>
 
-					<div class="ledger-row new-ledger" on:click={() => { if (!loading) handleNewGame(); }} role="button" tabindex="0" aria-disabled={loading} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!loading && !e.repeat) handleNewGame(); } }}>
+					<div class="ledger-row new-ledger" onclick={() => { if (!loading) handleNewGame(); }} role="button" tabindex="0" aria-disabled={loading} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!loading && !e.repeat) handleNewGame(); } }}>
 						<span class="file-number">+</span>
 						<span class="file-name">New Game</span>
 					</div>
@@ -334,8 +334,8 @@
 												type="text"
 												bind:value={forkName}
 												use:autofocus
-												on:keydown|stopPropagation={(e) => { if (e.key === 'Enter' && parent) { e.preventDefault(); handleFork(parent); } if (e.key === 'Escape') cancelFork(); }}
-												on:input={() => { forkError = ''; }}
+												onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && parent) { e.preventDefault(); handleFork(parent); } if (e.key === 'Escape') cancelFork(); }}
+												oninput={() => { forkError = ''; }}
 											/>
 											{#if forkError}
 												<span class="fork-error">{forkError}</span>
@@ -343,8 +343,8 @@
 												<span class="node-location">{node.branch.latest_location ?? 'New'}</span>
 											{/if}
 											<div class="phantom-actions">
-												<button class="phantom-btn" on:click|stopPropagation={() => { if (parent) handleFork(parent); }} disabled={loading || !forkName.trim()}>Create</button>
-												<button class="phantom-btn" on:click|stopPropagation={cancelFork}>Cancel</button>
+												<button class="phantom-btn" onclick={(e) => { e.stopPropagation(); if (parent) handleFork(parent); }} disabled={loading || !forkName.trim()}>Create</button>
+												<button class="phantom-btn" onclick={(e) => { e.stopPropagation(); cancelFork(); }}>Cancel</button>
 											</div>
 										</div>
 									</div>
@@ -358,7 +358,7 @@
 										<button
 											class="node-body"
 											disabled={loading}
-											on:click={() => handleLoadBranch(activeFile, node.branch)}
+											onclick={() => handleLoadBranch(activeFile, node.branch)}
 										>
 											<span class="node-name">{node.branch.name}</span>
 											<span class="node-location">{node.branch.latest_location ?? 'New'}</span>
@@ -370,7 +370,7 @@
 										<button
 											class="node-branch-btn"
 											disabled={loading}
-											on:click|stopPropagation={() => startFork(node.branch.id)}
+											onclick={(e) => { e.stopPropagation(); startFork(node.branch.id); }}
 										>Branch From Here</button>
 									</div>
 								{/if}
@@ -384,16 +384,16 @@
 
 			<div class="modal-footer">
 				{#if showLedgers}
-					<button class="footer-btn" on:click={() => { showLedgers = false; }}>
+					<button class="footer-btn" onclick={() => { showLedgers = false; }}>
 						← Back
 					</button>
 				{:else}
-					<button class="footer-btn" on:click={() => { showLedgers = true; }}>
+					<button class="footer-btn" onclick={() => { showLedgers = true; }}>
 						Ledgers
 					</button>
 				{/if}
 				<span class="footer-spacer"></span>
-				<button class="footer-btn" on:click={close}>Close</button>
+				<button class="footer-btn" onclick={close}>Close</button>
 			</div>
 		</div>
 	</div>
