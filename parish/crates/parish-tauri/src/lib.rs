@@ -42,65 +42,65 @@ pub use parish_core::ipc::{MapLocation, WorldSnapshot};
 /// Latest setup progress state for the startup overlay.
 #[derive(serde::Serialize, Clone)]
 pub struct SetupStatusSnapshot {
-	/// Current human-readable setup step.
-	pub current_message: String,
-	/// Recent setup messages shown as the overlay activity trail.
-	pub messages: Vec<String>,
-	/// Bytes downloaded so far across discovered Ollama pull artifacts.
-	pub completed: u64,
-	/// Total bytes expected across discovered Ollama pull artifacts, or 0 when unknown.
-	pub total: u64,
-	/// Whether setup has completed.
-	pub done: bool,
-	/// Success state once setup is complete; `None` while setup is running.
-	pub success: Option<bool>,
-	/// Error message when setup failed.
-	pub error: String,
+    /// Current human-readable setup step.
+    pub current_message: String,
+    /// Recent setup messages shown as the overlay activity trail.
+    pub messages: Vec<String>,
+    /// Bytes downloaded so far across discovered Ollama pull artifacts.
+    pub completed: u64,
+    /// Total bytes expected across discovered Ollama pull artifacts, or 0 when unknown.
+    pub total: u64,
+    /// Whether setup has completed.
+    pub done: bool,
+    /// Success state once setup is complete; `None` while setup is running.
+    pub success: Option<bool>,
+    /// Error message when setup failed.
+    pub error: String,
 }
 
 impl Default for SetupStatusSnapshot {
-	fn default() -> Self {
-		Self {
-			current_message: INITIAL_SETUP_MESSAGE.to_string(),
-			messages: vec![INITIAL_SETUP_MESSAGE.to_string()],
-			completed: 0,
-			total: 0,
-			done: false,
-			success: None,
-			error: String::new(),
-		}
-	}
+    fn default() -> Self {
+        Self {
+            current_message: INITIAL_SETUP_MESSAGE.to_string(),
+            messages: vec![INITIAL_SETUP_MESSAGE.to_string()],
+            completed: 0,
+            total: 0,
+            done: false,
+            success: None,
+            error: String::new(),
+        }
+    }
 }
 
 impl SetupStatusSnapshot {
-	fn record_status(&mut self, msg: &str) {
-		self.current_message = msg.to_string();
-		if self.messages.last().is_some_and(|last| last == msg) {
-			return;
-		}
-		if self.messages.len() >= SETUP_HISTORY_LIMIT {
-			self.messages.remove(0);
-		}
-		self.messages.push(msg.to_string());
-	}
+    fn record_status(&mut self, msg: &str) {
+        self.current_message = msg.to_string();
+        if self.messages.last().is_some_and(|last| last == msg) {
+            return;
+        }
+        if self.messages.len() >= SETUP_HISTORY_LIMIT {
+            self.messages.remove(0);
+        }
+        self.messages.push(msg.to_string());
+    }
 
-	fn record_progress(&mut self, completed: u64, total: u64) {
-		self.completed = completed;
-		self.total = total;
-	}
+    fn record_progress(&mut self, completed: u64, total: u64) {
+        self.completed = completed;
+        self.total = total;
+    }
 
-	fn record_done(&mut self, success: bool, error: String) {
-		self.done = true;
-		self.success = Some(success);
-		self.error = error.clone();
-		if success {
-			self.record_status("The storyteller is ready.");
-		} else if error.is_empty() {
-			self.record_status("Setup failed.");
-		} else {
-			self.record_status(&format!("Setup failed: {}", error));
-		}
-	}
+    fn record_done(&mut self, success: bool, error: String) {
+        self.done = true;
+        self.success = Some(success);
+        self.error = error.clone();
+        if success {
+            self.record_status("The storyteller is ready.");
+        } else if error.is_empty() {
+            self.record_status("Setup failed.");
+        } else {
+            self.record_status(&format!("Setup failed: {}", error));
+        }
+    }
 }
 
 /// The full map graph sent to the frontend.

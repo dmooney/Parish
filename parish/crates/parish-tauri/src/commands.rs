@@ -2141,6 +2141,7 @@ mod cmd_tests {
             save_lock: Mutex::new(None),
             ollama_process: Mutex::new(parish_core::inference::client::OllamaProcess::none()),
             inference_config: parish_core::config::InferenceConfig::default(),
+            setup_status: std::sync::Mutex::new(crate::SetupStatusSnapshot::default()),
             config: Mutex::new(game_config),
             demo_config: DemoConfig::default(),
             shutdown_token,
