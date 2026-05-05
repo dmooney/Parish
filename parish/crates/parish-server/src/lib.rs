@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod cf_auth;
+pub mod command_host;
 pub mod editor_routes;
 pub mod emitter;
 pub mod middleware;
@@ -690,6 +691,7 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         // #377 — /api/session-init: issues short-lived WS session tokens.
         .route("/api/session-init", post(routes::session_init))
         .route("/api/world-snapshot", get(routes::get_world_snapshot))
+        .route("/api/setup-snapshot", get(routes::get_setup_snapshot))
         .route("/api/map", get(routes::get_map))
         .route("/api/npcs-here", get(routes::get_npcs_here))
         .route("/api/theme", get(routes::get_theme))
