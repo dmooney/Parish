@@ -1091,8 +1091,6 @@ async fn do_new_game_inner(state: &Arc<AppState>) -> Result<(), String> {
         current_branch_id: &state.current_branch_id,
         current_branch_name: &state.current_branch_name,
         saves_dir: &state.saves_dir,
-        session_id: &state.session_id,
-        session_store: &state.session_store,
         game_mod: state.game_mod.as_ref(),
         data_dir: &state.data_dir,
         pronunciations: &state.pronunciations,

@@ -22,7 +22,6 @@
 //! `FORBIDDEN_FOR_BACKEND_AGNOSTIC`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
@@ -31,7 +30,6 @@ use crate::ipc::{ConversationRuntimeState, EventEmitter, compute_name_hints, sna
 use crate::npc::manager::NpcManager;
 use crate::persistence::picker::new_save_path;
 use crate::persistence::{Database, GameSnapshot};
-use crate::session_store::SessionStore;
 use crate::world::transport::TransportMode;
 use crate::world::{DEFAULT_START_LOCATION, WorldState};
 
@@ -110,10 +108,6 @@ pub struct NewGameParams<'a> {
     pub current_branch_name: &'a Mutex<Option<String>>,
     /// Resolved saves directory (used to create a new save file).
     pub saves_dir: &'a Path,
-    /// Session id for the `SessionStore` (empty string for single-user runtimes).
-    pub session_id: &'a str,
-    /// Trait-erased per-session persistence.
-    pub session_store: &'a Arc<dyn SessionStore>,
     /// Active game mod, if any (used by `load_fresh_world_and_npcs`).
     pub game_mod: Option<&'a GameMod>,
     /// Legacy data directory fallback.
@@ -162,27 +156,28 @@ pub async fn do_new_game(p: NewGameParams<'_>) -> Result<(), String> {
     }
 
     // Create a new save file and persist the initial snapshot.
+    //
+    // NOTE: We use `Database::open` directly (not `session_store.save_snapshot`)
+    // because `new_save_path` creates a DIFFERENT file from the one `DbSessionStore`
+    // would find via `first_db_path` (which returns the alphabetically-first existing
+    // `.db` file).  Routing through SessionStore here would write the snapshot to the
+    // PREVIOUS save file, corrupting it.  The `session_store` field is wired in for
+    // future use by load/branch/journal paths; the new-game file-creation step remains
+    // a direct `Database::open` call.
     let new_path = new_save_path(p.saves_dir);
     let new_path_clone = new_path.clone();
-    let snapshot_for_blocking = snapshot.clone();
     let branch_id = tokio::task::spawn_blocking(move || -> Result<i64, String> {
         let db = Database::open(&new_path_clone).map_err(|e| e.to_string())?;
         let branch = db
             .find_branch("main")
             .map_err(|e| e.to_string())?
             .ok_or("Failed to find main branch in new save")?;
-        db.save_snapshot(branch.id, &snapshot_for_blocking)
+        db.save_snapshot(branch.id, &snapshot)
             .map_err(|e| e.to_string())?;
         Ok(branch.id)
     })
     .await
     .map_err(|e| e.to_string())??;
-
-    // Persist via SessionStore for branch/snapshot tracking.
-    p.session_store
-        .save_snapshot(p.session_id, branch_id, &snapshot)
-        .await
-        .map_err(|e| e.to_string())?;
 
     // Update save state slots.
     *p.save_path.lock().await = Some(new_path);

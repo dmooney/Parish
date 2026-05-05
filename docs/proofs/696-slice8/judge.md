@@ -34,7 +34,7 @@ The slice claimed to:
 ## Issues / caveats
 
 - CLI `handle_headless_new_game` is not deduplicated. This is legitimate: the CLI branch strategy (create new branch on existing DB) differs from server/Tauri (create entirely new save file). Documented in evidence.md and in `game_loop/mod.rs` doc comment.
-- `do_new_game` calls `SessionStore::save_snapshot` after the `spawn_blocking + Database::open` path. This is redundant for the server (which already tracks snapshots via the session-level DB). It is harmless (idempotent insert into the same DB). A future cleanup could unify both paths through `SessionStore` alone and remove `spawn_blocking`.
+- `do_new_game` does NOT call `session_store.save_snapshot`. `new_save_path(saves_dir)` creates a new file (alphabetically next), while `DbSessionStore::ensure_db("")` returns the alphabetically-first existing file — a different file. Routing through SessionStore during new-game would have corrupted the previous save. The `session_store` field is wired into all three runtimes for future use by load/branch/journal paths; new-game file creation stays as `Database::open` directly.
 
 Verdict: sufficient
 
