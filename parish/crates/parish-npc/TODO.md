@@ -19,6 +19,7 @@
 | TD-013 | Dead Code | P3 | `Cargo.toml:26` | `tempfile` in `[dev-dependencies]` is unused. No `use tempfile` or `tempfile::` appears in any source file in this crate. |
 | TD-014 | Stale Docs | P3 | `src/types.rs:490-504` | `CogTier` doc comment says Tier 3 is "Batch inference (daily, for distant NPCs — future)" and Tier 4 is "Rules engine only (seasonal — future)". Both are fully implemented and operational since at least Phase 4. |
 | TD-015 | Dead Code | P3 | `src/types.rs:346-373` | `DailySchedule` struct and its `entry_at`/`location_at` methods are only used by internal tests. `SeasonalSchedule` (line 403) supersedes it — all non-test code uses `SeasonalSchedule::entry_at` and `SeasonalSchedule::location_at`. |
+
 ## In Progress
 
 *(none)*
