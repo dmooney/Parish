@@ -151,7 +151,7 @@ Debt Land (.github/workflows/debt-land.yml)
 | Dead code removal | Module relocations |
 | Doc comment additions/ fixes | New feature gating |
 | Conventional `#[allow(clippy::*)]` additions with comments | Config changes |
-| Witness marker removal (`todo!()`, `unimplemented!()`) | New dependencies added |
+| Witness marker removal (`todo!` / `unimplemented!` calls) | New dependencies added |
 | Simple renames (no logic change) | Test fixture changes |
 
 ### Safety Mechanisms
