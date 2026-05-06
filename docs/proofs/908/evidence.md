@@ -171,6 +171,20 @@ short phrases from ga-IE into your dialogue and record them in the
 The `tier1_prompt_contains_language_directive` test (line 1254) asserts that
 `"LANGUAGE:"`, `"en-IE"`, and `"ga-IE"` all appear in the returned string.
 
+## Runtime playtest transcript
+
+See [`playtest.md`](./playtest.md) for an end-to-end script-harness session
+against the rundale mod. The transcript shows `/debug language` reporting
+`player_language: en-IE` / `native_language: ga-IE` — values that originate
+in `mods/rundale/mod.toml` and flow through `SettingConfig` →
+`App.language_settings()` → `language_directive()` → the rendered prompt
+text the LLM receives. It also confirms that the threading does not
+regress baseline gameplay (movement, NPC roster, rule-based reactions) and
+that the settings persist across location changes. The harness has no LLM
+provider, so observing actual en-IE spelling in generated dialogue is out
+of scope; the transcript instead shows the directive text reaching runtime
+intact.
+
 ## Backward compatibility note
 
 `parish/crates/parish-npc/src/lib.rs:230` and `:250` carry:
