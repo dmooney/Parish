@@ -658,9 +658,7 @@ mod tests {
     use axum::routing::get;
     use tower::ServiceExt;
 
-    use super::{
-        cookie_value, exchange_code, fetch_user_info, get_auth_status, urlenccode,
-    };
+    use super::{cookie_value, exchange_code, fetch_user_info, get_auth_status, urlenccode};
 
     // ── tower-sessions CSRF/session round-trip (#364) ─────────────────────────
 
