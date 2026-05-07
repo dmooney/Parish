@@ -796,6 +796,7 @@ pub fn run() {
         active_tile_source,
         tile_sources: engine_config.map.id_label_pairs(),
         reveal_unexplored_locations: false,
+        auto_setup_model: None,
     };
     // Enable demo-mode flag when --demo was passed so the demo commands work.
     if demo_config.auto_start {
@@ -987,7 +988,11 @@ pub fn run() {
                             *state_setup.ollama_process.lock().await = ollama_process;
                             {
                                 let mut config = state_setup.config.lock().await;
-                                config.model_name = model_name;
+                                if matches!(provider_config.provider, Provider::Ollama) {
+                                    config.pin_setup_model(model_name);
+                                } else {
+                                    config.model_name = model_name;
+                                }
                                 config.fill_missing_models_from_presets();
                             }
                             record_setup_done(&state_setup, true, String::new());

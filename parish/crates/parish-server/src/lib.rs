@@ -423,14 +423,23 @@ pub async fn run_server(port: u16, data_dir: PathBuf, static_dir: PathBuf) -> an
         )
         .await
         .map_err(|e| anyhow::anyhow!("Failed to initialise inference provider: {}", e))?;
-    config.model_name = resolved_model;
+    if matches!(provider_cfg.provider, parish_core::config::Provider::Ollama) {
+        // Auto-setup pulled exactly one model. Pin it across all four
+        // per-category slots so every role uses the model that is actually
+        // on disk, instead of the static qwen3 preset list (which assumes
+        // models the user has not pulled).
+        config.pin_setup_model(resolved_model);
+    } else {
+        config.model_name = resolved_model;
+    }
 
     // Populate per-category model slots from the base provider's presets.
     // The server doesn't run `resolve_category_configs` (no per-category
     // env vars yet), so without this step every role would inherit the
     // base model. With this, an `anthropic` provider gets Opus/Sonnet/
     // Haiku/Sonnet routed per-role even when the user set only
-    // `PARISH_PROVIDER`.
+    // `PARISH_PROVIDER`. No-op for Ollama after `pin_setup_model` filled
+    // every slot.
     config.fill_missing_models_from_presets();
 
     // ── Game mod ──────────────────────────────────────────────────────────────
@@ -1050,6 +1059,7 @@ fn build_client_and_config() -> (parish_core::config::ProviderConfig, GameConfig
         active_tile_source: String::new(),
         tile_sources: Vec::new(),
         reveal_unexplored_locations: false,
+        auto_setup_model: None,
     };
 
     (provider_cfg, config)
