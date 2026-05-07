@@ -883,8 +883,8 @@ mod tests {
     fn find_eligible_couples_normal_pair() {
         let mut npc1 = make_coupled_npc(1, 30, false, NpcId(2), 0.8);
         let mut npc2 = make_coupled_npc(2, 28, false, NpcId(1), 0.8);
-        let mut npcs = vec![&mut npc1, &mut npc2];
-        let couples = find_eligible_couples(&mut npcs);
+        let npcs = vec![&mut npc1, &mut npc2];
+        let couples = find_eligible_couples(&npcs);
         assert_eq!(couples.len(), 1);
         assert!(couples.contains(&(NpcId(1), NpcId(2))) || couples.contains(&(NpcId(2), NpcId(1))));
     }
@@ -893,8 +893,8 @@ mod tests {
     fn find_eligible_couples_one_partner_ill() {
         let mut npc1 = make_coupled_npc(1, 30, true, NpcId(2), 0.8);
         let mut npc2 = make_coupled_npc(2, 28, false, NpcId(1), 0.8);
-        let mut npcs = vec![&mut npc1, &mut npc2];
-        let couples = find_eligible_couples(&mut npcs);
+        let npcs = vec![&mut npc1, &mut npc2];
+        let couples = find_eligible_couples(&npcs);
         assert_eq!(couples.len(), 0, "ill partner must disqualify couple");
     }
 
@@ -902,8 +902,8 @@ mod tests {
     fn find_eligible_couples_both_outside_age_range() {
         let mut npc1 = make_coupled_npc(1, 50, false, NpcId(2), 0.8);
         let mut npc2 = make_coupled_npc(2, 55, false, NpcId(1), 0.8);
-        let mut npcs = vec![&mut npc1, &mut npc2];
-        let couples = find_eligible_couples(&mut npcs);
+        let npcs = vec![&mut npc1, &mut npc2];
+        let couples = find_eligible_couples(&npcs);
         assert_eq!(couples.len(), 0, "both outside 18-45 must be ineligible");
     }
 
@@ -911,8 +911,8 @@ mod tests {
     fn find_eligible_couples_only_one_in_age_range() {
         let mut npc1 = make_coupled_npc(1, 50, false, NpcId(2), 0.8);
         let mut npc2 = make_coupled_npc(2, 25, false, NpcId(1), 0.8);
-        let mut npcs = vec![&mut npc1, &mut npc2];
-        let couples = find_eligible_couples(&mut npcs);
+        let npcs = vec![&mut npc1, &mut npc2];
+        let couples = find_eligible_couples(&npcs);
         assert_eq!(couples.len(), 1, "one in range is sufficient");
     }
 
@@ -938,8 +938,8 @@ mod tests {
         );
         let mut npc2 = make_coupled_npc(2, 28, false, NpcId(1), 0.8);
         let mut npc3 = make_coupled_npc(3, 25, false, NpcId(1), 0.5);
-        let mut npcs = vec![&mut npc1, &mut npc2, &mut npc3];
-        let couples = find_eligible_couples(&mut npcs);
+        let npcs = vec![&mut npc1, &mut npc2, &mut npc3];
+        let couples = find_eligible_couples(&npcs);
         assert_eq!(couples.len(), 2, "both relationships should be eligible");
     }
 

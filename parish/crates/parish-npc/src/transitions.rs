@@ -184,7 +184,6 @@ mod tests {
     use super::*;
     use crate::test_helpers::make_test_npc;
     use chrono::{TimeZone, Utc};
-    use std::collections::HashMap;
 
     fn test_time() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(1820, 3, 20, 10, 0, 0).unwrap()
