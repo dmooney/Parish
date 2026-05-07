@@ -659,8 +659,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        callback_google, callback_google_tower, cookie_value, exchange_code, fetch_user_info,
-        get_auth_status, login_google, login_google_tower, logout, logout_tower, urlenccode,
+        cookie_value, exchange_code, fetch_user_info, get_auth_status, urlenccode,
     };
 
     // ── tower-sessions CSRF/session round-trip (#364) ─────────────────────────

@@ -1421,7 +1421,6 @@ pub(crate) mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
 
-    use axum::body::to_bytes;
     use parish_core::game_loop::is_snippet_injection_char;
     use parish_core::inference::{InferenceQueue, InferenceRequest, InferenceResponse};
     use parish_core::ipc::capitalize_first;
