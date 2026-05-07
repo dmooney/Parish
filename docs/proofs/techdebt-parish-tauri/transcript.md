@@ -2,7 +2,7 @@ Evidence type: gameplay transcript
 
 ## Summary
 
-Technical debt cleanup for the `parish-tauri` crate. Four items resolved, one deferred.
+Technical debt cleanup for the `parish-tauri` crate. Four items resolved, one deferred. Server-side demo route stubs added to maintain mode parity.
 
 ### Changes
 
@@ -10,6 +10,7 @@ Technical debt cleanup for the `parish-tauri` crate. Four items resolved, one de
 - Added `get_demo_config`, `get_demo_context`, `get_llm_player_action` to `EXPECTED_COMMANDS` in `src/command_registry.rs`
 - Updated `EXPECTED_COUNT` from 29 to 32 in `tests/command_registry.rs`
 - Added compile-time symbol imports for 3 demo commands
+- Added server-side stub routes (`/api/demo-config`, `/api/demo-context`, `/api/llm-player-action`) to maintain mode parity (wiring parity test enforces Tauri == HTTP command sets)
 
 **TD-002 (P2) - Save implementation duplication:**
 - Deleted `do_save_game_inner` (52 lines) from `src/command_host.rs`
@@ -31,28 +32,34 @@ Technical debt cleanup for the `parish-tauri` crate. Four items resolved, one de
 - `parish/crates/parish-tauri/src/command_registry.rs`
 - `parish/crates/parish-tauri/src/commands.rs` (TD-005 x4, TD-004 test, pub(crate))
 - `parish/crates/parish-tauri/src/command_host.rs` (TD-002, TD-005)
-- `parish/crates/parish-tauri/src/lib.rs` (none, TD-003 deferred)
 - `parish/crates/parish-tauri/tests/command_registry.rs`
 - `parish/crates/parish-tauri/tests/command_logic.rs`
 - `parish/crates/parish-tauri/TODO.md`
+- `parish/crates/parish-server/src/route_registry.rs`
+- `parish/crates/parish-server/src/routes.rs`
+- `parish/crates/parish-server/src/lib.rs`
 
 ### Test output
 
 ```
-running 43 tests (unit, src/lib.rs)
-... all ok
-running 13 tests (command_logic.rs)
-... all ok
-running 3 tests (command_registry.rs)
-... all ok
-running 17 tests (input_validation.rs)
-... all ok
-result: 76 passed; 0 failed
+parish-tauri: 43 unit + 13 command_logic + 3 registry + 17 input_validation = 76 passed
+parish-core: wiring_parity (6 tests) - all passed (tauri_and_server_expose_the_same_ipc_commands ok)
+parish-server: compiles clean
 ```
 
 ### Clippy output
 
 ```
-cargo clippy -p parish-tauri -- -D warnings
+cargo clippy -p parish-tauri -p parish-server -- -D warnings
 Finished dev profile — no warnings
+```
+
+### CI gate checks
+
+```
+cargo fmt --check: clean
+cargo clippy -p parish-tauri -- -D warnings: clean
+cargo test -p parish-tauri: 76 passed
+just agent-check: passed
+just witness-scan: passed
 ```
