@@ -475,6 +475,14 @@ pub fn handle_command(
                     let provider_name = format!("{:?}", provider).to_lowercase();
                     let default_url = provider.default_base_url().to_string();
 
+                    // Provider/url writes are identical for both branches.
+                    config.provider_name = provider_name.clone();
+                    config.base_url = default_url.clone();
+                    for cat in InferenceCategory::ALL {
+                        config.category_provider.insert(cat, provider_name.clone());
+                        config.category_base_url.insert(cat, default_url.clone());
+                    }
+
                     // For Ollama with a recorded auto-setup model: re-pin
                     // that model across every slot instead of writing the
                     // static qwen3 preset list. Auto-setup pulled exactly
@@ -484,31 +492,21 @@ pub fn handle_command(
                     if provider == Provider::Ollama
                         && let Some(auto) = config.auto_setup_model.clone()
                     {
-                        config.provider_name = provider_name.clone();
-                        config.base_url = default_url.clone();
                         config.pin_setup_model(auto);
-                        for cat in InferenceCategory::ALL {
-                            config.category_provider.insert(cat, provider_name.clone());
-                            config.category_base_url.insert(cat, default_url.clone());
-                        }
                     } else {
                         let presets = provider.preset_models();
 
-                        // Base provider/url/model: use Dialogue's pick as the base model
-                        // so any code path that still falls through to `model_name` gets
-                        // a sensible value.
-                        config.provider_name = provider_name.clone();
-                        config.base_url = default_url.clone();
+                        // Base model: use Dialogue's pick so any code path
+                        // that still falls through to `model_name` gets a
+                        // sensible value.
                         if let Some(m) = presets[InferenceCategory::Dialogue.idx()] {
                             config.model_name = m.to_string();
                         }
 
-                        // Per-category: always overwrite (applying a preset is an
-                        // explicit user action). API keys are intentionally left
-                        // alone — see hint below.
+                        // Per-category models: always overwrite (applying
+                        // a preset is an explicit user action). API keys
+                        // are intentionally left alone — see hint below.
                         for cat in InferenceCategory::ALL {
-                            config.category_provider.insert(cat, provider_name.clone());
-                            config.category_base_url.insert(cat, default_url.clone());
                             if let Some(m) = presets[cat.idx()].map(str::to_string) {
                                 config.category_model.insert(cat, m);
                             } else {
